@@ -271,18 +271,27 @@ export class FawryProcessor {
         // Collect references to fetch links
         const refs = transactions.map(t => t.reference_number);
         
-        // Fetch matching links
-        const { data: dbLinks } = await supabase
-            .from('links')
-            .select('payment_reference_number, custom_input_value')
-            .in('payment_reference_number', refs);
+        // Fetch matching links in chunks to avoid URL length limits
+        const dbLinks = [];
+        const fetchChunkSize = 200;
+        for (let i = 0; i < refs.length; i += fetchChunkSize) {
+            const chunkRefs = refs.slice(i, i + fetchChunkSize);
+            const { data, error } = await supabase
+                .from('links')
+                .select('payment_reference_number, custom_input_value')
+                .in('payment_reference_number', chunkRefs);
+                
+            if (data) {
+                dbLinks.push(...data);
+            } else if (error) {
+                this.log(`Warning: Failed to fetch some links: ${error.message}`);
+            }
+        }
             
         const linkMap = {};
-        if (dbLinks) {
-            dbLinks.forEach(l => {
-                linkMap[l.payment_reference_number] = l.custom_input_value;
-            });
-        }
+        dbLinks.forEach(l => {
+            linkMap[l.payment_reference_number] = l.custom_input_value;
+        });
 
         const fixesMap = {};
         this.fixes.forEach(f => fixesMap[f.reference_number] = f);
