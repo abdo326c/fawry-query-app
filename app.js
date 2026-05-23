@@ -217,11 +217,7 @@ class App {
                         <th colspan="${selectedBanks.length + 2}" class="pivot-title">Total Fawry Collection</th>
                     </tr>
                     <tr>
-                        <th class="pivot-header">Sum of Item Price</th>
-                        <th colspan="${selectedBanks.length + 1}" class="pivot-header">Column Labels</th>
-                    </tr>
-                    <tr>
-                        <th class="pivot-row-label">Row Labels</th>
+                        <th class="pivot-row-label">Date</th>
                         ${selectedBanks.map(b => `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b}</th>`).join('')}
                         <th class="pivot-col-label">Grand Total</th>
                     </tr>
