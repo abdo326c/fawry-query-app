@@ -386,6 +386,41 @@ class App {
                 if (window.lucide) lucide.createIcons();
             }
         });
+
+        document.getElementById('btn-export-mappings').addEventListener('click', async () => {
+            const { data, error } = await supabase.from('item_mappings').select('*');
+            if (error) return alert("Export failed: " + error.message);
+            if (!data || data.length === 0) return alert("No mappings to export.");
+
+            const formattedData = data.map(m => ({
+                "Item Name": m.item_name,
+                "Adjusted Item Name": m.adjusted_item_name || "",
+                "Mapping": m.mapping || ""
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(formattedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Item Mappings");
+            XLSX.writeFile(workbook, `Item_Mappings_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+        });
+
+        document.getElementById('btn-export-fixes').addEventListener('click', async () => {
+            const { data, error } = await supabase.from('manual_fixes').select('*');
+            if (error) return alert("Export failed: " + error.message);
+            if (!data || data.length === 0) return alert("No fixes to export.");
+
+            const formattedData = data.map(f => ({
+                "Reference Number": f.reference_number,
+                "Correct ID": f.correct_id || "",
+                "Item Name": f.item_name || "",
+                "Mapping": f.mapping || ""
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(formattedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Manual Fixes");
+            XLSX.writeFile(workbook, `Manual_Fixes_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+        });
     }
 
     async loadTransactions() {
