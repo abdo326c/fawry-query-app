@@ -8,6 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
     <div class="app-layout">
@@ -91,9 +92,9 @@
                 <div class="glass-card upload-container">
                     <div class="upload-zone" id="drop-zone">
                         <i data-lucide="upload" class="upload-icon"></i>
-                        <h3>Drag & Drop CSV Files</h3>
-                        <p>Support Fawry daily/monthly exports and Links CSVs</p>
-                        <input type="file" id="file-input" multiple accept=".csv" class="hidden-input">
+                        <h3>Drag & Drop CSV or Excel Files</h3>
+                        <p>Support Fawry daily/monthly exports and Links Excel files</p>
+                        <input type="file" id="file-input" multiple accept=".csv, .xlsx, .xls" class="hidden-input">
                         <button class="btn btn-primary mt-4" onclick="document.getElementById('file-input').click()">Browse Files</button>
                     </div>
                     

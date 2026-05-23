@@ -42,121 +42,174 @@ export class FawryProcessor {
         const orderFiles = [];
 
         for (const file of files) {
-            const text = await file.text();
-            // Fawry uses \r for rows sometimes. Let's normalize it.
-            const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const fileName = file.name.toLowerCase();
             
-            // Check headers to identify type
-            const firstLine = normalizedText.split('\n')[0].toLowerCase();
-            if (firstLine.includes('invoice number')) {
-                linkFiles.push({ file, text: normalizedText });
-            } else if (firstLine.includes('reference number')) {
-                orderFiles.push({ file, text: normalizedText });
+            // For CSV files
+            if (fileName.endsWith('.csv')) {
+                const text = await file.text();
+                const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                
+                const firstLine = normalizedText.split('\n')[0].toLowerCase();
+                if (firstLine.includes('invoice number')) {
+                    linkFiles.push({ file, type: 'csv', data: normalizedText });
+                } else if (firstLine.includes('reference number')) {
+                    orderFiles.push({ file, type: 'csv', data: normalizedText });
+                } else {
+                    this.log(`Skipping unknown CSV format: ${file.name}`);
+                }
+            } 
+            // For Excel files
+            else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+                
+                if (json.length > 0) {
+                    const firstRow = json[0];
+                    // Check keys for identifier
+                    const keys = Object.keys(firstRow).map(k => k.toLowerCase());
+                    
+                    if (keys.some(k => k.includes('invoice number'))) {
+                        linkFiles.push({ file, type: 'json', data: json });
+                    } else if (keys.some(k => k.includes('reference number'))) {
+                        orderFiles.push({ file, type: 'json', data: json });
+                    } else {
+                        this.log(`Skipping unknown Excel format: ${file.name}`);
+                    }
+                }
             } else {
-                this.log(`Skipping unknown file format: ${file.name}`);
+                this.log(`Skipping unsupported file type: ${file.name}`);
             }
         }
 
         // Process Links first
-        for (const {file, text} of linkFiles) {
-            this.log(`Parsing Links file: ${file.name}`);
-            await this.processLinks(text);
+        for (const item of linkFiles) {
+            this.log(`Parsing Links file: ${item.file.name}`);
+            await this.processLinks(item);
         }
 
         // Process Orders
-        for (const {file, text} of orderFiles) {
-            this.log(`Parsing Orders file: ${file.name}`);
-            await this.processOrders(text);
+        for (const item of orderFiles) {
+            this.log(`Parsing Orders file: ${item.file.name}`);
+            await this.processOrders(item);
         }
         
         this.log(`Import completed successfully!`);
         return true;
     }
 
-    async processLinks(csvText) {
+    async processLinks(item) {
         return new Promise((resolve) => {
-            Papa.parse(csvText, {
-                header: true,
-                skipEmptyLines: true,
-                complete: async (results) => {
-                    const links = results.data.map(row => ({
-                        invoice_number: row['INVOICE NUMBER'],
-                        customer_name: row['CUSTOMER NAME'],
-                        customer_mobile: row['CUSTOMER MOBILE NUMBER'],
-                        customer_email: row['CUSTOMER EMAIL'],
-                        payment_status: row['PAYMENT STATUS'],
-                        paid_amount: parseFloat(row['PAID AMOUNT']) || 0,
-                        payment_reference_number: row['PAYMENT REFERENCE NUMBER'],
-                        customer_national_id: row['CUSTOMER NATIONAL ID'],
-                        custom_input_value: row['CUSTOM INPUT VALUE']
-                    })).filter(r => r.payment_reference_number);
+            const processData = async (data) => {
+                const links = data.map(row => {
+                    // Handle Excel keys vs CSV keys (case sensitivity)
+                    const getVal = (keyStr) => {
+                        const exact = row[keyStr];
+                        if (exact !== undefined) return exact;
+                        // fallback to case-insensitive match
+                        const foundKey = Object.keys(row).find(k => k.toLowerCase() === keyStr.toLowerCase());
+                        return foundKey ? row[foundKey] : null;
+                    };
 
-                    // Deduplicate
-                    const uniqueLinks = [];
-                    const seen = new Set();
-                    for (const l of links) {
-                        if (!seen.has(l.payment_reference_number)) {
-                            seen.add(l.payment_reference_number);
-                            uniqueLinks.push(l);
-                        }
-                    }
+                    return {
+                        invoice_number: getVal('INVOICE NUMBER'),
+                        customer_name: getVal('CUSTOMER NAME'),
+                        customer_mobile: getVal('CUSTOMER MOBILE NUMBER'),
+                        customer_email: getVal('CUSTOMER EMAIL'),
+                        payment_status: getVal('PAYMENT STATUS'),
+                        paid_amount: parseFloat(getVal('PAID AMOUNT')) || 0,
+                        payment_reference_number: getVal('PAYMENT REFERENCE NUMBER'),
+                        customer_national_id: getVal('CUSTOMER NATIONAL ID'),
+                        custom_input_value: getVal('CUSTOM INPUT VALUE')
+                    };
+                }).filter(r => r.payment_reference_number);
 
-                    this.log(`Found ${uniqueLinks.length} unique links. Saving to database...`);
-                    
-                    // Upsert links
-                    const chunkSize = 500;
-                    for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
-                        const chunk = uniqueLinks.slice(i, i + chunkSize);
-                        const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: true });
-                        if (error) this.log(`Error saving links: ${error.message}`);
+                // Deduplicate
+                const uniqueLinks = [];
+                const seen = new Set();
+                for (const l of links) {
+                    if (!seen.has(l.payment_reference_number)) {
+                        seen.add(l.payment_reference_number);
+                        uniqueLinks.push(l);
                     }
-                    resolve();
                 }
-            });
+
+                this.log(`Found ${uniqueLinks.length} unique links. Saving to database...`);
+                
+                // Upsert links
+                const chunkSize = 500;
+                for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
+                    const chunk = uniqueLinks.slice(i, i + chunkSize);
+                    const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: true });
+                    if (error) this.log(`Error saving links: ${error.message}`);
+                }
+                resolve();
+            };
+
+            if (item.type === 'csv') {
+                Papa.parse(item.data, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => processData(results.data)
+                });
+            } else {
+                processData(item.data);
+            }
         });
     }
 
-    async processOrders(csvText) {
+    async processOrders(item) {
         return new Promise((resolve) => {
-            Papa.parse(csvText, {
-                header: true,
-                skipEmptyLines: true,
-                complete: async (results) => {
-                    let rows = results.data;
-                    this.log(`Parsed ${rows.length} rows. Transforming...`);
+            const processData = async (rows) => {
+                this.log(`Parsed ${rows.length} rows. Transforming...`);
 
-                    const transformedRows = [];
+                const transformedRows = [];
+                
+                for (const row of rows) {
+                    const getVal = (keyStr) => {
+                        const exact = row[keyStr];
+                        if (exact !== undefined) return exact;
+                        const foundKey = Object.keys(row).find(k => k.toLowerCase() === keyStr.toLowerCase());
+                        return foundKey ? row[foundKey] : null;
+                    };
+
+                    let refNumber = getVal('Reference Number');
+                    if (!refNumber) continue;
+
+                    let itemName = getVal('Item Name') || "";
                     
-                    for (const row of rows) {
-                        if (!row['Reference Number']) continue;
+                    // TUI / SU Check
+                    if (this.tuiList.includes(itemName)) {
+                        itemName = "TUI";
+                    } else if (itemName === "Student Union & Activities") {
+                        itemName = "SU";
+                    }
 
-                        let itemName = row['Item Name'] || "";
-                        
-                        // TUI / SU Check
-                        if (this.tuiList.includes(itemName)) {
-                            itemName = "TUI";
-                        } else if (itemName === "Student Union & Activities") {
-                            itemName = "SU";
-                        }
+                    // Extract numbers from Customer Name
+                    const custName = getVal('Customer Name');
+                    let studentId = custName ? String(custName).replace(/-/g, '').replace(/\D/g, '') : "";
+                    if (!studentId && custName) studentId = custName;
 
-                        // Extract numbers from Customer Name
-                        let studentId = row['Customer Name'] ? row['Customer Name'].replace(/-/g, '').replace(/\D/g, '') : "";
-                        if (!studentId && row['Customer Name']) studentId = row['Customer Name'];
-
-                        // If Student ID is missing or text, try to fetch from Links
-                        // For efficiency, we will query the DB for missing links in a batch later
-                        
-                        let totalAmount = parseFloat(row['Total Amount Plus Fees']) || 0;
-                        let netAmount = parseFloat(row['Net Amount']) || 0;
-                        let fawryFees = parseFloat(row['Fawry Fees']) || 0;
-                        let itemPrice = parseFloat(row['Item Price']) || 0;
-                        let refNumber = row['Reference Number'];
-                        let merchant = row['Merchant Name'] || "";
-                        let bank = merchant === "Nile University Edu" ? "NUADIB64" : "NUADCB136";
-                        
-                        // Payment Date split
-                        let rawDate = row['Payment Date'] || "";
-                        let paymentDate = rawDate.split(' ')[0]; // just take the date part
+                    let totalAmount = parseFloat(getVal('Total Amount Plus Fees')) || 0;
+                    let netAmount = parseFloat(getVal('Net Amount')) || 0;
+                    let fawryFees = parseFloat(getVal('Fawry Fees')) || 0;
+                    let itemPrice = parseFloat(getVal('Item Price')) || 0;
+                    let merchant = getVal('Merchant Name') || "";
+                    let bank = merchant === "Nile University Edu" ? "NUADIB64" : "NUADCB136";
+                    
+                    // Payment Date split
+                    let rawDate = getVal('Payment Date') || "";
+                    
+                    // Excel dates might be numeric serials or pre-formatted strings
+                    let paymentDate = "";
+                    if (typeof rawDate === 'number') {
+                        // Excel serial date to JS Date
+                        const dateObj = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
+                        paymentDate = dateObj.toISOString().split('T')[0];
+                    } else {
+                        paymentDate = String(rawDate).split(' ')[0]; // just take the date part
                         if (paymentDate && paymentDate.includes('/')) {
                              // Convert DD/MM/YYYY to YYYY-MM-DD for Postgres
                              const parts = paymentDate.split('/');
@@ -164,41 +217,53 @@ export class FawryProcessor {
                                  paymentDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
                              }
                         }
-
-                        transformedRows.push({
-                            reference_number: refNumber,
-                            payment_date: paymentDate,
-                            student_id: studentId,
-                            customer_mobile: row['Customer Mobile Number'] || row['Customer  Mobile Number'],
-                            total_amount: totalAmount,
-                            net_amount: netAmount,
-                            fawry_fees: fawryFees,
-                            payment_status: row['Payment Status'] || 'PAID',
-                            item_name: itemName,
-                            item_price: itemPrice,
-                            merchant_name: merchant,
-                            bank: bank,
-                            check_column: `${refNumber}-${itemName}`
-                        });
                     }
 
-                    // Deduplicate within the file based on Reference Number, Payment Date, Item Name, Item Price
-                    const uniqueTrans = [];
-                    const seenTrans = new Set();
-                    for (const t of transformedRows) {
-                        const key = `${t.reference_number}-${t.payment_date}-${t.item_name}-${t.item_price}`;
-                        if (!seenTrans.has(key)) {
-                            seenTrans.add(key);
-                            uniqueTrans.push(t);
-                        }
-                    }
+                    let mobileNum = getVal('Customer Mobile Number') || getVal('Customer  Mobile Number');
 
-                    // Now we need to enrich with Links, Fixes, and Mappings
-                    this.log(`Enriching ${uniqueTrans.length} transactions...`);
-                    await this.enrichTransactions(uniqueTrans);
-                    resolve();
+                    transformedRows.push({
+                        reference_number: refNumber,
+                        payment_date: paymentDate || null,
+                        student_id: studentId,
+                        customer_mobile: mobileNum,
+                        total_amount: totalAmount,
+                        net_amount: netAmount,
+                        fawry_fees: fawryFees,
+                        payment_status: getVal('Payment Status') || 'PAID',
+                        item_name: itemName,
+                        item_price: itemPrice,
+                        merchant_name: merchant,
+                        bank: bank,
+                        check_column: `${refNumber}-${itemName}`
+                    });
                 }
-            });
+
+                // Deduplicate within the file based on Reference Number, Payment Date, Item Name, Item Price
+                const uniqueTrans = [];
+                const seenTrans = new Set();
+                for (const t of transformedRows) {
+                    const key = `${t.reference_number}-${t.payment_date}-${t.item_name}-${t.item_price}`;
+                    if (!seenTrans.has(key)) {
+                        seenTrans.add(key);
+                        uniqueTrans.push(t);
+                    }
+                }
+
+                // Now we need to enrich with Links, Fixes, and Mappings
+                this.log(`Enriching ${uniqueTrans.length} transactions...`);
+                await this.enrichTransactions(uniqueTrans);
+                resolve();
+            };
+
+            if (item.type === 'csv') {
+                Papa.parse(item.data, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => processData(results.data)
+                });
+            } else {
+                processData(item.data);
+            }
         });
     }
 

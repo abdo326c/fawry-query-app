@@ -66,11 +66,10 @@ class App {
         const processor = new FawryProcessor();
         await processor.processFiles(files);
         
+        // Auto-switch back to transactions tab after 1.5 seconds
         setTimeout(() => {
-            alert('Import complete!');
-            // Switch back to transactions
             document.querySelector('[data-tab="transactions"]').click();
-        }, 1000);
+        }, 1500);
     }
 
     initModals() {
