@@ -69,6 +69,7 @@ class App {
                 cells.forEach(c => {
                     c.style.border = '1px solid black';
                     c.style.padding = '5px 8px';
+                    c.style.color = '#000';
                     if (c.classList.contains('pivot-title')) {
                         c.style.backgroundColor = '#b4c6e7';
                         c.style.borderBottom = '2px solid black';
