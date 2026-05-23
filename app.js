@@ -13,6 +13,7 @@ class App {
         this.initFilters();
         this.initExport();
         this.initPagination();
+        this.initReapply();
         this.loadTransactions();
     }
 
@@ -300,6 +301,118 @@ class App {
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
             XLSX.writeFile(workbook, "Manual_Fixes_Template.xlsx");
+        });
+    }
+
+    initReapply() {
+        document.getElementById('btn-reapply-rules').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-reapply-rules');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="loader"></i> Applying...';
+            btn.disabled = true;
+
+            try {
+                let mappings = [];
+                let fetchMore = true;
+                let from = 0;
+                while (fetchMore) {
+                    const { data } = await supabase.from('item_mappings').select('*').range(from, from + 999);
+                    if (!data || data.length === 0) break;
+                    mappings = mappings.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+
+                let fixes = [];
+                fetchMore = true;
+                from = 0;
+                while (fetchMore) {
+                    const { data } = await supabase.from('manual_fixes').select('*').range(from, from + 999);
+                    if (!data || data.length === 0) break;
+                    fixes = fixes.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+
+                let links = [];
+                fetchMore = true;
+                from = 0;
+                while (fetchMore) {
+                    const { data } = await supabase.from('links').select('*').range(from, from + 999);
+                    if (!data || data.length === 0) break;
+                    links = links.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+
+                const fp = new FawryProcessor();
+                fetchMore = true;
+                from = 0;
+                let updatedCount = 0;
+                
+                while (fetchMore) {
+                    const { data: txs, error } = await supabase.from('transactions').select('*').range(from, from + 999);
+                    if (error) throw error;
+                    if (!txs || txs.length === 0) break;
+
+                    let needsUpdate = false;
+
+                    for (const tx of txs) {
+                        let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
+                        
+                        let newStudentId = tx.student_id;
+                        let newItemName = originalItemName;
+                        let newMapping = null;
+
+                        const link = links.find(l => String(l.payment_reference_number) === String(tx.reference_number));
+                        if (link && link.custom_input_value) {
+                            newStudentId = link.custom_input_value;
+                        }
+
+                        const mapDef = mappings.find(m => m.item_name === newItemName);
+                        if (mapDef) {
+                            if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
+                            if (mapDef.mapping) newMapping = mapDef.mapping;
+                        }
+
+                        const fix = fixes.find(f => String(f.reference_number) === String(tx.reference_number));
+                        if (fix) {
+                            if (fix.correct_id) newStudentId = fix.correct_id;
+                            if (fix.item_name) newItemName = fix.item_name;
+                            if (fix.mapping) newMapping = fix.mapping;
+                        }
+
+                        let newStatus = fp.validateID(newStudentId);
+
+                        if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.id_status !== newStatus) {
+                            tx.student_id = newStudentId;
+                            tx.item_name = newItemName;
+                            tx.mapping = newMapping;
+                            tx.id_status = newStatus;
+                            needsUpdate = true;
+                        }
+                    }
+
+                    if (needsUpdate) {
+                        const { error: upsertErr } = await supabase.from('transactions').upsert(txs, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                        if (upsertErr) throw upsertErr;
+                        updatedCount += txs.length;
+                    }
+
+                    if (txs.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+
+                alert(`Successfully re-applied all rules to all transactions!`);
+                this.loadTransactions();
+
+            } catch (err) {
+                alert("Error re-applying rules: " + err.message);
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            }
         });
     }
 
