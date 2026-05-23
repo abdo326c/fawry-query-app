@@ -203,6 +203,30 @@ class App {
 
         document.getElementById('file-upload-mappings').addEventListener('change', (e) => handleUpload(e, 'mappings'));
         document.getElementById('file-upload-fixes').addEventListener('change', (e) => handleUpload(e, 'fixes'));
+
+        // Templates
+        document.getElementById('btn-template-mappings').addEventListener('click', () => {
+            const worksheet = XLSX.utils.json_to_sheet([{
+                "Item Name": "",
+                "Adjusted Item Name": "",
+                "Mapping": ""
+            }]);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
+            XLSX.writeFile(workbook, "Item_Mappings_Template.xlsx");
+        });
+
+        document.getElementById('btn-template-fixes').addEventListener('click', () => {
+            const worksheet = XLSX.utils.json_to_sheet([{
+                "Reference Number": "",
+                "Correct ID": "",
+                "Item Name": "",
+                "Mapping": ""
+            }]);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
+            XLSX.writeFile(workbook, "Manual_Fixes_Template.xlsx");
+        });
     }
 
     initFilters() {
