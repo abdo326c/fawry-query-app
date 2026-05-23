@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fawry Query Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo-container">
+                <i data-lucide="zap" class="logo-icon"></i>
+                <span class="logo-text">Fawry Query</span>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="#transactions" class="nav-link active" data-tab="transactions">
+                    <i data-lucide="table"></i> Transactions
+                </a>
+                <a href="#import" class="nav-link" data-tab="import">
+                    <i data-lucide="upload-cloud"></i> Import CSV
+                </a>
+                <a href="#mappings" class="nav-link" data-tab="mappings">
+                    <i data-lucide="git-merge"></i> Item Mappings
+                </a>
+                <a href="#fixes" class="nav-link" data-tab="fixes">
+                    <i data-lucide="wrench"></i> Manual Fixes
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Transactions View -->
+            <section id="view-transactions" class="view active">
+                <div class="header">
+                    <h1>Transactions Dashboard</h1>
+                    <button class="btn btn-primary" id="btn-export">
+                        <i data-lucide="download"></i> Export to CSV
+                    </button>
+                </div>
+                
+                <div class="filters-card glass-card">
+                    <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref...">
+                    <select id="status-filter" class="input-select">
+                        <option value="">All Statuses</option>
+                        <option value="Valid">Valid</option>
+                        <option value="Missing ID">Missing ID</option>
+                        <option value="Error">Error</option>
+                    </select>
+                </div>
+                
+                <div class="table-container glass-card">
+                    <table class="data-table" id="transactions-table">
+                        <thead>
+                            <tr>
+                                <th>Ref Number</th>
+                                <th>Date</th>
+                                <th>Student ID</th>
+                                <th>Mobile</th>
+                                <th>Net Amount</th>
+                                <th>Item Name</th>
+                                <th>Mapping</th>
+                                <th>Bank</th>
+                                <th>ID Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactions-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                    <div id="pagination-controls" class="pagination">
+                        <button id="btn-prev" class="btn btn-outline" disabled><i data-lucide="chevron-left"></i> Prev</button>
+                        <span id="page-info">Page 1</span>
+                        <button id="btn-next" class="btn btn-outline" disabled>Next <i data-lucide="chevron-right"></i></button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Import View -->
+            <section id="view-import" class="view hidden">
+                <div class="header">
+                    <h1>Data Import Processor</h1>
+                </div>
+                
+                <div class="glass-card upload-container">
+                    <div class="upload-zone" id="drop-zone">
+                        <i data-lucide="upload" class="upload-icon"></i>
+                        <h3>Drag & Drop CSV Files</h3>
+                        <p>Support Fawry daily/monthly exports and Links CSVs</p>
+                        <input type="file" id="file-input" multiple accept=".csv" class="hidden-input">
+                        <button class="btn btn-primary mt-4" onclick="document.getElementById('file-input').click()">Browse Files</button>
+                    </div>
+                    
+                    <div id="import-progress" class="hidden mt-6">
+                        <h3>Processing...</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <p id="progress-text">0 / 0 rows processed</p>
+                        <div id="import-log" class="log-console mt-4"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Mappings View -->
+            <section id="view-mappings" class="view hidden">
+                <div class="header">
+                    <h1>Item Mappings</h1>
+                    <button class="btn btn-primary" id="btn-add-mapping">
+                        <i data-lucide="plus"></i> Add Mapping
+                    </button>
+                </div>
+                <div class="table-container glass-card">
+                    <table class="data-table" id="mappings-table">
+                        <thead>
+                            <tr>
+                                <th>Original Item Name</th>
+                                <th>Adjusted Item Name</th>
+                                <th>Mapping Category</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappings-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Fixes View -->
+            <section id="view-fixes" class="view hidden">
+                <div class="header">
+                    <h1>Manual Fixes</h1>
+                    <button class="btn btn-primary" id="btn-add-fix">
+                        <i data-lucide="plus"></i> Add Fix
+                    </button>
+                </div>
+                <div class="table-container glass-card">
+                    <table class="data-table" id="fixes-table">
+                        <thead>
+                            <tr>
+                                <th>Reference Number</th>
+                                <th>Correct ID</th>
+                                <th>Item Name</th>
+                                <th>Mapping</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fixes-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            
+        </main>
+    </div>
+
+    <!-- Modals will be injected dynamically -->
+    
+    <script type="module" src="app.js"></script>
+    <script>
+        // Initialize icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>
