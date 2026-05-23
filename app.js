@@ -20,8 +20,8 @@ class App {
                 link.classList.add('active');
                 
                 // Show view
-                document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-                document.getElementById(`view-${tabId}`).classList.remove('hidden');
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                document.getElementById(`view-${tabId}`).classList.add('active');
 
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
