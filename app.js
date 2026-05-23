@@ -6,6 +6,7 @@ class App {
         this.initNavigation();
         this.initImport();
         this.initModals();
+        this.initBulkUploads();
         this.initFilters();
         this.initExport();
         this.loadTransactions();
@@ -135,6 +136,73 @@ class App {
                 this.loadFixes();
             }
         });
+    }
+
+    initBulkUploads() {
+        const handleUpload = async (e, type) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const buffer = await file.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: 'array' });
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+            const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+            if (data.length === 0) {
+                alert("File is empty!");
+                return;
+            }
+
+            e.target.value = ''; // Reset
+
+            const getVal = (row, keyStr) => {
+                const exact = row[keyStr];
+                if (exact !== undefined && exact !== "") return exact;
+                const foundKey = Object.keys(row).find(k => k.toLowerCase() === keyStr.toLowerCase());
+                return foundKey ? row[foundKey] : null;
+            };
+
+            const chunkSize = 500;
+
+            if (type === 'mappings') {
+                const mappings = data.map(row => ({
+                    item_name: getVal(row, 'Item Name'),
+                    adjusted_item_name: getVal(row, 'Adjusted Item Name') || null,
+                    mapping: getVal(row, 'Mapping') || null
+                })).filter(m => m.item_name);
+
+                let inserted = 0;
+                for (let i = 0; i < mappings.length; i += chunkSize) {
+                    const chunk = mappings.slice(i, i + chunkSize);
+                    const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
+                    if (error) return alert('Error uploading mappings: ' + error.message);
+                    inserted += chunk.length;
+                }
+                alert(`Successfully uploaded ${inserted} item mappings!`);
+                this.loadMappings();
+
+            } else if (type === 'fixes') {
+                const fixes = data.map(row => ({
+                    reference_number: String(getVal(row, 'Reference Number')),
+                    correct_id: getVal(row, 'Correct ID') || null,
+                    item_name: getVal(row, 'Item Name') || null,
+                    mapping: getVal(row, 'Mapping') || null
+                })).filter(f => f.reference_number && f.reference_number !== "null");
+
+                let inserted = 0;
+                for (let i = 0; i < fixes.length; i += chunkSize) {
+                    const chunk = fixes.slice(i, i + chunkSize);
+                    const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
+                    if (error) return alert('Error uploading fixes: ' + error.message);
+                    inserted += chunk.length;
+                }
+                alert(`Successfully uploaded ${inserted} manual fixes!`);
+                this.loadFixes();
+            }
+        };
+
+        document.getElementById('file-upload-mappings').addEventListener('change', (e) => handleUpload(e, 'mappings'));
+        document.getElementById('file-upload-fixes').addEventListener('change', (e) => handleUpload(e, 'fixes'));
     }
 
     initFilters() {

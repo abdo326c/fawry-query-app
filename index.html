@@ -145,9 +145,15 @@
             <section id="view-mappings" class="view">
                 <div class="header">
                     <h1>Item Mappings</h1>
-                    <button class="btn btn-primary" id="btn-add-mapping">
-                        <i data-lucide="plus"></i> Add Mapping
-                    </button>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="file" id="file-upload-mappings" accept=".xlsx, .xls, .csv" style="display: none;">
+                        <button class="btn btn-outline" onclick="document.getElementById('file-upload-mappings').click()">
+                            <i data-lucide="upload"></i> Upload Excel
+                        </button>
+                        <button class="btn btn-primary" id="btn-add-mapping">
+                            <i data-lucide="plus"></i> Add Mapping
+                        </button>
+                    </div>
                 </div>
                 <div class="table-container glass-card">
                     <table class="data-table" id="mappings-table">
@@ -170,9 +176,15 @@
             <section id="view-fixes" class="view">
                 <div class="header">
                     <h1>Manual Fixes</h1>
-                    <button class="btn btn-primary" id="btn-add-fix">
-                        <i data-lucide="plus"></i> Add Fix
-                    </button>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="file" id="file-upload-fixes" accept=".xlsx, .xls, .csv" style="display: none;">
+                        <button class="btn btn-outline" onclick="document.getElementById('file-upload-fixes').click()">
+                            <i data-lucide="upload"></i> Upload Excel
+                        </button>
+                        <button class="btn btn-primary" id="btn-add-fix">
+                            <i data-lucide="plus"></i> Add Fix
+                        </button>
+                    </div>
                 </div>
                 <div class="table-container glass-card">
                     <table class="data-table" id="fixes-table">
