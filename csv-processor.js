@@ -33,6 +33,15 @@ export class FawryProcessor {
         console.log(msg);
     }
 
+    getVal(row, keyStr) {
+        const exact = row[keyStr];
+        if (exact !== undefined && exact !== "") return exact;
+        const normalize = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const target = normalize(keyStr);
+        const foundKey = Object.keys(row).find(k => normalize(k) === target);
+        return foundKey ? row[foundKey] : null;
+    }
+
     async processFiles(files) {
         this.log(`Starting import for ${files.length} files...`);
         await this.loadConfig();
@@ -44,15 +53,14 @@ export class FawryProcessor {
         for (const file of files) {
             const fileName = file.name.toLowerCase();
             
-            // For CSV files
             if (fileName.endsWith('.csv')) {
                 const text = await file.text();
                 const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                 
-                const firstLine = normalizedText.split('\n')[0].toLowerCase();
-                if (firstLine.includes('invoice number')) {
+                const firstLine = normalizedText.split('\n')[0].toLowerCase().replace(/[^a-z0-9,]/g, '');
+                if (firstLine.includes('invoicenumber') || firstLine.includes('custominputvalue')) {
                     linkFiles.push({ file, type: 'csv', data: normalizedText });
-                } else if (firstLine.includes('reference number')) {
+                } else if (firstLine.includes('referencenumber') || firstLine.includes('fawryfees')) {
                     orderFiles.push({ file, type: 'csv', data: normalizedText });
                 } else {
                     this.log(`Skipping unknown CSV format: ${file.name}`);
@@ -69,11 +77,11 @@ export class FawryProcessor {
                 if (json.length > 0) {
                     const firstRow = json[0];
                     // Check keys for identifier
-                    const keys = Object.keys(firstRow).map(k => k.toLowerCase());
+                    const keys = Object.keys(firstRow).map(k => String(k).toLowerCase().replace(/[^a-z0-9]/g, ''));
                     
-                    if (keys.some(k => k.includes('invoice number'))) {
+                    if (keys.some(k => k.includes('invoicenumber') || k.includes('custominputvalue'))) {
                         linkFiles.push({ file, type: 'json', data: json });
-                    } else if (keys.some(k => k.includes('reference number'))) {
+                    } else if (keys.some(k => k.includes('referencenumber') || k.includes('fawryfees'))) {
                         orderFiles.push({ file, type: 'json', data: json });
                     } else {
                         this.log(`Skipping unknown Excel format: ${file.name}`);
@@ -104,27 +112,18 @@ export class FawryProcessor {
         return new Promise((resolve) => {
             const processData = async (data) => {
                 const links = data.map(row => {
-                    // Handle Excel keys vs CSV keys (case sensitivity)
-                    const getVal = (keyStr) => {
-                        const exact = row[keyStr];
-                        if (exact !== undefined) return exact;
-                        // fallback to case-insensitive match
-                        const foundKey = Object.keys(row).find(k => k.toLowerCase() === keyStr.toLowerCase());
-                        return foundKey ? row[foundKey] : null;
-                    };
-
                     return {
-                        invoice_number: getVal('INVOICE NUMBER'),
-                        customer_name: getVal('CUSTOMER NAME'),
-                        customer_mobile: getVal('CUSTOMER MOBILE NUMBER'),
-                        customer_email: getVal('CUSTOMER EMAIL'),
-                        payment_status: getVal('PAYMENT STATUS'),
-                        paid_amount: parseFloat(getVal('PAID AMOUNT')) || 0,
-                        payment_reference_number: getVal('PAYMENT REFERENCE NUMBER'),
-                        customer_national_id: getVal('CUSTOMER NATIONAL ID'),
-                        custom_input_value: getVal('CUSTOM INPUT VALUE')
+                        invoice_number: this.getVal(row, 'INVOICE NUMBER'),
+                        customer_name: this.getVal(row, 'CUSTOMER NAME'),
+                        customer_mobile: this.getVal(row, 'CUSTOMER MOBILE NUMBER'),
+                        customer_email: this.getVal(row, 'CUSTOMER EMAIL'),
+                        payment_status: this.getVal(row, 'PAYMENT STATUS'),
+                        paid_amount: parseFloat(this.getVal(row, 'PAID AMOUNT')) || 0,
+                        payment_reference_number: String(this.getVal(row, 'PAYMENT REFERENCE NUMBER')),
+                        customer_national_id: this.getVal(row, 'CUSTOMER NATIONAL ID'),
+                        custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE')
                     };
-                }).filter(r => r.payment_reference_number);
+                }).filter(r => r.payment_reference_number && r.payment_reference_number !== "null");
 
                 // Deduplicate
                 const uniqueLinks = [];
@@ -168,17 +167,10 @@ export class FawryProcessor {
                 const transformedRows = [];
                 
                 for (const row of rows) {
-                    const getVal = (keyStr) => {
-                        const exact = row[keyStr];
-                        if (exact !== undefined) return exact;
-                        const foundKey = Object.keys(row).find(k => k.toLowerCase() === keyStr.toLowerCase());
-                        return foundKey ? row[foundKey] : null;
-                    };
-
-                    let refNumber = getVal('Reference Number');
+                    let refNumber = this.getVal(row, 'Reference Number');
                     if (!refNumber) continue;
 
-                    let itemName = getVal('Item Name') || "";
+                    let itemName = this.getVal(row, 'Item Name') || "";
                     
                     // TUI / SU Check
                     if (this.tuiList.includes(itemName)) {
@@ -188,19 +180,19 @@ export class FawryProcessor {
                     }
 
                     // Extract numbers from Customer Name
-                    const custName = getVal('Customer Name');
+                    const custName = this.getVal(row, 'Customer Name');
                     let studentId = custName ? String(custName).replace(/-/g, '').replace(/\D/g, '') : "";
                     if (!studentId && custName) studentId = custName;
 
-                    let totalAmount = parseFloat(getVal('Total Amount Plus Fees')) || 0;
-                    let netAmount = parseFloat(getVal('Net Amount')) || 0;
-                    let fawryFees = parseFloat(getVal('Fawry Fees')) || 0;
-                    let itemPrice = parseFloat(getVal('Item Price')) || 0;
-                    let merchant = getVal('Merchant Name') || "";
+                    let totalAmount = parseFloat(this.getVal(row, 'Total Amount Plus Fees')) || 0;
+                    let netAmount = parseFloat(this.getVal(row, 'Net Amount')) || 0;
+                    let fawryFees = parseFloat(this.getVal(row, 'Fawry Fees')) || 0;
+                    let itemPrice = parseFloat(this.getVal(row, 'Item Price')) || 0;
+                    let merchant = this.getVal(row, 'Merchant Name') || "";
                     let bank = merchant === "Nile University Edu" ? "NUADIB64" : "NUADCB136";
                     
                     // Payment Date split
-                    let rawDate = getVal('Payment Date') || "";
+                    let rawDate = this.getVal(row, 'Payment Date') || "";
                     
                     // Excel dates might be numeric serials or pre-formatted strings
                     let paymentDate = "";
@@ -233,7 +225,7 @@ export class FawryProcessor {
                         }
                     }
 
-                    let mobileNum = getVal('Customer Mobile Number') || getVal('Customer  Mobile Number');
+                    let mobileNum = this.getVal(row, 'Customer Mobile Number');
 
                     transformedRows.push({
                         reference_number: refNumber,
@@ -243,7 +235,7 @@ export class FawryProcessor {
                         total_amount: totalAmount,
                         net_amount: netAmount,
                         fawry_fees: fawryFees,
-                        payment_status: getVal('Payment Status') || 'PAID',
+                        payment_status: this.getVal(row, 'Payment Status') || 'PAID',
                         item_name: itemName,
                         item_price: itemPrice,
                         merchant_name: merchant,
