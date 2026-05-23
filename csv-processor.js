@@ -144,6 +144,25 @@ export class FawryProcessor {
                     const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
                     if (error) this.log(`Error saving links: ${error.message}`);
                 }
+
+                // Re-enrich existing transactions with these new links
+                this.log(`Re-enriching existing transactions with new links...`);
+                const refs = uniqueLinks.map(l => String(l.payment_reference_number));
+                for (let i = 0; i < refs.length; i += 200) {
+                    const chunkRefs = refs.slice(i, i + 200);
+                    const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
+                    if (existingTx && existingTx.length > 0) {
+                        for (const tx of existingTx) {
+                            const link = uniqueLinks.find(l => String(l.payment_reference_number) === String(tx.reference_number));
+                            if (link && link.custom_input_value) {
+                                tx.student_id = link.custom_input_value;
+                                tx.id_status = this.validateID(tx.student_id);
+                            }
+                        }
+                        await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                    }
+                }
+                
                 resolve();
             };
 
@@ -203,24 +222,28 @@ export class FawryProcessor {
                     } else if (rawDate) {
                         paymentDate = String(rawDate).split(' ')[0]; // take the date part
                         
-                        // Parse DD/MM/YYYY or DD-MM-YYYY to YYYY-MM-DD
-                        if (paymentDate.includes('/')) {
-                             const parts = paymentDate.split('/');
+                        // Parse DD/MM/YYYY or MM/DD/YYYY securely
+                        const separator = paymentDate.includes('/') ? '/' : (paymentDate.includes('-') ? '-' : null);
+                        if (separator) {
+                             const parts = paymentDate.split(separator);
                              if (parts.length === 3) {
                                  if (parts[2].length === 4) {
-                                     paymentDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                                     // Format is XX-XX-YYYY. We must figure out if it's DD-MM or MM-DD.
+                                     // Fawry defaults to DD-MM-YYYY.
+                                     // If Excel mutated it, it might be MM-DD-YYYY.
+                                     // Let's assume DD-MM-YYYY first (parts[0] is day, parts[1] is month).
+                                     let day = parseInt(parts[0]);
+                                     let month = parseInt(parts[1]);
+                                     // If month > 12, then it must be MM-DD-YYYY (Excel mutated it!)
+                                     if (month > 12) {
+                                         day = parseInt(parts[1]);
+                                         month = parseInt(parts[0]);
+                                     }
+                                     paymentDate = `${parts[2]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                                  } else if (parts[0].length === 4) {
-                                     paymentDate = `${parts[0]}-${parts[1]}-${parts[2]}`;
+                                     // It's already YYYY-MM-DD
+                                     paymentDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
                                  }
-                             }
-                        } else if (paymentDate.includes('-')) {
-                             const parts = paymentDate.split('-');
-                             if (parts.length === 3) {
-                                 if (parts[2].length === 4) {
-                                     // It's DD-MM-YYYY
-                                     paymentDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
-                                 }
-                                 // If parts[0] is 4 digits, it's already YYYY-MM-DD
                              }
                         }
                     }
