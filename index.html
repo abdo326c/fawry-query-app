@@ -162,7 +162,59 @@
         </main>
     </div>
 
-    <!-- Modals will be injected dynamically -->
+    <!-- Mappings Modal -->
+    <div id="modal-mapping" class="modal hidden">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h2 id="modal-mapping-title">Add Mapping</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-mapping').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Original Item Name</label>
+                    <input type="text" id="map-original" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Adjusted Item Name (Optional)</label>
+                    <input type="text" id="map-adjusted" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Mapping Category</label>
+                    <input type="text" id="map-category" class="input-text">
+                </div>
+                <button class="btn btn-primary" id="btn-save-mapping" style="width: 100%; margin-top: 1rem;">Save Mapping</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fixes Modal -->
+    <div id="modal-fix" class="modal hidden">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h2 id="modal-fix-title">Add Fix</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-fix').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Reference Number</label>
+                    <input type="text" id="fix-ref" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct Student ID (Optional)</label>
+                    <input type="text" id="fix-id" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct Item Name (Optional)</label>
+                    <input type="text" id="fix-name" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct Mapping (Optional)</label>
+                    <input type="text" id="fix-mapping" class="input-text">
+                </div>
+                <button class="btn btn-primary" id="btn-save-fix" style="width: 100%; margin-top: 1rem;">Save Fix</button>
+            </div>
+        </div>
+    </div>
     
     <script type="module" src="app.js"></script>
     <script>

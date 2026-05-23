@@ -5,6 +5,7 @@ class App {
     constructor() {
         this.initNavigation();
         this.initImport();
+        this.initModals();
         this.loadTransactions();
     }
 
@@ -70,6 +71,69 @@ class App {
             // Switch back to transactions
             document.querySelector('[data-tab="transactions"]').click();
         }, 1000);
+    }
+
+    initModals() {
+        // Open Mapping Modal
+        document.getElementById('btn-add-mapping').addEventListener('click', () => {
+            document.getElementById('modal-mapping').classList.remove('hidden');
+        });
+
+        // Open Fix Modal
+        document.getElementById('btn-add-fix').addEventListener('click', () => {
+            document.getElementById('modal-fix').classList.remove('hidden');
+        });
+
+        // Save Mapping
+        document.getElementById('btn-save-mapping').addEventListener('click', async () => {
+            const original = document.getElementById('map-original').value;
+            const adjusted = document.getElementById('map-adjusted').value;
+            const category = document.getElementById('map-category').value;
+            
+            if (!original) return alert('Original Item Name is required');
+
+            const { error } = await supabase.from('item_mappings').insert([{
+                item_name: original,
+                adjusted_item_name: adjusted || null,
+                mapping: category || null
+            }]);
+
+            if (error) alert('Error saving mapping: ' + error.message);
+            else {
+                document.getElementById('modal-mapping').classList.add('hidden');
+                document.getElementById('map-original').value = '';
+                document.getElementById('map-adjusted').value = '';
+                document.getElementById('map-category').value = '';
+                this.loadMappings();
+            }
+        });
+
+        // Save Fix
+        document.getElementById('btn-save-fix').addEventListener('click', async () => {
+            const ref = document.getElementById('fix-ref').value;
+            const correctId = document.getElementById('fix-id').value;
+            const correctName = document.getElementById('fix-name').value;
+            const correctMapping = document.getElementById('fix-mapping').value;
+
+            if (!ref) return alert('Reference Number is required');
+
+            const { error } = await supabase.from('manual_fixes').insert([{
+                reference_number: ref,
+                correct_id: correctId || null,
+                item_name: correctName || null,
+                mapping: correctMapping || null
+            }]);
+
+            if (error) alert('Error saving fix: ' + error.message);
+            else {
+                document.getElementById('modal-fix').classList.add('hidden');
+                document.getElementById('fix-ref').value = '';
+                document.getElementById('fix-id').value = '';
+                document.getElementById('fix-name').value = '';
+                document.getElementById('fix-mapping').value = '';
+                this.loadFixes();
+            }
+        });
     }
 
     async loadTransactions() {
