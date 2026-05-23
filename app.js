@@ -285,7 +285,13 @@ class App {
                     if (bank) query = query.eq('bank', bank);
                     if (mapping) query = query.ilike('mapping', `%${mapping}%`);
                     if (item) query = query.ilike('item_name', `%${item}%`);
-                    if (search) query = query.or(`student_id.ilike.%${search}%,reference_number.ilike.%${search}%`);
+                    if (search) {
+                        if (/^\d+$/.test(search)) {
+                            query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
+                        } else {
+                            query = query.ilike('student_id', `%${search}%`);
+                        }
+                    }
                     
                     if (status) {
                         if (status === 'valid') query = query.eq('id_status', 'Valid');
@@ -377,7 +383,13 @@ class App {
         if (bank) query = query.eq('bank', bank);
         if (mapping) query = query.ilike('mapping', `%${mapping}%`);
         if (item) query = query.ilike('item_name', `%${item}%`);
-        if (search) query = query.or(`student_id.ilike.%${search}%,reference_number.ilike.%${search}%`);
+        if (search) {
+            if (/^\d+$/.test(search)) {
+                query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
+            } else {
+                query = query.ilike('student_id', `%${search}%`);
+            }
+        }
         
         if (status) {
             if (status === 'valid') query = query.eq('id_status', 'Valid');
