@@ -46,7 +46,39 @@
                     </button>
                 </div>
                 
-                <div class="filters-card glass-card">
+                <!-- Filters Bar -->
+                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem;">
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Date From</label>
+                        <input type="date" id="filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Date To</label>
+                        <input type="date" id="filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Bank</label>
+                        <select id="filter-bank" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                            <option value="">All Banks</option>
+                            <option value="NUADIB64">NUADIB64</option>
+                            <option value="NUADCB136">NUADCB136</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 150px; flex: 1.5;">
+                        <label style="font-size: 0.75rem">Mapping</label>
+                        <input type="text" id="filter-mapping" class="input-text" placeholder="Search..." style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 150px; flex: 1.5;">
+                        <label style="font-size: 0.75rem">Item Name</label>
+                        <input type="text" id="filter-item" class="input-text" placeholder="Search..." style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
+                        <button class="btn btn-primary" id="btn-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
+                        <button class="btn btn-outline" id="btn-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
+                    </div>
+                </div>
+
+                <div class="glass-card table-container">
                     <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref...">
                     <select id="status-filter" class="input-select">
                         <option value="">All Statuses</option>

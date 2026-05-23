@@ -6,6 +6,7 @@ class App {
         this.initNavigation();
         this.initImport();
         this.initModals();
+        this.initFilters();
         this.initExport();
         this.loadTransactions();
     }
@@ -136,6 +137,20 @@ class App {
         });
     }
 
+    initFilters() {
+        document.getElementById('btn-apply-filters').addEventListener('click', () => {
+            this.loadTransactions();
+        });
+        document.getElementById('btn-clear-filters').addEventListener('click', () => {
+            document.getElementById('filter-date-from').value = '';
+            document.getElementById('filter-date-to').value = '';
+            document.getElementById('filter-bank').value = '';
+            document.getElementById('filter-mapping').value = '';
+            document.getElementById('filter-item').value = '';
+            this.loadTransactions();
+        });
+    }
+
     initExport() {
         document.getElementById('btn-export').addEventListener('click', async () => {
             const btn = document.getElementById('btn-export');
@@ -149,11 +164,23 @@ class App {
                 const pageSize = 1000;
                 let fetchMore = true;
 
+                const dateFrom = document.getElementById('filter-date-from').value;
+                const dateTo = document.getElementById('filter-date-to').value;
+                const bank = document.getElementById('filter-bank').value;
+                const mapping = document.getElementById('filter-mapping').value;
+                const item = document.getElementById('filter-item').value;
+
                 // Fetch all data in pages
                 while (fetchMore) {
-                    const { data, error } = await supabase
-                        .from('transactions')
-                        .select('*')
+                    let query = supabase.from('transactions').select('*');
+                    
+                    if (dateFrom) query = query.gte('payment_date', dateFrom);
+                    if (dateTo) query = query.lte('payment_date', dateTo);
+                    if (bank) query = query.eq('bank', bank);
+                    if (mapping) query = query.ilike('mapping', `%${mapping}%`);
+                    if (item) query = query.ilike('item_name', `%${item}%`);
+
+                    const { data, error } = await query
                         .order('payment_date', { ascending: false })
                         .range(from, from + pageSize - 1);
 
@@ -174,25 +201,34 @@ class App {
                 }
 
                 // Format exactly like the original Power Query Excel
-                const formattedData = allData.map(t => ({
-                    "Reference Number": t.reference_number,
-                    "Payment Date": t.payment_date,
-                    "Student ID": t.student_id,
-                    "Customer Mobile Number": t.customer_mobile,
-                    "Total Amount Plus Fees": t.total_amount,
-                    "Net Amount": t.net_amount,
-                    "Fawry Fees": t.fawry_fees,
-                    "Payment Status": t.payment_status,
-                    "Item Name": t.item_name,
-                    "Item Price": t.item_price,
-                    "Merchant Name": t.merchant_name,
-                    "Bank": t.bank,
-                    "Check Column": t.check_column,
-                    "ID Status": t.id_status,
-                    "Mapping": t.mapping
-                }));
+                const formattedData = allData.map(t => {
+                    let pDate = t.payment_date;
+                    if (pDate) {
+                        const parts = pDate.split('-');
+                        // Use UTC to prevent timezone shifting
+                        pDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+                    }
 
-                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                    return {
+                        "Reference Number": t.reference_number,
+                        "Payment Date": pDate,
+                        "Student ID": t.student_id,
+                        "Customer Mobile Number": t.customer_mobile,
+                        "Total Amount Plus Fees": t.total_amount,
+                        "Net Amount": t.net_amount,
+                        "Fawry Fees": t.fawry_fees,
+                        "Payment Status": t.payment_status,
+                        "Item Name": t.item_name,
+                        "Item Price": t.item_price,
+                        "Merchant Name": t.merchant_name,
+                        "Bank": t.bank,
+                        "Check Column": t.check_column,
+                        "ID Status": t.id_status,
+                        "Mapping": t.mapping
+                    };
+                });
+
+                const worksheet = XLSX.utils.json_to_sheet(formattedData, { cellDates: true });
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
                 
@@ -213,9 +249,21 @@ class App {
         const tbody = document.getElementById('transactions-body');
         tbody.innerHTML = '<tr><td colspan="9">Loading...</td></tr>';
 
-        const { data, error } = await supabase
-            .from('transactions')
-            .select('*')
+        const dateFrom = document.getElementById('filter-date-from')?.value;
+        const dateTo = document.getElementById('filter-date-to')?.value;
+        const bank = document.getElementById('filter-bank')?.value;
+        const mapping = document.getElementById('filter-mapping')?.value;
+        const item = document.getElementById('filter-item')?.value;
+
+        let query = supabase.from('transactions').select('*');
+
+        if (dateFrom) query = query.gte('payment_date', dateFrom);
+        if (dateTo) query = query.lte('payment_date', dateTo);
+        if (bank) query = query.eq('bank', bank);
+        if (mapping) query = query.ilike('mapping', `%${mapping}%`);
+        if (item) query = query.ilike('item_name', `%${item}%`);
+
+        const { data, error } = await query
             .order('payment_date', { ascending: false })
             .limit(50);
 
