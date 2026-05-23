@@ -6,6 +6,7 @@ class App {
         this.initNavigation();
         this.initImport();
         this.initModals();
+        this.initExport();
         this.loadTransactions();
     }
 
@@ -131,6 +132,79 @@ class App {
                 document.getElementById('fix-name').value = '';
                 document.getElementById('fix-mapping').value = '';
                 this.loadFixes();
+            }
+        });
+    }
+
+    initExport() {
+        document.getElementById('btn-export').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-export');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="loader"></i> Exporting...';
+            btn.disabled = true;
+
+            try {
+                let allData = [];
+                let from = 0;
+                const pageSize = 1000;
+                let fetchMore = true;
+
+                // Fetch all data in pages
+                while (fetchMore) {
+                    const { data, error } = await supabase
+                        .from('transactions')
+                        .select('*')
+                        .order('payment_date', { ascending: false })
+                        .range(from, from + pageSize - 1);
+
+                    if (error) throw error;
+                    
+                    allData = allData.concat(data);
+                    
+                    if (data.length < pageSize) {
+                        fetchMore = false;
+                    } else {
+                        from += pageSize;
+                    }
+                }
+
+                if (allData.length === 0) {
+                    alert("No data to export.");
+                    return;
+                }
+
+                // Format exactly like the original Power Query Excel
+                const formattedData = allData.map(t => ({
+                    "Reference Number": t.reference_number,
+                    "Payment Date": t.payment_date,
+                    "Student ID": t.student_id,
+                    "Customer Mobile Number": t.customer_mobile,
+                    "Total Amount Plus Fees": t.total_amount,
+                    "Net Amount": t.net_amount,
+                    "Fawry Fees": t.fawry_fees,
+                    "Payment Status": t.payment_status,
+                    "Item Name": t.item_name,
+                    "Item Price": t.item_price,
+                    "Merchant Name": t.merchant_name,
+                    "Bank": t.bank,
+                    "Check Column": t.check_column,
+                    "ID Status": t.id_status,
+                    "Mapping": t.mapping
+                }));
+
+                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
+                
+                // Trigger download
+                XLSX.writeFile(workbook, `Fawry_Query_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+
+            } catch (err) {
+                alert("Export failed: " + err.message);
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
             }
         });
     }
