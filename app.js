@@ -42,10 +42,15 @@ class App {
 
     initDashboard() {
         const now = new Date();
-        const monthFilter = document.getElementById('dashboard-month-filter');
-        if (monthFilter) {
-            monthFilter.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-            monthFilter.addEventListener('change', () => this.loadDashboard());
+        const dateFrom = document.getElementById('dashboard-date-from');
+        const dateTo = document.getElementById('dashboard-date-to');
+        if (dateFrom && dateTo) {
+            dateFrom.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+            dateTo.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+            
+            dateFrom.addEventListener('change', () => this.loadDashboard());
+            dateTo.addEventListener('change', () => this.loadDashboard());
         }
 
         const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]');
@@ -120,15 +125,10 @@ class App {
     }
 
     async loadDashboard() {
-        const monthFilter = document.getElementById('dashboard-month-filter')?.value;
-        if (!monthFilter) return;
-
-        const [year, month] = monthFilter.split('-');
+        const dateFrom = document.getElementById('dashboard-date-from')?.value;
+        const dateTo = document.getElementById('dashboard-date-to')?.value;
         
-        // Find last day of month
-        const lastDay = new Date(year, month, 0).getDate();
-        const dateFrom = `${year}-${month}-01`;
-        const dateTo = `${year}-${month}-${lastDay}`;
+        if (!dateFrom || !dateTo) return;
 
         const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked');
         const selectedBanks = Array.from(checkboxes).map(cb => cb.value);
