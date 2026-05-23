@@ -12,8 +12,8 @@ class App {
         this.initBulkUploads();
         this.initFilters();
         this.initExport();
-        this.initPagination();
         this.initReapply();
+        this.initDashboard();
         this.loadTransactions();
     }
 
@@ -32,11 +32,205 @@ class App {
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
+                if (tabId === 'dashboard') this.loadDashboard();
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
                 if (tabId === 'fixes') this.loadFixes();
             });
         });
+    }
+
+    initDashboard() {
+        const now = new Date();
+        const monthFilter = document.getElementById('dashboard-month-filter');
+        if (monthFilter) {
+            monthFilter.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            monthFilter.addEventListener('change', () => this.loadDashboard());
+        }
+
+        const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.addEventListener('change', () => this.loadDashboard());
+        });
+
+        // Copy Table
+        const btnCopy = document.getElementById('btn-copy-pivot');
+        if (btnCopy) {
+            btnCopy.addEventListener('click', () => {
+                const table = document.getElementById('dashboard-pivot-table');
+                
+                const clone = table.cloneNode(true);
+                const cells = clone.querySelectorAll('th, td');
+                cells.forEach(c => {
+                    c.style.border = '1px solid black';
+                    c.style.padding = '5px 8px';
+                    if (c.classList.contains('pivot-title')) {
+                        c.style.backgroundColor = '#b4c6e7';
+                        c.style.borderBottom = '2px solid black';
+                        c.style.textAlign = 'center';
+                        c.style.fontWeight = 'bold';
+                    }
+                    if (c.classList.contains('pivot-header')) {
+                        c.style.backgroundColor = '#4472c4';
+                        c.style.color = '#ffffff';
+                        c.style.textAlign = 'center';
+                        c.style.fontWeight = 'bold';
+                    }
+                    if (c.classList.contains('pivot-row-label') || c.classList.contains('pivot-col-label')) {
+                        c.style.backgroundColor = '#e9e9e9';
+                        c.style.fontWeight = 'bold';
+                        if (c.classList.contains('pivot-row-label')) c.style.textAlign = 'left';
+                    }
+                    if (c.classList.contains('highlight-col') || c.classList.contains('highlight-cell')) {
+                        c.style.backgroundColor = '#ffff00';
+                    }
+                    if (c.parentNode.parentNode.tagName === 'TFOOT') {
+                        c.style.fontWeight = 'bold';
+                        c.style.borderTop = '2px solid black';
+                    }
+                    if (c.cellIndex === 0) {
+                        c.style.textAlign = 'left';
+                    } else {
+                        c.style.textAlign = 'right';
+                    }
+                });
+
+                const htmlStr = `<table style="border-collapse: collapse; font-family: Arial, sans-serif; font-size: 14px; width: 600px; border: 2px solid black;">${clone.innerHTML}</table>`;
+                
+                const blobHtml = new Blob([htmlStr], { type: "text/html" });
+                const blobText = new Blob([clone.innerText], { type: "text/plain" });
+                const data = [new ClipboardItem({
+                    "text/plain": blobText,
+                    "text/html": blobHtml,
+                })];
+
+                navigator.clipboard.write(data).then(() => {
+                    const orig = btnCopy.innerHTML;
+                    btnCopy.innerHTML = '<i data-lucide="check"></i> Copied!';
+                    if (window.lucide) lucide.createIcons();
+                    setTimeout(() => {
+                        btnCopy.innerHTML = orig;
+                        if (window.lucide) lucide.createIcons();
+                    }, 2000);
+                }).catch(err => {
+                    alert("Failed to copy: " + err.message);
+                });
+            });
+        }
+    }
+
+    async loadDashboard() {
+        const monthFilter = document.getElementById('dashboard-month-filter')?.value;
+        if (!monthFilter) return;
+
+        const [year, month] = monthFilter.split('-');
+        
+        // Find last day of month
+        const lastDay = new Date(year, month, 0).getDate();
+        const dateFrom = `${year}-${month}-01`;
+        const dateTo = `${year}-${month}-${lastDay}`;
+
+        const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked');
+        const selectedBanks = Array.from(checkboxes).map(cb => cb.value);
+
+        const tbody = document.getElementById('dashboard-pivot-body');
+        const tfoot = document.getElementById('dashboard-pivot-foot');
+        if (!tbody || !tfoot) return;
+
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
+        tfoot.innerHTML = '';
+
+        try {
+            let allData = [];
+            let fetchMore = true;
+            let from = 0;
+            while (fetchMore) {
+                const { data, error } = await supabase.from('transactions')
+                    .select('payment_date, bank, item_price')
+                    .gte('payment_date', dateFrom)
+                    .lte('payment_date', dateTo)
+                    .range(from, from + 999);
+                
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allData = allData.concat(data);
+                if (data.length < 1000) fetchMore = false;
+                else from += 1000;
+            }
+
+            const pivot = {};
+            const formatMoney = (num) => num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            let bankTotals = { Total: 0 };
+            selectedBanks.forEach(b => bankTotals[b] = 0);
+
+            allData.forEach(tx => {
+                if (!selectedBanks.includes(tx.bank)) return;
+                
+                const pDate = tx.payment_date;
+                if (!pivot[pDate]) {
+                    pivot[pDate] = { Total: 0 };
+                    selectedBanks.forEach(b => pivot[pDate][b] = 0);
+                }
+                const price = parseFloat(tx.item_price) || 0;
+                pivot[pDate][tx.bank] += price;
+                pivot[pDate].Total += price;
+
+                bankTotals[tx.bank] += price;
+                bankTotals.Total += price;
+            });
+
+            const dates = Object.keys(pivot).sort();
+
+            tbody.innerHTML = dates.map(d => {
+                const row = pivot[d];
+                const dateParts = d.split('-');
+                const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                const mName = monthNames[parseInt(dateParts[1]) - 1];
+                const dateLabel = `${parseInt(dateParts[2])}-${mName}-${dateParts[0]}`;
+
+                let html = `<tr><td>${dateLabel}</td>`;
+                selectedBanks.forEach(b => {
+                    const isHighlight = b === 'NUADIB64';
+                    html += `<td class="${isHighlight ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
+                });
+                html += `<td>${formatMoney(row.Total)}</td></tr>`;
+                return html;
+            }).join('');
+
+            if (dates.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="${selectedBanks.length + 2}" style="text-align: center;">No data for selected period</td></tr>`;
+            }
+
+            let footHtml = `<tr><td>Grand Total</td>`;
+            selectedBanks.forEach(b => {
+                const isHighlight = b === 'NUADIB64';
+                footHtml += `<td class="${isHighlight ? 'highlight-cell' : ''}">${formatMoney(bankTotals[b])}</td>`;
+            });
+            footHtml += `<td>${formatMoney(bankTotals.Total)}</td></tr>`;
+            tfoot.innerHTML = footHtml;
+
+            const thead = document.querySelector('#dashboard-pivot-table thead');
+            if (thead) {
+                thead.innerHTML = `
+                    <tr>
+                        <th colspan="${selectedBanks.length + 2}" class="pivot-title">Total Fawry Collection</th>
+                    </tr>
+                    <tr>
+                        <th class="pivot-header">Sum of Item Price</th>
+                        <th colspan="${selectedBanks.length + 1}" class="pivot-header">Column Labels</th>
+                    </tr>
+                    <tr>
+                        <th class="pivot-row-label">Row Labels</th>
+                        ${selectedBanks.map(b => `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b}</th>`).join('')}
+                        <th class="pivot-col-label">Grand Total</th>
+                    </tr>
+                `;
+            }
+
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="4" style="color: red;">Error: ${err.message}</td></tr>`;
+        }
     }
 
     initImport() {

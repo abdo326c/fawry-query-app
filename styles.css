@@ -406,3 +406,79 @@ body {
     width: 100%;
 }
 
+
+/* Pivot Table Styles */
+.pivot-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    color: #000;
+    background-color: #fff;
+    border: 2px solid #000;
+}
+
+.pivot-table th, .pivot-table td {
+    border: 1px solid #000;
+    padding: 0.4rem 0.6rem;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.pivot-table th {
+    text-align: center;
+    font-weight: 600;
+}
+
+.pivot-table td:first-child, .pivot-row-label {
+    text-align: left;
+}
+
+.pivot-title {
+    background-color: #b4c6e7;
+    border-bottom: 2px solid #000 !important;
+}
+
+.pivot-header {
+    background-color: #4472c4;
+    color: #fff;
+}
+
+.pivot-row-label {
+    background-color: #e9e9e9;
+}
+
+.pivot-col-label {
+    background-color: #e9e9e9;
+}
+
+.highlight-col {
+    background-color: #ffff00;
+}
+
+.pivot-table tfoot td {
+    font-weight: 700;
+    border-top: 2px solid #000;
+}
+
+.pivot-table tbody td.highlight-cell {
+    background-color: #ffff00;
+}
+
+.pivot-table tfoot td.highlight-cell {
+    background-color: #ffff00;
+}
+
+/* Checkbox Styles */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+}
