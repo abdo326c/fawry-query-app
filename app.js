@@ -3,12 +3,16 @@ import { FawryProcessor } from './csv-processor.js';
 
 class App {
     constructor() {
+        this.currentPage = 1;
+        this.pageSize = 50;
+
         this.initNavigation();
         this.initImport();
         this.initModals();
         this.initBulkUploads();
         this.initFilters();
         this.initExport();
+        this.initPagination();
         this.loadTransactions();
     }
 
@@ -231,6 +235,7 @@ class App {
 
     initFilters() {
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
+            this.currentPage = 1;
             this.loadTransactions();
         });
         document.getElementById('btn-clear-filters').addEventListener('click', () => {
@@ -241,16 +246,35 @@ class App {
             document.getElementById('filter-item').value = '';
             document.getElementById('search-input').value = '';
             document.getElementById('status-filter').value = '';
+            this.currentPage = 1;
             this.loadTransactions();
         });
 
         let searchTimeout;
         document.getElementById('search-input').addEventListener('input', () => {
             clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => this.loadTransactions(), 500);
+            searchTimeout = setTimeout(() => {
+                this.currentPage = 1;
+                this.loadTransactions();
+            }, 500);
         });
 
         document.getElementById('status-filter').addEventListener('change', () => {
+            this.currentPage = 1;
+            this.loadTransactions();
+        });
+    }
+
+    initPagination() {
+        document.getElementById('btn-prev').addEventListener('click', () => {
+            if (this.currentPage > 1) {
+                this.currentPage--;
+                this.loadTransactions();
+            }
+        });
+
+        document.getElementById('btn-next').addEventListener('click', () => {
+            this.currentPage++;
             this.loadTransactions();
         });
     }
@@ -397,9 +421,17 @@ class App {
             else if (status === 'error') query = query.ilike('id_status', '%Error%');
         }
 
+        const fromRange = (this.currentPage - 1) * this.pageSize;
+        const toRange = fromRange + this.pageSize - 1;
+
         const { data, error } = await query
             .order('payment_date', { ascending: false })
-            .limit(50);
+            .range(fromRange, toRange);
+
+        // Update pagination UI
+        document.getElementById('page-info').innerText = `Page ${this.currentPage}`;
+        document.getElementById('btn-prev').disabled = this.currentPage === 1;
+        document.getElementById('btn-next').disabled = !data || data.length < this.pageSize;
 
         if (error) {
             tbody.innerHTML = `<tr><td colspan="9" style="color:red">Error: ${error.message}</td></tr>`;
