@@ -388,38 +388,64 @@ class App {
         });
 
         document.getElementById('btn-export-mappings').addEventListener('click', async () => {
-            const { data, error } = await supabase.from('item_mappings').select('*');
-            if (error) return alert("Export failed: " + error.message);
-            if (!data || data.length === 0) return alert("No mappings to export.");
+            try {
+                let allData = [];
+                let from = 0;
+                let fetchMore = true;
+                while (fetchMore) {
+                    const { data, error } = await supabase.from('item_mappings').select('*').range(from, from + 999);
+                    if (error) throw error;
+                    allData = allData.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
 
-            const formattedData = data.map(m => ({
-                "Item Name": m.item_name,
-                "Adjusted Item Name": m.adjusted_item_name || "",
-                "Mapping": m.mapping || ""
-            }));
+                if (allData.length === 0) return alert("No mappings to export.");
 
-            const worksheet = XLSX.utils.json_to_sheet(formattedData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Item Mappings");
-            XLSX.writeFile(workbook, `Item_Mappings_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+                const formattedData = allData.map(m => ({
+                    "Item Name": m.item_name,
+                    "Adjusted Item Name": m.adjusted_item_name || "",
+                    "Mapping": m.mapping || ""
+                }));
+
+                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Item Mappings");
+                XLSX.writeFile(workbook, `Item_Mappings_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+            } catch (err) {
+                alert("Export failed: " + err.message);
+            }
         });
 
         document.getElementById('btn-export-fixes').addEventListener('click', async () => {
-            const { data, error } = await supabase.from('manual_fixes').select('*');
-            if (error) return alert("Export failed: " + error.message);
-            if (!data || data.length === 0) return alert("No fixes to export.");
+            try {
+                let allData = [];
+                let from = 0;
+                let fetchMore = true;
+                while (fetchMore) {
+                    const { data, error } = await supabase.from('manual_fixes').select('*').range(from, from + 999);
+                    if (error) throw error;
+                    allData = allData.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
 
-            const formattedData = data.map(f => ({
-                "Reference Number": f.reference_number,
-                "Correct ID": f.correct_id || "",
-                "Item Name": f.item_name || "",
-                "Mapping": f.mapping || ""
-            }));
+                if (allData.length === 0) return alert("No fixes to export.");
 
-            const worksheet = XLSX.utils.json_to_sheet(formattedData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Manual Fixes");
-            XLSX.writeFile(workbook, `Manual_Fixes_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+                const formattedData = allData.map(f => ({
+                    "Reference Number": f.reference_number,
+                    "Correct ID": f.correct_id || "",
+                    "Item Name": f.item_name || "",
+                    "Mapping": f.mapping || ""
+                }));
+
+                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Manual Fixes");
+                XLSX.writeFile(workbook, `Manual_Fixes_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+            } catch (err) {
+                alert("Export failed: " + err.message);
+            }
         });
     }
 
@@ -501,10 +527,20 @@ class App {
 
     async loadMappings() {
         const tbody = document.getElementById('mappings-body');
-        const { data } = await supabase.from('item_mappings').select('*');
-        if (!data) return;
+        let allData = [];
+        let from = 0;
+        let fetchMore = true;
+        while (fetchMore) {
+            const { data } = await supabase.from('item_mappings').select('*').range(from, from + 999);
+            if (!data || data.length === 0) break;
+            allData = allData.concat(data);
+            if (data.length < 1000) fetchMore = false;
+            else from += 1000;
+        }
 
-        tbody.innerHTML = data.map(m => `
+        if (allData.length === 0) return;
+
+        tbody.innerHTML = allData.map(m => `
             <tr>
                 <td>${m.item_name}</td>
                 <td>${m.adjusted_item_name || '-'}</td>
@@ -516,10 +552,20 @@ class App {
 
     async loadFixes() {
         const tbody = document.getElementById('fixes-body');
-        const { data } = await supabase.from('manual_fixes').select('*');
-        if (!data) return;
+        let allData = [];
+        let from = 0;
+        let fetchMore = true;
+        while (fetchMore) {
+            const { data } = await supabase.from('manual_fixes').select('*').range(from, from + 999);
+            if (!data || data.length === 0) break;
+            allData = allData.concat(data);
+            if (data.length < 1000) fetchMore = false;
+            else from += 1000;
+        }
 
-        tbody.innerHTML = data.map(f => `
+        if (allData.length === 0) return;
+
+        tbody.innerHTML = allData.map(f => `
             <tr>
                 <td>${f.reference_number}</td>
                 <td>${f.correct_id || '-'}</td>
