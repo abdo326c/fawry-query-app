@@ -239,6 +239,18 @@ class App {
             document.getElementById('filter-bank').value = '';
             document.getElementById('filter-mapping').value = '';
             document.getElementById('filter-item').value = '';
+            document.getElementById('search-input').value = '';
+            document.getElementById('status-filter').value = '';
+            this.loadTransactions();
+        });
+
+        let searchTimeout;
+        document.getElementById('search-input').addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => this.loadTransactions(), 500);
+        });
+
+        document.getElementById('status-filter').addEventListener('change', () => {
             this.loadTransactions();
         });
     }
@@ -261,6 +273,8 @@ class App {
                 const bank = document.getElementById('filter-bank').value;
                 const mapping = document.getElementById('filter-mapping').value;
                 const item = document.getElementById('filter-item').value;
+                const search = document.getElementById('search-input').value;
+                const status = document.getElementById('status-filter').value;
 
                 // Fetch all data in pages
                 while (fetchMore) {
@@ -271,6 +285,13 @@ class App {
                     if (bank) query = query.eq('bank', bank);
                     if (mapping) query = query.ilike('mapping', `%${mapping}%`);
                     if (item) query = query.ilike('item_name', `%${item}%`);
+                    if (search) query = query.or(`student_id.ilike.%${search}%,reference_number.ilike.%${search}%`);
+                    
+                    if (status) {
+                        if (status === 'valid') query = query.eq('id_status', 'Valid');
+                        else if (status === 'missing') query = query.eq('id_status', 'Missing ID');
+                        else if (status === 'error') query = query.ilike('id_status', '%Error%');
+                    }
 
                     const { data, error } = await query
                         .order('payment_date', { ascending: false })
@@ -346,6 +367,8 @@ class App {
         const bank = document.getElementById('filter-bank')?.value;
         const mapping = document.getElementById('filter-mapping')?.value;
         const item = document.getElementById('filter-item')?.value;
+        const search = document.getElementById('search-input')?.value;
+        const status = document.getElementById('status-filter')?.value;
 
         let query = supabase.from('transactions').select('*');
 
@@ -354,6 +377,13 @@ class App {
         if (bank) query = query.eq('bank', bank);
         if (mapping) query = query.ilike('mapping', `%${mapping}%`);
         if (item) query = query.ilike('item_name', `%${item}%`);
+        if (search) query = query.or(`student_id.ilike.%${search}%,reference_number.ilike.%${search}%`);
+        
+        if (status) {
+            if (status === 'valid') query = query.eq('id_status', 'Valid');
+            else if (status === 'missing') query = query.eq('id_status', 'Missing ID');
+            else if (status === 'error') query = query.ilike('id_status', '%Error%');
+        }
 
         const { data, error } = await query
             .order('payment_date', { ascending: false })
