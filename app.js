@@ -98,14 +98,28 @@ class App {
             
             if (!original) return alert('Original Item Name is required');
 
-            const { error } = await supabase.from('item_mappings').insert([{
+            const { error } = await supabase.from('item_mappings').upsert([{
                 item_name: original,
                 adjusted_item_name: adjusted || null,
                 mapping: category || null
-            }]);
+            }], { onConflict: 'item_name', ignoreDuplicates: false });
 
             if (error) alert('Error saving mapping: ' + error.message);
             else {
+                let fetchMore = true;
+                let from = 0;
+                while (fetchMore) {
+                    const { data: existingTx } = await supabase.from('transactions').select('*').eq('item_name', original).range(from, from + 999);
+                    if (!existingTx || existingTx.length === 0) break;
+                    for (const tx of existingTx) {
+                        if (adjusted) tx.item_name = adjusted;
+                        if (category) tx.mapping = category;
+                    }
+                    await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                    if (existingTx.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+
                 document.getElementById('modal-mapping').classList.add('hidden');
                 document.getElementById('map-original').value = '';
                 document.getElementById('map-adjusted').value = '';
@@ -123,15 +137,28 @@ class App {
 
             if (!ref) return alert('Reference Number is required');
 
-            const { error } = await supabase.from('manual_fixes').insert([{
+            const { error } = await supabase.from('manual_fixes').upsert([{
                 reference_number: ref,
                 correct_id: correctId || null,
                 item_name: correctName || null,
                 mapping: correctMapping || null
-            }]);
+            }], { onConflict: 'reference_number', ignoreDuplicates: false });
 
             if (error) alert('Error saving fix: ' + error.message);
             else {
+                const { data: existingTx } = await supabase.from('transactions').select('*').eq('reference_number', ref);
+                if (existingTx && existingTx.length > 0) {
+                    for (const tx of existingTx) {
+                        if (correctId) {
+                            tx.student_id = correctId;
+                            tx.id_status = new FawryProcessor().validateID(tx.student_id);
+                        }
+                        if (correctName) tx.item_name = correctName;
+                        if (correctMapping) tx.mapping = correctMapping;
+                    }
+                    await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                }
+
                 document.getElementById('modal-fix').classList.add('hidden');
                 document.getElementById('fix-ref').value = '';
                 document.getElementById('fix-id').value = '';
@@ -182,7 +209,29 @@ class App {
                     if (error) return alert('Error uploading mappings: ' + error.message);
                     inserted += chunk.length;
                 }
-                alert(`Successfully uploaded ${inserted} item mappings!`);
+
+                const itemNames = mappings.map(m => m.item_name);
+                for (let i = 0; i < itemNames.length; i += 50) {
+                    const chunkItems = itemNames.slice(i, i + 50);
+                    let fetchMore = true;
+                    let from = 0;
+                    while (fetchMore) {
+                        const { data: existingTx } = await supabase.from('transactions').select('*').in('item_name', chunkItems).range(from, from + 999);
+                        if (!existingTx || existingTx.length === 0) break;
+                        for (const tx of existingTx) {
+                            const mapDef = mappings.find(m => m.item_name === tx.item_name);
+                            if (mapDef) {
+                                if (mapDef.adjusted_item_name) tx.item_name = mapDef.adjusted_item_name;
+                                if (mapDef.mapping) tx.mapping = mapDef.mapping;
+                            }
+                        }
+                        await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                        if (existingTx.length < 1000) fetchMore = false;
+                        else from += 1000;
+                    }
+                }
+
+                alert(`Successfully uploaded ${inserted} item mappings and updated existing transactions!`);
                 this.loadMappings();
 
             } else if (type === 'fixes') {
@@ -200,7 +249,28 @@ class App {
                     if (error) return alert('Error uploading fixes: ' + error.message);
                     inserted += chunk.length;
                 }
-                alert(`Successfully uploaded ${inserted} manual fixes!`);
+
+                const refs = fixes.map(f => f.reference_number);
+                for (let i = 0; i < refs.length; i += 200) {
+                    const chunkRefs = refs.slice(i, i + 200);
+                    const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
+                    if (existingTx && existingTx.length > 0) {
+                        for (const tx of existingTx) {
+                            const fix = fixes.find(f => String(f.reference_number) === String(tx.reference_number));
+                            if (fix) {
+                                if (fix.correct_id) {
+                                    tx.student_id = fix.correct_id;
+                                    tx.id_status = new FawryProcessor().validateID(tx.student_id);
+                                }
+                                if (fix.item_name) tx.item_name = fix.item_name;
+                                if (fix.mapping) tx.mapping = fix.mapping;
+                            }
+                        }
+                        await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                    }
+                }
+
+                alert(`Successfully uploaded ${inserted} manual fixes and updated existing transactions!`);
                 this.loadFixes();
             }
         };
