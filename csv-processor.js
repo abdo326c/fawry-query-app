@@ -142,7 +142,7 @@ export class FawryProcessor {
                 const chunkSize = 500;
                 for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
                     const chunk = uniqueLinks.slice(i, i + chunkSize);
-                    const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: true });
+                    const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
                     if (error) this.log(`Error saving links: ${error.message}`);
                 }
                 resolve();
@@ -208,13 +208,27 @@ export class FawryProcessor {
                         // Excel serial date to JS Date
                         const dateObj = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
                         paymentDate = dateObj.toISOString().split('T')[0];
-                    } else {
-                        paymentDate = String(rawDate).split(' ')[0]; // just take the date part
-                        if (paymentDate && paymentDate.includes('/')) {
-                             // Convert DD/MM/YYYY to YYYY-MM-DD for Postgres
+                    } else if (rawDate) {
+                        paymentDate = String(rawDate).split(' ')[0]; // take the date part
+                        
+                        // Parse DD/MM/YYYY or DD-MM-YYYY to YYYY-MM-DD
+                        if (paymentDate.includes('/')) {
                              const parts = paymentDate.split('/');
                              if (parts.length === 3) {
-                                 paymentDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                                 if (parts[2].length === 4) {
+                                     paymentDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                                 } else if (parts[0].length === 4) {
+                                     paymentDate = `${parts[0]}-${parts[1]}-${parts[2]}`;
+                                 }
+                             }
+                        } else if (paymentDate.includes('-')) {
+                             const parts = paymentDate.split('-');
+                             if (parts.length === 3) {
+                                 if (parts[2].length === 4) {
+                                     // It's DD-MM-YYYY
+                                     paymentDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                                 }
+                                 // If parts[0] is 4 digits, it's already YYYY-MM-DD
                              }
                         }
                     }
@@ -336,7 +350,7 @@ export class FawryProcessor {
             const chunk = transactions.slice(i, i + chunkSize);
             const { error } = await supabase.from('transactions').upsert(chunk, { 
                 onConflict: 'reference_number,item_price,check_column', 
-                ignoreDuplicates: true 
+                ignoreDuplicates: false 
             });
             
             if (error) {
