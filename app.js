@@ -1195,13 +1195,29 @@ class App {
                 return;
             }
 
-            // Fetch Master List
-            const { data: students, error: err2 } = await supabase.from('student_master').select('*');
-            if (err2) throw err2;
+            // Fetch Master List (Paginated to get all)
+            let students = [];
+            let fetchMoreStudents = true;
+            let sFrom = 0;
+            while(fetchMoreStudents) {
+                const { data, error } = await supabase.from('student_master').select('*').range(sFrom, sFrom + 999);
+                if (error) throw error;
+                students = students.concat(data || []);
+                if (!data || data.length < 1000) fetchMoreStudents = false;
+                else sFrom += 1000;
+            }
             
-            // Fetch All Links
-            const { data: links, error: err3 } = await supabase.from('links').select('*');
-            if (err3) throw err3;
+            // Fetch All Links (Paginated to get all)
+            let links = [];
+            let fetchMoreLinks = true;
+            let lFrom = 0;
+            while(fetchMoreLinks) {
+                const { data, error } = await supabase.from('links').select('*').range(lFrom, lFrom + 999);
+                if (error) throw error;
+                links = links.concat(data || []);
+                if (!data || data.length < 1000) fetchMoreLinks = false;
+                else lFrom += 1000;
+            }
 
             // Build lookups
             const linksMap = {};
@@ -1234,14 +1250,20 @@ class App {
                 // Try 2: Link's mobile number
                 if (!proposedStudent && link && link.customer_mobile) {
                     const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
-                    proposedStudent = students.find(s => s.mobile && s.mobile.replace(/[^0-9]/g, '') === cleanMobile);
+                    if (cleanMobile.length >= 10) {
+                        const target = cleanMobile.slice(-10);
+                        proposedStudent = students.find(s => s.mobile && String(s.mobile).replace(/[^0-9]/g, '').endsWith(target));
+                    }
                     if (proposedStudent) matchReason = 'Phone number matched via Link Info';
                 }
 
                 // Try 3: Transaction's mobile number
                 if (!proposedStudent && tx.customer_mobile) {
                     const cleanMobile = String(tx.customer_mobile).replace(/[^0-9]/g, '');
-                    proposedStudent = students.find(s => s.mobile && s.mobile.replace(/[^0-9]/g, '') === cleanMobile);
+                    if (cleanMobile.length >= 10) {
+                        const target = cleanMobile.slice(-10);
+                        proposedStudent = students.find(s => s.mobile && String(s.mobile).replace(/[^0-9]/g, '').endsWith(target));
+                    }
                     if (proposedStudent) matchReason = 'Phone number matched via Transaction data';
                 }
 
