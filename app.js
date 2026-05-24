@@ -1229,21 +1229,20 @@ class App {
             const studentIdMap = new Map();
             const studentEmailMap = new Map();
             const studentNameMap = new Map();
+            const studentNationalIdMap = new Map();
             students.forEach(s => {
-                if (s.student_id) {
-                    studentIdMap.set(String(s.student_id).trim(), s);
-                }
+                if (s.student_id) studentIdMap.set(String(s.student_id).trim(), s);
+                if (s.email) studentEmailMap.set(String(s.email).toLowerCase().trim(), s);
+                if (s.full_name) studentNameMap.set(String(s.full_name).toLowerCase().trim(), s);
+                if (s.national_id) studentNationalIdMap.set(String(s.national_id).trim(), s);
+
                 if (s.mobile) {
                     const clean = String(s.mobile).replace(/[^0-9]/g, '');
-                    if (clean.length >= 10) {
-                        studentMobileMap.set(clean.slice(-10), s);
-                    }
+                    if (clean.length >= 10) studentMobileMap.set(clean.slice(-10), s);
                 }
-                if (s.email) {
-                    studentEmailMap.set(String(s.email).toLowerCase().trim(), s);
-                }
-                if (s.full_name) {
-                    studentNameMap.set(String(s.full_name).toLowerCase().trim(), s);
+                if (s.guardian_mobile) {
+                    const clean = String(s.guardian_mobile).replace(/[^0-9]/g, '');
+                    if (clean.length >= 10) studentMobileMap.set(clean.slice(-10), s);
                 }
             });
 
@@ -1264,46 +1263,43 @@ class App {
                 let proposedStudent = null;
                 let matchReason = '';
 
-                // Try 1: Try finding by ID directly in link
+                // Try 1: ID
                 if (link && link.custom_input_value) {
                     proposedStudent = studentIdMap.get(String(link.custom_input_value).trim());
                     if (proposedStudent) matchReason = 'Found exact ID in Link Info';
                 }
 
-                // Try 2: Link's mobile number
-                if (!proposedStudent && link && link.customer_mobile) {
-                    const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
-                    if (cleanMobile.length >= 10) {
-                        proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
-                    }
-                    if (proposedStudent) matchReason = 'Phone number matched via Link Info';
+                // Try 2: Mail
+                if (!proposedStudent && link && link.customer_email) {
+                    proposedStudent = studentEmailMap.get(String(link.customer_email).toLowerCase().trim());
+                    if (proposedStudent) matchReason = 'Email matched via Link Info';
                 }
 
-                // Try 3: Transaction's mobile number
+                // Try 3: National ID
+                if (!proposedStudent && link && link.customer_national_id) {
+                    proposedStudent = studentNationalIdMap.get(String(link.customer_national_id).trim());
+                    if (proposedStudent) matchReason = 'National ID matched via Link Info';
+                }
+
+                // Try 4: Phone (Link & Transaction)
+                if (!proposedStudent && link && link.customer_mobile) {
+                    const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
+                    if (cleanMobile.length >= 10) proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
+                    if (proposedStudent) matchReason = 'Phone number matched via Link Info';
+                }
                 if (!proposedStudent && tx.customer_mobile) {
                     const cleanMobile = String(tx.customer_mobile).replace(/[^0-9]/g, '');
-                    if (cleanMobile.length >= 10) {
-                        proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
-                    }
+                    if (cleanMobile.length >= 10) proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
                     if (proposedStudent) matchReason = 'Phone number matched via Transaction data';
                 }
 
-                // Try 4: Exact Match by Link's Email or Name
-                if (!proposedStudent && link) {
-                    if (link.customer_email) {
-                        proposedStudent = studentEmailMap.get(String(link.customer_email).toLowerCase().trim());
-                        if (proposedStudent) matchReason = 'Email matched via Link Info';
-                    }
-                    if (!proposedStudent && link.customer_name) {
-                        proposedStudent = studentNameMap.get(String(link.customer_name).toLowerCase().trim());
-                        if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
-                    }
+                // Try 5: Name (Link & Transaction)
+                if (!proposedStudent && link && link.customer_name) {
+                    proposedStudent = studentNameMap.get(String(link.customer_name).toLowerCase().trim());
+                    if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
                 }
-                
-                // Try 5: Exact Match by Transaction's Name string (extracted to student_id field)
                 if (!proposedStudent && tx.student_id) {
                     const searchStr = String(tx.student_id).trim().toLowerCase();
-                    // only search if it looks like a name (contains letters)
                     if (/[a-zA-Z]/.test(searchStr) && searchStr.length > 3) {
                         proposedStudent = studentNameMap.get(searchStr);
                         if (proposedStudent) matchReason = 'Exact Name matched via Transaction data';
