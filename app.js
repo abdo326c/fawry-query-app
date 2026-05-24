@@ -1326,6 +1326,7 @@ class App {
                 if (proposedStudent) {
                     this.automatchProposals.push(proposalTx);
                     
+                    const isNameMatch = matchReason.includes('Name');
                     html += `
                         <tr>
                             <td><input type="checkbox" class="automatch-checkbox" value="${tx.id}" checked></td>
@@ -1335,7 +1336,9 @@ class App {
                             <td>${tx.item_name}</td>
                             <td>${formatMoney(tx.item_price)}</td>
                             <td>
-                                <span class="status-badge valid-id" title="${matchReason}">Matched: ${proposedStudent.student_id}</span>
+                                <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${matchReason}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
+                                    Matched: ${proposedStudent.student_id} ${isNameMatch ? ' (By Name)' : ''}
+                                </span>
                                 <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${proposedStudent.full_name}</div>
                             </td>
                         </tr>
