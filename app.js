@@ -1162,14 +1162,14 @@ class App {
             if (mapContainer.innerHTML.includes('Click Run Auto-Match to load')) {
                 mapContainer.innerHTML = distinctMappings.map(m => `
                     <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.9rem; cursor: pointer;">
-                        <input type="checkbox" value="${m}" class="am-filter-mapping" checked> ${m}
+                        <input type="checkbox" value="${m}" class="am-filter-mapping"> ${m}
                     </label>
                 `).join('');
             }
             if (itemContainer.innerHTML.includes('Click Run Auto-Match to load')) {
                 itemContainer.innerHTML = distinctItems.map(i => `
                     <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.9rem; cursor: pointer;">
-                        <input type="checkbox" value="${i}" class="am-filter-item" checked> ${i}
+                        <input type="checkbox" value="${i}" class="am-filter-item"> ${i}
                     </label>
                 `).join('');
             }
@@ -1182,8 +1182,8 @@ class App {
             let filteredTx = invalidTx;
             if (document.querySelectorAll('.am-filter-mapping').length > 0) {
                 filteredTx = invalidTx.filter(t => {
-                    const matchMap = t.mapping ? selectedMappings.includes(t.mapping) : true; // Keep nulls or filter?
-                    const matchItem = t.item_name ? selectedItems.includes(t.item_name) : true;
+                    const matchMap = selectedMappings.length === 0 || (t.mapping && selectedMappings.includes(t.mapping));
+                    const matchItem = selectedItems.length === 0 || (t.item_name && selectedItems.includes(t.item_name));
                     return matchMap && matchItem;
                 });
             }
