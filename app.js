@@ -1258,6 +1258,20 @@ class App {
                     }
                 }
                 
+                // Try 5: Fuzzy Search by Transaction's Student ID string
+                // (because csv-processor puts the 'Customer Name' from transactions into student_id if it contains no numbers)
+                if (!proposedStudent && tx.student_id) {
+                    const searchStr = String(tx.student_id).trim();
+                    // only fuzzy search if it looks like a name (contains letters)
+                    if (/[a-zA-Z]/.test(searchStr) && searchStr.length > 3) {
+                        const res = fuse.search(searchStr);
+                        if (res && res.length > 0) {
+                            proposedStudent = res[0].item;
+                            matchReason = 'Fuzzy match via Transaction Name string';
+                        }
+                    }
+                }
+                
                 // Track for export
                 const proposalTx = {
                     tx_id: tx.id,
