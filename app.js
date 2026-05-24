@@ -1226,7 +1226,11 @@ class App {
             });
             
             const studentMobileMap = new Map();
+            const studentIdMap = new Map();
             students.forEach(s => {
+                if (s.student_id) {
+                    studentIdMap.set(String(s.student_id).trim(), s);
+                }
                 if (s.mobile) {
                     const clean = String(s.mobile).replace(/[^0-9]/g, '');
                     if (clean.length >= 10) {
@@ -1246,14 +1250,21 @@ class App {
             
             const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+            let loopCount = 0;
             for (const tx of filteredTx) {
+                loopCount++;
+                if (loopCount % 25 === 0) {
+                    btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
+                    await new Promise(r => setTimeout(r, 0)); // Yield to browser to prevent freezing
+                }
+
                 const link = linksMap[tx.reference_number];
                 let proposedStudent = null;
                 let matchReason = '';
 
                 // Try 1: Try finding by ID directly in link
                 if (link && link.custom_input_value) {
-                    proposedStudent = students.find(s => String(s.student_id) === String(link.custom_input_value).trim());
+                    proposedStudent = studentIdMap.get(String(link.custom_input_value).trim());
                     if (proposedStudent) matchReason = 'Found exact ID in Link Info';
                 }
 
