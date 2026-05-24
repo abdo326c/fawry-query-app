@@ -1252,6 +1252,8 @@ class App {
 
             this.automatchProposals = [];
             let html = '';
+            
+            const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
             for (const tx of invalidTx) {
                 const link = linksMap[tx.reference_number];
