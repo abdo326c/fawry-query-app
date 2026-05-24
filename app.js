@@ -1161,14 +1161,14 @@ class App {
             // If filters are empty (first run), populate them
             if (mapContainer.innerHTML.includes('Click Run Auto-Match to load')) {
                 mapContainer.innerHTML = distinctMappings.map(m => `
-                    <label style="display: block; font-size: 0.9rem;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.9rem; cursor: pointer;">
                         <input type="checkbox" value="${m}" class="am-filter-mapping" checked> ${m}
                     </label>
                 `).join('');
             }
             if (itemContainer.innerHTML.includes('Click Run Auto-Match to load')) {
                 itemContainer.innerHTML = distinctItems.map(i => `
-                    <label style="display: block; font-size: 0.9rem;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.9rem; cursor: pointer;">
                         <input type="checkbox" value="${i}" class="am-filter-item" checked> ${i}
                     </label>
                 `).join('');
@@ -1199,13 +1199,13 @@ class App {
             if (err2) throw err2;
             
             // Fetch All Links
-            const { data: links, error: err3 } = await supabase.from('payment_links').select('*');
+            const { data: links, error: err3 } = await supabase.from('links').select('*');
             if (err3) throw err3;
 
             // Build lookups
             const linksMap = {};
             links.forEach(l => {
-                linksMap[l.reference_number] = l;
+                linksMap[l.payment_reference_number] = l;
             });
 
             // Fuzzy matching setup
