@@ -978,11 +978,11 @@ class App {
                         .limit(50);
                         
                     if (error) throw error;
-                    
+
                     const tbody = document.getElementById('students-table-body');
                     tbody.innerHTML = data.map(s => `
                         <tr>
-                            <td>${s.student_id || ''}</td>
+                            <td><strong>${s.student_id}</strong></td>
                             <td>${s.full_name || ''}</td>
                             <td>${s.email || ''}</td>
                             <td>${s.mobile || ''}</td>
@@ -991,82 +991,86 @@ class App {
                         </tr>
                     `).join('');
                 } catch(err) {
-                    console.error("Lookup error:", err);
-                }
-            });
-        }
-        
-        const btnExport = document.getElementById('btn-export-students');
-        if (btnExport) {
-            btnExport.addEventListener('click', async () => {
-                try {
-                    btnExport.innerText = 'Exporting...';
-                    
-                    let allData = [];
-                    let page = 0;
-                    const pageSize = 1000;
-                    
-                    while (true) {
-                        const { data, error } = await supabase
-                            .from('student_master')
-                            .select('*')
-                            .range(page * pageSize, (page + 1) * pageSize - 1);
-                            
-                        if (error) throw error;
-                        if (!data || data.length === 0) break;
-                        
-                        allData = allData.concat(data);
-                        if (data.length < pageSize) break;
-                        page++;
-                    }
-                    
-                    if (allData.length > 0) {
-                        const csv = Papa.unparse(allData);
-                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                        const link = document.createElement('a');
-                        link.href = URL.createObjectURL(blob);
-                        link.download = `Student_Master.csv`;
-                        link.click();
-                    }
-                } catch(err) {
-                    alert('Export failed: ' + err.message);
-                } finally {
-                    btnExport.innerHTML = '<i data-lucide="download"></i> Export Master List';
-                    lucide.createIcons();
+                    alert('Search error: ' + err.message);
                 }
             });
         }
 
-        const dropZone = document.getElementById('student-upload-zone');
+        const dropzone = document.getElementById('student-import-zone');
         const fileInput = document.getElementById('student-file-input');
-        
-        if (dropZone && fileInput) {
-            dropZone.addEventListener('click', () => fileInput.click());
-            dropZone.addEventListener('dragover', (e) => {
+        if (dropzone && fileInput) {
+            dropzone.addEventListener('click', () => fileInput.click());
+            dropzone.addEventListener('dragover', (e) => {
                 e.preventDefault();
-                dropZone.style.borderColor = 'var(--primary-color)';
-                dropZone.style.backgroundColor = 'rgba(59, 130, 246, 0.05)';
+                dropzone.style.borderColor = 'var(--primary-color)';
             });
-            dropZone.addEventListener('dragleave', (e) => {
+            dropzone.addEventListener('dragleave', () => dropzone.style.borderColor = 'var(--border-color)');
+            dropzone.addEventListener('drop', (e) => {
                 e.preventDefault();
-                dropZone.style.borderColor = 'var(--border-color)';
-                dropZone.style.backgroundColor = 'transparent';
-            });
-            dropZone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                dropZone.style.borderColor = 'var(--border-color)';
-                dropZone.style.backgroundColor = 'transparent';
+                dropzone.style.borderColor = 'var(--border-color)';
                 if (e.dataTransfer.files.length) {
-                    this.handleStudentExcelUpload(e.dataTransfer.files[0]);
+                    this.handleStudentImport(e.dataTransfer.files[0]);
                 }
             });
             fileInput.addEventListener('change', (e) => {
                 if (e.target.files.length) {
-                    this.handleStudentExcelUpload(e.target.files[0]);
+                    this.handleStudentImport(e.target.files[0]);
                 }
             });
         }
         
+        // Auto-Matcher Targeted Import Setup
+        const amDropzone = document.getElementById('automatcher-import-zone');
+        const amFileInput = document.getElementById('automatcher-file-input');
+        if (amDropzone && amFileInput) {
+            amDropzone.addEventListener('click', () => amFileInput.click());
+            amDropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                amDropzone.style.borderColor = 'var(--primary-color)';
+            });
+            amDropzone.addEventListener('dragleave', () => amDropzone.style.borderColor = 'var(--border-color)');
+            amDropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                amDropzone.style.borderColor = 'var(--border-color)';
+                if (e.dataTransfer.files.length) {
+                    this.handleTargetedMatcherImport(e.dataTransfer.files[0]);
+                }
+            });
+            amFileInput.addEventListener('change', (e) => {
+                if (e.target.files.length) {
+                    this.handleTargetedMatcherImport(e.target.files[0]);
+                }
+            });
+        }
+        
+        // Auto-Matcher Export Button
+        const btnExportAm = document.getElementById('btn-export-automatch');
+        if (btnExportAm) {
+            btnExportAm.addEventListener('click', () => {
+                if (!this.automatchProposals || this.automatchProposals.length === 0) {
+                    alert('No results to export. Run Auto-Match first to generate matches.');
+                    return;
+                }
+                const csvData = this.automatchProposals.map(tx => ({
+                    "Reference Number": tx.original_ref,
+                    "Payment Date": tx.original_date,
+                    "Bank": tx.original_bank,
+                    "Item Name": tx.original_item,
+                    "Amount": tx.original_amount,
+                    "Current Status": tx.original_status,
+                    "Proposed Fix (Student ID)": tx.proposedStudent ? tx.proposedStudent.student_id : 'No Match Found',
+                    "Proposed Fix (Student Name)": tx.proposedStudent ? tx.proposedStudent.full_name : '',
+                    "Match Reason": tx.matchReason
+                }));
+                const csv = Papa.unparse(csvData);
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `Auto_Matcher_Results.csv`;
+                link.click();
+            });
+        }
+
         const btnRunMatcher = document.getElementById('btn-run-automatcher');
         if (btnRunMatcher) {
             btnRunMatcher.addEventListener('click', () => this.runAutoMatcher());
@@ -1083,140 +1087,26 @@ class App {
         }
     }
     
-    loadStudentMaster() {
-        lucide.createIcons();
-    }
-
-    async handleStudentExcelUpload(file) {
-        const status = document.getElementById('student-upload-status');
-        status.style.display = 'block';
-        status.className = 'alert alert-info';
-        status.innerHTML = `<i data-lucide="loader" class="spin"></i> Parsing Excel file...`;
-        lucide.createIcons();
-
+    async handleTargetedMatcherImport(file) {
+        const status = document.getElementById('automatcher-import-status');
+        status.innerText = 'Parsing file...';
         try {
             const data = await file.arrayBuffer();
             const workbook = XLSX.read(data, { type: 'array' });
             const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+            const rows = XLSX.utils.sheet_to_json(firstSheet);
             
-            if (!rows || rows.length === 0) throw new Error("File is empty.");
-
-            let headers = rows[0];
-            let dataRows = rows.slice(1);
-
-            if (!headers.includes('Student ID') && !headers.includes('PEOPLE_ID1')) {
-                if (rows.length > 1 && rows[1].includes('Student ID')) {
-                    headers = rows[1];
-                    dataRows = rows.slice(2);
-                }
+            const refs = [];
+            for (const r of rows) {
+                const ref = r['Ref Number'] || r['Reference Number'] || r['REF NUMBER'] || r['Reference_Number'];
+                if (ref) refs.push(String(ref).trim());
             }
-
-            const headerMap = {};
-            headers.forEach((h, i) => { if (h) headerMap[h.toString().trim()] = i; });
-
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing data for upload...`;
+            if (refs.length === 0) throw new Error("No 'Reference Number' or 'Ref Number' column found in file.");
             
-            const records = [];
-            for (const row of dataRows) {
-                if (!row || row.length === 0) continue;
-                
-                const cleanPhone = (val) => val ? String(val).replace(/\s+/g, '').trim() : null;
-
-                let student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
-
-                if ('PEOPLE_ID1' in headerMap) {
-                    student_id = String(row[headerMap['PEOPLE_ID1']] || '').trim();
-                    full_name = row[headerMap['Full name']] || row[headerMap['FIRST_NAME1']] || '';
-                    arabic_name = row[headerMap['ARABICNAME']];
-                    national_id = row[headerMap['GOVERNMENT_ID1']];
-                    email = row[headerMap['personalEmail']] || row[headerMap['Email1']];
-                    mobile = cleanPhone(row[headerMap['PhoneNumber1']]);
-                    guardian_name = row[headerMap['Guardian_NAME']];
-                    guardian_mobile = cleanPhone(row[headerMap['Guardian_Mobile']]);
-                    college = row[headerMap['University1']];
-                    program = row[headerMap['PROGRAM1']];
-                    source = 'ApplicantReport';
-                } else if ('Student ID' in headerMap) {
-                    student_id = String(row[headerMap['Student ID']] || '').trim();
-                    full_name = row[headerMap['Student Name']];
-                    email = row[headerMap['Email']];
-                    mobile = cleanPhone(row[headerMap['Mobile Phone Number']]);
-                    college = row[headerMap['College']];
-                    program = row[headerMap['Program']];
-                    source = 'StudentDetails';
-                } else {
-                    throw new Error("Unrecognized Excel format.");
-                }
-
-                if (student_id) {
-                    records.push({
-                        student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
-                    });
-                }
-            }
-
-            const uniqueRecords = Object.values(records.reduce((acc, curr) => {
-                acc[curr.student_id] = curr;
-                return acc;
-            }, {}));
-
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Fetching existing records for merging...`;
-            
-            const existingMap = {};
-            for (let i = 0; i < uniqueRecords.length; i += 500) {
-                const chunkIds = uniqueRecords.slice(i, i + 500).map(r => r.student_id);
-                const { data: existingData } = await supabase.from('student_master').select('*').in('student_id', chunkIds);
-                if (existingData) {
-                    existingData.forEach(r => existingMap[r.student_id] = r);
-                }
-            }
-
-            const finalRecords = uniqueRecords.map(newRec => {
-                const oldRec = existingMap[newRec.student_id];
-                if (!oldRec) return newRec; // New record
-
-                if (newRec.source === 'StudentDetails') {
-                    // StudentDetails is king. Overwrite oldRec with newRec, but keep oldRec fields if newRec has them as null/undefined
-                    const merged = { ...oldRec };
-                    for (const key in newRec) {
-                        if (newRec[key] !== null && newRec[key] !== undefined && newRec[key] !== '') {
-                            merged[key] = newRec[key];
-                        }
-                    }
-                    merged.source = 'StudentDetails';
-                    return merged;
-                } else {
-                    // ApplicantReport is secondary. Only fill in missing fields in oldRec.
-                    const merged = { ...newRec };
-                    for (const key in oldRec) {
-                        if (oldRec[key] !== null && oldRec[key] !== undefined && oldRec[key] !== '') {
-                            merged[key] = oldRec[key];
-                        }
-                    }
-                    if (oldRec.source === 'StudentDetails') merged.source = 'StudentDetails';
-                    return merged;
-                }
-            });
-
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${finalRecords.length} records to database...`;
-            
-            for (let i = 0; i < finalRecords.length; i += 1000) {
-                const batch = finalRecords.slice(i, i + 1000);
-                const { error } = await supabase.from('student_master').upsert(batch);
-                if (error) throw error;
-                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/finalRecords.length)*100)}%`;
-            }
-
-            status.className = 'alert alert-success';
-            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${finalRecords.length} students!`;
-            lucide.createIcons();
-
-        } catch (err) {
-            status.className = 'alert alert-danger';
-            status.innerHTML = `<i data-lucide="alert-triangle"></i> Error: ${err.message}`;
-            lucide.createIcons();
-            console.error(err);
+            this.targetedMatchRefs = refs;
+            status.innerText = `Targeted ${refs.length} transactions! Filter applied. Click Run Auto-Match.`;
+        } catch(err) {
+            status.innerText = 'Error: ' + err.message;
         }
     }
 
@@ -1230,77 +1120,159 @@ class App {
         lucide.createIcons();
 
         try {
-            const { data: invalidTx, error: err1 } = await supabase
-                .from('transactions')
-                .select('*')
-                .neq('id_status', 'Valid');
+            // First fetch the base invalidTx (with or without targeted filter)
+            let query = supabase.from('transactions').select('*').neq('id_status', 'Valid');
+            if (this.targetedMatchRefs && this.targetedMatchRefs.length > 0) {
+                // If there are many references, doing an IN query can fail if too large.
+                // We'll process them in JS instead.
+                // Or since it's just a query, we'll try IN. If the array is very large, this could error in PostgREST.
+                // But let's assume it's a manageable chunk (under 1000).
+                if (this.targetedMatchRefs.length > 500) {
+                    console.warn("Large targeted filter, fetching all and filtering locally.");
+                } else {
+                    query = query.in('reference_number', this.targetedMatchRefs);
+                }
+            }
+            
+            const { data: rawInvalidTx, error: err1 } = await query;
             if (err1) throw err1;
+            
+            let invalidTx = rawInvalidTx || [];
+            
+            // If the targeted match list was very large and bypassed the .in(), filter locally
+            if (this.targetedMatchRefs && this.targetedMatchRefs.length > 500) {
+                const targetSet = new Set(this.targetedMatchRefs);
+                invalidTx = invalidTx.filter(t => targetSet.has(t.reference_number));
+            }
 
-            if (!invalidTx || invalidTx.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No invalid IDs found.</td></tr>';
+            if (invalidTx.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No invalid IDs found matching criteria.</td></tr>';
+                btnApply.style.display = 'none';
+                return;
+            }
+            
+            // Generate distinct mappings and item names for the filters
+            const distinctMappings = [...new Set(invalidTx.map(t => t.mapping).filter(Boolean))].sort();
+            const distinctItems = [...new Set(invalidTx.map(t => t.item_name).filter(Boolean))].sort();
+            
+            const mapContainer = document.getElementById('automatcher-filter-mapping');
+            const itemContainer = document.getElementById('automatcher-filter-item');
+            
+            // If filters are empty (first run), populate them
+            if (mapContainer.innerHTML.includes('Click Run Auto-Match to load')) {
+                mapContainer.innerHTML = distinctMappings.map(m => `
+                    <label style="display: block; font-size: 0.9rem;">
+                        <input type="checkbox" value="${m}" class="am-filter-mapping" checked> ${m}
+                    </label>
+                `).join('');
+            }
+            if (itemContainer.innerHTML.includes('Click Run Auto-Match to load')) {
+                itemContainer.innerHTML = distinctItems.map(i => `
+                    <label style="display: block; font-size: 0.9rem;">
+                        <input type="checkbox" value="${i}" class="am-filter-item" checked> ${i}
+                    </label>
+                `).join('');
+            }
+            
+            // Now apply selected filters
+            const selectedMappings = Array.from(document.querySelectorAll('.am-filter-mapping:checked')).map(cb => cb.value);
+            const selectedItems = Array.from(document.querySelectorAll('.am-filter-item:checked')).map(cb => cb.value);
+            
+            // Only apply filters if the DOM is populated (not first load)
+            let filteredTx = invalidTx;
+            if (document.querySelectorAll('.am-filter-mapping').length > 0) {
+                filteredTx = invalidTx.filter(t => {
+                    const matchMap = t.mapping ? selectedMappings.includes(t.mapping) : true; // Keep nulls or filter?
+                    const matchItem = t.item_name ? selectedItems.includes(t.item_name) : true;
+                    return matchMap && matchItem;
+                });
+            }
+            
+            if (filteredTx.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No transactions match selected filters.</td></tr>';
                 btnApply.style.display = 'none';
                 return;
             }
 
-            const { data: linksData, error: err2 } = await supabase.from('links').select('*');
+            // Fetch Master List
+            const { data: students, error: err2 } = await supabase.from('student_master').select('*');
             if (err2) throw err2;
-            const linksMap = {};
-            linksData.forEach(l => { linksMap[l.reference_number] = l; });
-
-            const { data: students, error: err3 } = await supabase.from('student_master').select('*');
+            
+            // Fetch All Links
+            const { data: links, error: err3 } = await supabase.from('payment_links').select('*');
             if (err3) throw err3;
+
+            // Build lookups
+            const linksMap = {};
+            links.forEach(l => {
+                linksMap[l.reference_number] = l;
+            });
+
+            // Fuzzy matching setup
+            const fuse = new Fuse(students, {
+                keys: ['full_name', 'email', 'mobile'],
+                threshold: 0.4
+            });
 
             this.automatchProposals = [];
             let html = '';
             
             const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-            for (const tx of invalidTx) {
+            for (const tx of filteredTx) {
                 const link = linksMap[tx.reference_number];
                 let proposedStudent = null;
                 let matchReason = '';
 
-                if (link && !proposedStudent) {
-                    const lEmail = link.email ? link.email.trim().toLowerCase() : null;
-                    const lMobile = link.mobile ? String(link.mobile).replace(/\s+/g, '') : null;
-                    
-                    proposedStudent = students.find(s => 
-                        (lEmail && s.email && s.email.toLowerCase() === lEmail) ||
-                        (lMobile && s.mobile && s.mobile === lMobile) ||
-                        (lMobile && s.guardian_mobile && s.guardian_mobile === lMobile)
-                    );
-                    if (proposedStudent) matchReason = 'Exact match (Links Data)';
+                // Try 1: Try finding by ID directly in link
+                if (link && link.custom_input_value) {
+                    proposedStudent = students.find(s => String(s.student_id) === String(link.custom_input_value).trim());
+                    if (proposedStudent) matchReason = 'Found exact ID in Link Info';
                 }
 
-                if (!proposedStudent) {
-                    const searchNames = [];
-                    if (tx.item_name) searchNames.push(tx.item_name.toLowerCase());
-                    if (link && link.student_name) searchNames.push(link.student_name.toLowerCase());
+                // Try 2: Link's mobile number
+                if (!proposedStudent && link && link.customer_mobile) {
+                    const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
+                    proposedStudent = students.find(s => s.mobile && s.mobile.replace(/[^0-9]/g, '') === cleanMobile);
+                    if (proposedStudent) matchReason = 'Phone number matched via Link Info';
+                }
 
-                    for (const s of students) {
-                        const sName = s.full_name ? s.full_name.toLowerCase() : '';
-                        const gName = s.guardian_name ? s.guardian_name.toLowerCase() : '';
-                        
-                        for (const n of searchNames) {
-                            if (sName && sName.length > 5 && n.includes(sName)) {
-                                proposedStudent = s; matchReason = 'Fuzzy Name Match'; break;
-                            }
-                            if (gName && gName.length > 5 && n.includes(gName)) {
-                                proposedStudent = s; matchReason = 'Fuzzy Guardian Match'; break;
-                            }
-                        }
-                        if (proposedStudent) break;
+                // Try 3: Transaction's mobile number
+                if (!proposedStudent && tx.customer_mobile) {
+                    const cleanMobile = String(tx.customer_mobile).replace(/[^0-9]/g, '');
+                    proposedStudent = students.find(s => s.mobile && s.mobile.replace(/[^0-9]/g, '') === cleanMobile);
+                    if (proposedStudent) matchReason = 'Phone number matched via Transaction data';
+                }
+
+                // Try 4: Fuzzy Search by Link's Name or Email
+                if (!proposedStudent && link && (link.customer_name || link.customer_email)) {
+                    let searchStr = '';
+                    if (link.customer_name) searchStr += link.customer_name + ' ';
+                    if (link.customer_email) searchStr += link.customer_email;
+                    
+                    const res = fuse.search(searchStr.trim());
+                    if (res && res.length > 0) {
+                        proposedStudent = res[0].item;
+                        matchReason = 'Fuzzy match via Link Name/Email';
                     }
                 }
+                
+                // Track for export
+                const proposalTx = {
+                    tx_id: tx.id,
+                    proposedStudent: proposedStudent,
+                    matchReason: matchReason,
+                    original_ref: tx.reference_number,
+                    original_date: tx.payment_date,
+                    original_bank: tx.bank,
+                    original_item: tx.item_name,
+                    original_amount: tx.item_price,
+                    original_status: tx.id_status
+                };
 
                 if (proposedStudent) {
-                    this.automatchProposals.push({
-                        tx_id: tx.id,
-                        student_id: proposedStudent.student_id,
-                        student_name: proposedStudent.full_name,
-                        reason: matchReason
-                    });
-
+                    this.automatchProposals.push(proposalTx);
+                    
                     html += `
                         <tr>
                             <td><input type="checkbox" class="automatch-checkbox" value="${tx.id}" checked></td>
@@ -1310,15 +1282,17 @@ class App {
                             <td>${tx.item_name}</td>
                             <td>${formatMoney(tx.item_price)}</td>
                             <td>
-                                <span class="status-badge valid-id">Matched: ${proposedStudent.student_id}</span>
-                                <br><small class="text-muted">${proposedStudent.full_name} (${matchReason})</small>
+                                <span class="status-badge valid-id" title="${matchReason}">Matched: ${proposedStudent.student_id}</span>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${proposedStudent.full_name}</div>
                             </td>
                         </tr>
                     `;
                 } else {
+                    // We still want to export unmatched ones
+                    this.automatchProposals.push(proposalTx);
                     html += `
-                        <tr style="opacity: 0.6;">
-                            <td><input type="checkbox" disabled></td>
+                        <tr>
+                            <td></td>
                             <td>${tx.reference_number}</td>
                             <td>${tx.payment_date}</td>
                             <td>${tx.bank}</td>
@@ -1330,8 +1304,8 @@ class App {
                 }
             }
 
-            tbody.innerHTML = html || '<tr><td colspan="7" class="text-center">No proposals could be made.</td></tr>';
-            btnApply.style.display = html ? 'inline-block' : 'none';
+            tbody.innerHTML = html || '<tr><td colspan="7" class="text-center">No fixable transactions found.</td></tr>';
+            btnApply.style.display = this.automatchProposals.filter(p => p.proposedStudent).length > 0 ? 'inline-block' : 'none';
 
         } catch (err) {
             alert('Matcher Error: ' + err.message);
@@ -1385,4 +1359,5 @@ class App {
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+
 

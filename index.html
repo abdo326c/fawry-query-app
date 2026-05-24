@@ -367,9 +367,36 @@
                     <div class="card" style="margin-bottom: 1.5rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                             <h2>Auto-Matcher (Invalid IDs)</h2>
-                            <button class="btn btn-primary" id="btn-run-automatcher"><i data-lucide="zap"></i> Run Auto-Match</button>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <button class="btn" id="btn-export-automatch"><i data-lucide="download"></i> Export Results</button>
+                                <button class="btn btn-primary" id="btn-run-automatcher"><i data-lucide="zap"></i> Run Auto-Match</button>
+                            </div>
                         </div>
                         <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Select the Invalid ID transactions you want the system to try and fix using the Student Master list and Links data.</p>
+                        
+                        <div class="filters-grid" style="margin-bottom: 1.5rem;">
+                            <div class="filter-group">
+                                <label>Targeted Import (Optional)</label>
+                                <div class="upload-zone" id="automatcher-import-zone" style="border: 1px dashed var(--border-color); padding: 1rem; text-align: center; border-radius: 8px; cursor: pointer;">
+                                    <i data-lucide="upload-cloud" style="width: 24px; height: 24px; color: var(--text-muted);"></i>
+                                    <p style="margin-top: 0.5rem; font-size: 0.9rem;">Upload specific transactions to match</p>
+                                    <input type="file" id="automatcher-file-input" accept=".xlsx,.csv" style="display: none;">
+                                </div>
+                                <div id="automatcher-import-status" style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--primary-color);"></div>
+                            </div>
+                            <div class="filter-group">
+                                <label>Filter by Mapping</label>
+                                <div id="automatcher-filter-mapping" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; background: var(--bg-card);">
+                                    <span style="color: var(--text-muted); font-size: 0.85rem;">Click Run Auto-Match to load</span>
+                                </div>
+                            </div>
+                            <div class="filter-group">
+                                <label>Filter by Item Name</label>
+                                <div id="automatcher-filter-item" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; background: var(--bg-card);">
+                                    <span style="color: var(--text-muted); font-size: 0.85rem;">Click Run Auto-Match to load</span>
+                                </div>
+                            </div>
+                        </div>
                         
                         <div class="table-container">
                             <table class="data-table" id="automatcher-table">
