@@ -1397,6 +1397,7 @@ class App {
             alert(`Successfully applied ${checkboxes.length} fixes!`);
             this.runAutoMatcher();
             this.loadDashboard();
+            this.loadTransactions();
         } catch(err) {
             alert('Error applying fixes: ' + err.message);
         } finally {
