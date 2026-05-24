@@ -1227,6 +1227,8 @@ class App {
             
             const studentMobileMap = new Map();
             const studentIdMap = new Map();
+            const studentEmailMap = new Map();
+            const studentNameMap = new Map();
             students.forEach(s => {
                 if (s.student_id) {
                     studentIdMap.set(String(s.student_id).trim(), s);
@@ -1237,12 +1239,12 @@ class App {
                         studentMobileMap.set(clean.slice(-10), s);
                     }
                 }
-            });
-
-            // Fuzzy matching setup
-            const fuse = new Fuse(students, {
-                keys: ['full_name', 'email', 'mobile'],
-                threshold: 0.4
+                if (s.email) {
+                    studentEmailMap.set(String(s.email).toLowerCase().trim(), s);
+                }
+                if (s.full_name) {
+                    studentNameMap.set(String(s.full_name).toLowerCase().trim(), s);
+                }
             });
 
             this.automatchProposals = [];
@@ -1286,30 +1288,25 @@ class App {
                     if (proposedStudent) matchReason = 'Phone number matched via Transaction data';
                 }
 
-                // Try 4: Fuzzy Search by Link's Name or Email
-                if (!proposedStudent && link && (link.customer_name || link.customer_email)) {
-                    let searchStr = '';
-                    if (link.customer_name) searchStr += link.customer_name + ' ';
-                    if (link.customer_email) searchStr += link.customer_email;
-                    
-                    const res = fuse.search(searchStr.trim());
-                    if (res && res.length > 0) {
-                        proposedStudent = res[0].item;
-                        matchReason = 'Fuzzy match via Link Name/Email';
+                // Try 4: Exact Match by Link's Email or Name
+                if (!proposedStudent && link) {
+                    if (link.customer_email) {
+                        proposedStudent = studentEmailMap.get(String(link.customer_email).toLowerCase().trim());
+                        if (proposedStudent) matchReason = 'Email matched via Link Info';
+                    }
+                    if (!proposedStudent && link.customer_name) {
+                        proposedStudent = studentNameMap.get(String(link.customer_name).toLowerCase().trim());
+                        if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
                     }
                 }
                 
-                // Try 5: Fuzzy Search by Transaction's Student ID string
-                // (because csv-processor puts the 'Customer Name' from transactions into student_id if it contains no numbers)
+                // Try 5: Exact Match by Transaction's Name string (extracted to student_id field)
                 if (!proposedStudent && tx.student_id) {
-                    const searchStr = String(tx.student_id).trim();
-                    // only fuzzy search if it looks like a name (contains letters)
+                    const searchStr = String(tx.student_id).trim().toLowerCase();
+                    // only search if it looks like a name (contains letters)
                     if (/[a-zA-Z]/.test(searchStr) && searchStr.length > 3) {
-                        const res = fuse.search(searchStr);
-                        if (res && res.length > 0) {
-                            proposedStudent = res[0].item;
-                            matchReason = 'Fuzzy match via Transaction Name string';
-                        }
+                        proposedStudent = studentNameMap.get(searchStr);
+                        if (proposedStudent) matchReason = 'Exact Name matched via Transaction data';
                     }
                 }
                 
