@@ -11,6 +11,7 @@ class App {
         this.initModals();
         this.initBulkUploads();
         this.initFilters();
+        this.initPagination();
         this.initExport();
         this.initReapply();
         this.initDashboard();
