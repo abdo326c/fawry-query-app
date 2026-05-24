@@ -1001,11 +1001,27 @@ class App {
             btnExport.addEventListener('click', async () => {
                 try {
                     btnExport.innerText = 'Exporting...';
-                    const { data, error } = await supabase.from('student_master').select('*');
-                    if (error) throw error;
                     
-                    if (data && data.length > 0) {
-                        const csv = Papa.unparse(data);
+                    let allData = [];
+                    let page = 0;
+                    const pageSize = 1000;
+                    
+                    while (true) {
+                        const { data, error } = await supabase
+                            .from('student_master')
+                            .select('*')
+                            .range(page * pageSize, (page + 1) * pageSize - 1);
+                            
+                        if (error) throw error;
+                        if (!data || data.length === 0) break;
+                        
+                        allData = allData.concat(data);
+                        if (data.length < pageSize) break;
+                        page++;
+                    }
+                    
+                    if (allData.length > 0) {
+                        const csv = Papa.unparse(allData);
                         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                         const link = document.createElement('a');
                         link.href = URL.createObjectURL(blob);
@@ -1141,22 +1157,59 @@ class App {
             }
 
             const uniqueRecords = Object.values(records.reduce((acc, curr) => {
-                // If there's a duplicate, we keep the one with more fields filled or just the last one
                 acc[curr.student_id] = curr;
                 return acc;
             }, {}));
 
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${uniqueRecords.length} records to database...`;
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Fetching existing records for merging...`;
             
-            for (let i = 0; i < uniqueRecords.length; i += 1000) {
-                const batch = uniqueRecords.slice(i, i + 1000);
+            const existingMap = {};
+            for (let i = 0; i < uniqueRecords.length; i += 500) {
+                const chunkIds = uniqueRecords.slice(i, i + 500).map(r => r.student_id);
+                const { data: existingData } = await supabase.from('student_master').select('*').in('student_id', chunkIds);
+                if (existingData) {
+                    existingData.forEach(r => existingMap[r.student_id] = r);
+                }
+            }
+
+            const finalRecords = uniqueRecords.map(newRec => {
+                const oldRec = existingMap[newRec.student_id];
+                if (!oldRec) return newRec; // New record
+
+                if (newRec.source === 'StudentDetails') {
+                    // StudentDetails is king. Overwrite oldRec with newRec, but keep oldRec fields if newRec has them as null/undefined
+                    const merged = { ...oldRec };
+                    for (const key in newRec) {
+                        if (newRec[key] !== null && newRec[key] !== undefined && newRec[key] !== '') {
+                            merged[key] = newRec[key];
+                        }
+                    }
+                    merged.source = 'StudentDetails';
+                    return merged;
+                } else {
+                    // ApplicantReport is secondary. Only fill in missing fields in oldRec.
+                    const merged = { ...newRec };
+                    for (const key in oldRec) {
+                        if (oldRec[key] !== null && oldRec[key] !== undefined && oldRec[key] !== '') {
+                            merged[key] = oldRec[key];
+                        }
+                    }
+                    if (oldRec.source === 'StudentDetails') merged.source = 'StudentDetails';
+                    return merged;
+                }
+            });
+
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${finalRecords.length} records to database...`;
+            
+            for (let i = 0; i < finalRecords.length; i += 1000) {
+                const batch = finalRecords.slice(i, i + 1000);
                 const { error } = await supabase.from('student_master').upsert(batch);
                 if (error) throw error;
-                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/uniqueRecords.length)*100)}%`;
+                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/finalRecords.length)*100)}%`;
             }
 
             status.className = 'alert alert-success';
-            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${uniqueRecords.length} students!`;
+            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${finalRecords.length} students!`;
             lucide.createIcons();
 
         } catch (err) {
