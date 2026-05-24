@@ -1140,17 +1140,23 @@ class App {
                 }
             }
 
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${records.length} records to database...`;
+            const uniqueRecords = Object.values(records.reduce((acc, curr) => {
+                // If there's a duplicate, we keep the one with more fields filled or just the last one
+                acc[curr.student_id] = curr;
+                return acc;
+            }, {}));
+
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${uniqueRecords.length} records to database...`;
             
-            for (let i = 0; i < records.length; i += 1000) {
-                const batch = records.slice(i, i + 1000);
+            for (let i = 0; i < uniqueRecords.length; i += 1000) {
+                const batch = uniqueRecords.slice(i, i + 1000);
                 const { error } = await supabase.from('student_master').upsert(batch);
                 if (error) throw error;
-                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/records.length)*100)}%`;
+                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/uniqueRecords.length)*100)}%`;
             }
 
             status.className = 'alert alert-success';
-            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${records.length} students!`;
+            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${uniqueRecords.length} students!`;
             lucide.createIcons();
 
         } catch (err) {
