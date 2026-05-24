@@ -1233,7 +1233,7 @@ class App {
             const { data: invalidTx, error: err1 } = await supabase
                 .from('transactions')
                 .select('*')
-                .eq('id_status', 'Invalid ID');
+                .neq('id_status', 'Valid');
             if (err1) throw err1;
 
             if (!invalidTx || invalidTx.length === 0) {
@@ -1360,7 +1360,7 @@ class App {
                         .from('transactions')
                         .update({ 
                             student_id: proposal.student_id,
-                            id_status: 'Valid ID'
+                            id_status: 'Valid'
                         })
                         .eq('id', tx_id);
                 }
