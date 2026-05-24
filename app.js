@@ -1224,6 +1224,16 @@ class App {
             links.forEach(l => {
                 linksMap[l.payment_reference_number] = l;
             });
+            
+            const studentMobileMap = new Map();
+            students.forEach(s => {
+                if (s.mobile) {
+                    const clean = String(s.mobile).replace(/[^0-9]/g, '');
+                    if (clean.length >= 10) {
+                        studentMobileMap.set(clean.slice(-10), s);
+                    }
+                }
+            });
 
             // Fuzzy matching setup
             const fuse = new Fuse(students, {
@@ -1251,8 +1261,7 @@ class App {
                 if (!proposedStudent && link && link.customer_mobile) {
                     const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
                     if (cleanMobile.length >= 10) {
-                        const target = cleanMobile.slice(-10);
-                        proposedStudent = students.find(s => s.mobile && String(s.mobile).replace(/[^0-9]/g, '').endsWith(target));
+                        proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
                     }
                     if (proposedStudent) matchReason = 'Phone number matched via Link Info';
                 }
@@ -1261,8 +1270,7 @@ class App {
                 if (!proposedStudent && tx.customer_mobile) {
                     const cleanMobile = String(tx.customer_mobile).replace(/[^0-9]/g, '');
                     if (cleanMobile.length >= 10) {
-                        const target = cleanMobile.slice(-10);
-                        proposedStudent = students.find(s => s.mobile && String(s.mobile).replace(/[^0-9]/g, '').endsWith(target));
+                        proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
                     }
                     if (proposedStudent) matchReason = 'Phone number matched via Transaction data';
                 }
