@@ -891,7 +891,7 @@ class App {
                     <td>${t.payment_date || ''}</td>
                     <td><strong>${t.student_id || ''}</strong></td>
                     <td>${t.customer_mobile || ''}</td>
-                    <td>EGP ${t.net_amount || '0'}</td>
+                    <td>EGP ${t.item_price || '0'}</td>
                     <td>${t.item_name || ''}</td>
                     <td>${t.mapping || '-'}</td>
                     <td>${t.bank || ''}</td>
