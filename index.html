@@ -35,6 +35,9 @@
                 <a href="#fixes" class="nav-link" data-tab="fixes">
                     <i data-lucide="wrench"></i> Manual Fixes
                 </a>
+                <a href="#students" class="nav-link" data-tab="students">
+                    <i data-lucide="users"></i> Student Master
+                </a>
             </nav>
         </aside>
 
@@ -290,6 +293,109 @@
                         </tbody>
                     </table>
                 </div>
+            </section>
+            
+            <!-- Student Master View -->
+            <section id="view-students" class="view">
+                <div class="header">
+                    <h1>Student Master</h1>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn" id="btn-export-students"><i data-lucide="download"></i> Export Master List</button>
+                    </div>
+                </div>
+
+                <!-- 3 Tabs Navigation -->
+                <div class="card" style="margin-bottom: 1.5rem; padding: 0;">
+                    <div class="student-tabs" style="display: flex; border-bottom: 1px solid var(--border-color);">
+                        <button class="student-tab-btn active" data-target="student-lookup">Lookup Student</button>
+                        <button class="student-tab-btn" data-target="student-import">Import Data</button>
+                        <button class="student-tab-btn" data-target="student-automatcher">Auto-Matcher</button>
+                    </div>
+                </div>
+
+                <!-- Tab 1: Lookup -->
+                <div id="student-lookup" class="student-tab-content active">
+                    <div class="card" style="margin-bottom: 1.5rem;">
+                        <h2>Search Students</h2>
+                        <div class="filters-grid" style="margin-top: 1rem;">
+                            <div class="filter-group">
+                                <label>Search Term</label>
+                                <input type="text" id="student-search-input" placeholder="Name, Phone, Email, ID...">
+                            </div>
+                            <div class="filter-group" style="justify-content: flex-end;">
+                                <button class="btn btn-primary" id="btn-search-students">Search</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card table-container">
+                        <table class="data-table" id="students-table">
+                            <thead>
+                                <tr>
+                                    <th>Student ID</th>
+                                    <th>Full Name</th>
+                                    <th>Email</th>
+                                    <th>Mobile</th>
+                                    <th>College</th>
+                                    <th>Program</th>
+                                </tr>
+                            </thead>
+                            <tbody id="students-table-body">
+                                <!-- Data will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Import -->
+                <div id="student-import" class="student-tab-content" style="display: none;">
+                    <div class="card" style="margin-bottom: 1.5rem;">
+                        <h2>Import Student Excel Files</h2>
+                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Upload ApplicantReport or StudentDetails .xlsx files. The system will automatically parse and merge them.</p>
+                        
+                        <div class="upload-zone" id="student-upload-zone" style="border: 2px dashed var(--border-color); padding: 3rem; text-align: center; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            <i data-lucide="file-spreadsheet" style="width: 48px; height: 48px; color: var(--text-muted); margin-bottom: 1rem;"></i>
+                            <h3>Drop Excel file here or click to upload</h3>
+                            <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports .xlsx files only</p>
+                            <input type="file" id="student-file-input" accept=".xlsx" style="display: none;">
+                        </div>
+                        <div id="student-upload-status" class="alert" style="display: none; margin-top: 1rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Auto-Matcher -->
+                <div id="student-automatcher" class="student-tab-content" style="display: none;">
+                    <div class="card" style="margin-bottom: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h2>Auto-Matcher (Invalid IDs)</h2>
+                            <button class="btn btn-primary" id="btn-run-automatcher"><i data-lucide="zap"></i> Run Auto-Match</button>
+                        </div>
+                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Select the Invalid ID transactions you want the system to try and fix using the Student Master list and Links data.</p>
+                        
+                        <div class="table-container">
+                            <table class="data-table" id="automatcher-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px;"><input type="checkbox" id="automatcher-select-all"></th>
+                                        <th>Ref Number</th>
+                                        <th>Payment Date</th>
+                                        <th>Bank</th>
+                                        <th>Item Name</th>
+                                        <th>Amount</th>
+                                        <th>Proposed Fix</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="automatcher-table-body">
+                                    <!-- Invalid IDs will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div style="margin-top: 1rem; text-align: right;">
+                            <button class="btn btn-success" id="btn-apply-automatch-fixes" style="display: none;">Apply Selected Fixes</button>
+                        </div>
+                    </div>
+                </div>
+
             </section>
             
         </main>
