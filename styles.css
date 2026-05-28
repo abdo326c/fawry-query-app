@@ -836,10 +836,18 @@ body {
     border-bottom-color: var(--primary);
     background: rgba(0, 229, 255, 0.05);
 }
+
 /* Collapsed Sidebar Styles */
 .sidebar {
-    transition: width 0.3s ease;
-    overflow-x: hidden;
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    /* overflow-x: visible by default so toggle btn is not clipped */
+}
+
+/* Ensure text doesn't spill out when shrinking */
+.logo-text, .nav-link span, .user-info, .logout-text {
+    white-space: nowrap;
+    opacity: 1;
+    transition: opacity 0.2s ease;
 }
 
 .sidebar.collapsed {
@@ -848,26 +856,38 @@ body {
 
 .sidebar.collapsed .logo-text,
 .sidebar.collapsed .nav-link span,
-.sidebar.collapsed .user-info {
+.sidebar.collapsed .user-info,
+.sidebar.collapsed .logout-text {
     display: none;
+    opacity: 0;
 }
 
+/* Center elements when collapsed */
 .sidebar.collapsed .logo-container {
+    padding-left: 0 !important;
     justify-content: center;
 }
-
 .sidebar.collapsed .nav-link {
     justify-content: center;
     padding: 1rem;
 }
-
-.sidebar.collapsed .user-card {
-    justify-content: center;
-    padding: 1rem 0;
+.sidebar.collapsed .nav-link i {
+    margin: 0;
 }
-
+.sidebar.collapsed .user-card > div {
+    justify-content: center;
+}
 .sidebar.collapsed .user-avatar {
-    margin-right: 0;
+    margin-right: 0 !important;
+}
+.sidebar.collapsed #btn-logout {
+    padding: 0.5rem;
+    width: auto;
+    display: flex;
+    justify-content: center;
+}
+.sidebar.collapsed #btn-logout i {
+    margin: 0;
 }
 
 .sidebar-toggle-btn {
@@ -902,7 +922,8 @@ body {
     }
     .sidebar.collapsed .logo-text,
     .sidebar.collapsed .nav-link span,
-    .sidebar.collapsed .user-info {
+    .sidebar.collapsed .user-info,
+    .sidebar.collapsed .logout-text {
         display: block !important;
     }
     .sidebar-toggle-btn {
