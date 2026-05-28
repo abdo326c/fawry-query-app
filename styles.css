@@ -704,3 +704,82 @@ body {
         width: 100%;
     }
 }
+/* Pivot Table Styles */
+.pivot-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.9rem;
+    color: var(--text-main);
+    background-color: transparent;
+}
+
+.pivot-table th, .pivot-table td {
+    padding: 1rem 1.5rem;
+    text-align: right;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.pivot-table th {
+    text-align: center;
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+.pivot-table td:first-child, .pivot-row-label {
+    text-align: left;
+    font-weight: 500;
+}
+
+.pivot-title {
+    background: linear-gradient(90deg, var(--primary), #8b5cf6);
+    color: var(--bg-dark) !important;
+    font-size: 1rem !important;
+    border-bottom: none !important;
+    font-weight: 700 !important;
+}
+
+.pivot-header, .pivot-row-label, .pivot-col-label {
+    background-color: rgba(255,255,255,0.03);
+    backdrop-filter: blur(10px);
+}
+
+.pivot-table tbody tr {
+    transition: background-color 0.2s ease;
+}
+
+.pivot-table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+    transform: translateY(-1px);
+    box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.pivot-table tfoot td {
+    font-weight: 700;
+    background-color: rgba(0, 229, 255, 0.05);
+    border-top: 2px solid var(--border-color);
+    color: #fff;
+}
+
+.pivot-table tbody td.highlight-cell {
+    background-color: rgba(234, 179, 8, 0.05);
+    color: #fef08a;
+}
+.pivot-table tfoot td.highlight-cell {
+    background-color: rgba(234, 179, 8, 0.15);
+    color: #fde047;
+}
+
+/* Checkbox Styles */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
