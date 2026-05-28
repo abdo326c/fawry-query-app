@@ -53,14 +53,17 @@
         </div>
 
         <aside class="sidebar">
-            <div class="logo-container" style="justify-content: space-between; width: 100%;">
-                <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <i data-lucide="zap" class="logo-icon"></i>
-                    <span class="logo-text">Fawry Query</span>
+            <div class="sidebar-toggle-btn" id="btn-toggle-sidebar">
+                <i data-lucide="chevron-left" style="width: 16px; height: 16px;"></i>
+            </div>
+            <button id="btn-close-sidebar" class="btn-icon" style="display: none; position: absolute; right: 10px; top: 10px;">
+                <i data-lucide="x" style="width: 24px; height: 24px;"></i>
+            </button>
+            <div class="logo-container" style="justify-content: center; width: 100%; flex-direction: column; gap: 0.5rem; margin-top: 1rem;">
+                <div style="display: flex; align-items: center; justify-content: center; background: rgba(0, 229, 255, 0.1); padding: 0.75rem; border-radius: 12px; border: 1px solid rgba(0,229,255,0.2);">
+                    <i data-lucide="zap" class="logo-icon" style="margin: 0; filter: none;"></i>
                 </div>
-                <button id="btn-close-sidebar" class="btn-icon" style="display: none;">
-                    <i data-lucide="x" style="width: 24px; height: 24px;"></i>
-                </button>
+                <span class="logo-text" style="font-size: 1.1rem;">Fawry Query</span>
             </div>
             
             <nav class="nav-menu">

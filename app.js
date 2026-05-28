@@ -112,7 +112,14 @@ class App {
     initNavigation() {
         const btnMobileMenu = document.getElementById('btn-mobile-menu');
         const btnCloseSidebar = document.getElementById('btn-close-sidebar');
+        const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
         const sidebar = document.querySelector('.sidebar');
+
+        if (btnToggleSidebar) {
+            btnToggleSidebar.addEventListener('click', () => {
+                sidebar.classList.toggle('collapsed');
+            });
+        }
 
         if (btnMobileMenu) {
             btnMobileMenu.addEventListener('click', () => {
