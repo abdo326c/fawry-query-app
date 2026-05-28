@@ -858,21 +858,22 @@ body {
 .sidebar.collapsed .nav-link span,
 .sidebar.collapsed .user-info,
 .sidebar.collapsed .logout-text {
-    display: none;
-    opacity: 0;
+    display: none !important;
+    opacity: 0 !important;
 }
 
 /* Center elements when collapsed */
 .sidebar.collapsed .logo-container {
     padding-left: 0 !important;
-    justify-content: center;
+    justify-content: center !important;
 }
 .sidebar.collapsed .nav-link {
-    justify-content: center;
-    padding: 1rem;
+    justify-content: center !important;
+    padding: 1rem !important;
 }
-.sidebar.collapsed .nav-link i {
-    margin: 0;
+.sidebar.collapsed .nav-link i,
+.sidebar.collapsed .nav-link svg {
+    margin: 0 !important;
 }
 .sidebar.collapsed .user-card > div {
     justify-content: center;
