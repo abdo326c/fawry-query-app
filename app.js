@@ -149,7 +149,7 @@ class App {
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
                 if (tabId === 'fixes') this.loadFixes();
-                if (tabId === 'students') this.loadStudentMaster();
+                if (tabId === 'student-master') this.loadStudentMaster();
             });
         });
     }

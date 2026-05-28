@@ -669,6 +669,10 @@ body {
     .main-content {
         padding: 1.5rem;
     }
+    
+    .dashboard-layout {
+        flex-direction: column;
+    }
 }
 
 @media (max-width: 768px) {
@@ -792,4 +796,10 @@ body {
     gap: 0.5rem;
     cursor: pointer;
     font-size: 0.9rem;
+}
+.dashboard-layout {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+    margin-top: 1rem;
 }
