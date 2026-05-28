@@ -41,6 +41,17 @@
     </div>
 
     <div class="app-layout">
+        <!-- Mobile Header -->
+        <div class="mobile-header">
+            <div class="logo-container" style="margin-bottom: 0;">
+                <i data-lucide="zap" class="logo-icon"></i>
+                <span class="logo-text">Fawry Query</span>
+            </div>
+            <button id="btn-mobile-menu" class="btn-icon">
+                <i data-lucide="menu" style="width: 24px; height: 24px;"></i>
+            </button>
+        </div>
+
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="logo-container">
@@ -70,9 +81,14 @@
             </nav>
 
             <!-- User Profile & Logout -->
-            <div class="user-profile" id="user-profile-section" style="display: none; margin-top: auto; padding: 1.5rem; border-top: 1px solid var(--border-color);">
-                <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;" id="user-email-display">user@example.com</div>
-                <button id="btn-logout" class="btn btn-secondary" style="width: 100%; padding: 0.5rem; font-size: 0.9rem;">
+            <div class="user-profile" id="user-profile-section" style="display: none;">
+                <div class="user-info">
+                    <div class="user-avatar">
+                        <i data-lucide="user" style="width: 16px; height: 16px; color: white;"></i>
+                    </div>
+                    <div class="user-email-text" id="user-email-display" title="user@example.com">user@example.com</div>
+                </div>
+                <button id="btn-logout" class="btn btn-secondary" style="width: 100%; padding: 0.5rem; font-size: 0.85rem; margin-top: 0.5rem;">
                     <i data-lucide="log-out" style="width: 16px; height: 16px;"></i> Sign Out
                 </button>
             </div>

@@ -110,6 +110,15 @@ class App {
     }
 
     initNavigation() {
+        const btnMobileMenu = document.getElementById('btn-mobile-menu');
+        const sidebar = document.querySelector('.sidebar');
+
+        if (btnMobileMenu) {
+            btnMobileMenu.addEventListener('click', () => {
+                sidebar.classList.toggle('open');
+            });
+        }
+
         const links = document.querySelectorAll('.nav-link');
         links.forEach(link => {
             link.addEventListener('click', (e) => {
@@ -119,6 +128,11 @@ class App {
                 // Update active state
                 document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
                 link.classList.add('active');
+                
+                // Close sidebar on mobile after clicking
+                if (window.innerWidth <= 768) {
+                    sidebar.classList.remove('open');
+                }
                 
                 // Show view
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
