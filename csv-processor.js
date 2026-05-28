@@ -170,6 +170,7 @@ export class FawryProcessor {
                 Papa.parse(item.data, {
                     header: true,
                     skipEmptyLines: true,
+                    worker: true,
                     complete: (results) => processData(results.data)
                 });
             } else {
@@ -288,6 +289,7 @@ export class FawryProcessor {
                 Papa.parse(item.data, {
                     header: true,
                     skipEmptyLines: true,
+                    worker: true,
                     complete: (results) => processData(results.data)
                 });
             } else {

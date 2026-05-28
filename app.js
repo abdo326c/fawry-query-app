@@ -1,8 +1,40 @@
 import { supabase } from './supabase.js';
 import { FawryProcessor } from './csv-processor.js';
 
+class Toast {
+    static show(msg, type = 'info') {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        
+        let iconName = 'info';
+        if (type === 'success') iconName = 'check-circle';
+        if (type === 'error') iconName = 'alert-circle';
+        if (type === 'warning') iconName = 'alert-triangle';
+        
+        toast.innerHTML = `
+            <i data-lucide="${iconName}" class="toast-icon"></i>
+            <div class="toast-content">${msg}</div>
+        `;
+        
+        container.appendChild(toast);
+        lucide.createIcons({ root: toast });
+        
+        setTimeout(() => {
+            toast.classList.add('toast-hiding');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+}
+
+// Export it so csv-processor can use it if needed, or attach to window
+window.Toast = Toast;
+
 class App {
     constructor() {
+        this.currentUser = null;
         this.currentPage = 1;
         this.pageSize = 50;
 
@@ -16,6 +48,64 @@ class App {
         this.initReapply();
         this.initDashboard();
         this.initStudentMaster();
+        this.initAuth();
+    }
+
+    async initAuth() {
+        // Handle Session State
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+            this.setupUser(session.user);
+        }
+
+        supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'SIGNED_IN' && session) {
+                this.setupUser(session.user);
+            } else if (event === 'SIGNED_OUT') {
+                this.currentUser = null;
+                document.getElementById('auth-overlay').classList.remove('hidden');
+                document.getElementById('user-profile-section').style.display = 'none';
+            }
+        });
+
+        // Form Submission
+        document.getElementById('auth-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('auth-email').value;
+            const pass = document.getElementById('auth-password').value;
+            const btn = document.getElementById('btn-login');
+            const errDiv = document.getElementById('auth-error');
+            
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Signing in...';
+            btn.disabled = true;
+            errDiv.style.display = 'none';
+            
+            const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
+            if (error) {
+                errDiv.innerText = error.message;
+                errDiv.style.display = 'block';
+                btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
+                btn.disabled = false;
+                lucide.createIcons();
+            } else {
+                Toast.show('Successfully signed in', 'success');
+                btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
+                btn.disabled = false;
+            }
+        });
+
+        // Logout
+        document.getElementById('btn-logout').addEventListener('click', async () => {
+            await supabase.auth.signOut();
+            Toast.show('Signed out', 'info');
+        });
+    }
+
+    setupUser(user) {
+        this.currentUser = user;
+        document.getElementById('auth-overlay').classList.add('hidden');
+        document.getElementById('user-profile-section').style.display = 'flex';
+        document.getElementById('user-email-display').innerText = user.email;
         this.loadTransactions();
     }
 
@@ -280,6 +370,35 @@ class App {
             document.getElementById('modal-mapping').classList.remove('hidden');
         });
 
+        // Smart Mapping Auto-Suggest
+        document.getElementById('map-original').addEventListener('input', async (e) => {
+            const query = e.target.value.trim();
+            const suggestDiv = document.getElementById('mapping-suggestion');
+            if (query.length < 3) {
+                suggestDiv.style.display = 'none';
+                return;
+            }
+
+            // Fetch existing mappings to compare against
+            const { data: mappings } = await supabase.from('item_mappings').select('item_name, mapping');
+            if (mappings && mappings.length > 0) {
+                const fuse = new Fuse(mappings, { keys: ['item_name'], threshold: 0.3 });
+                const results = fuse.search(query);
+                if (results.length > 0) {
+                    const topMatch = results[0].item;
+                    suggestDiv.innerText = `💡 Smart Suggestion: Click to map to "${topMatch.mapping}" (similar to ${topMatch.item_name})`;
+                    suggestDiv.style.display = 'block';
+                    suggestDiv.onclick = () => {
+                        document.getElementById('map-category').value = topMatch.mapping;
+                        suggestDiv.style.display = 'none';
+                        Toast.show('Applied Smart Suggestion!', 'success');
+                    };
+                } else {
+                    suggestDiv.style.display = 'none';
+                }
+            }
+        });
+
         // Open Fix Modal
         document.getElementById('btn-add-fix').addEventListener('click', () => {
             document.getElementById('modal-fix').classList.remove('hidden');
@@ -330,7 +449,7 @@ class App {
             const correctName = document.getElementById('fix-name').value;
             const correctMapping = document.getElementById('fix-mapping').value;
 
-            if (!ref) return alert('Reference Number is required');
+            if (!ref) return Toast.show('Reference Number is required', 'warning');
 
             const { error } = await supabase.from('manual_fixes').upsert([{
                 reference_number: ref,
@@ -339,8 +458,19 @@ class App {
                 mapping: correctMapping || null
             }], { onConflict: 'reference_number', ignoreDuplicates: false });
 
-            if (error) alert('Error saving fix: ' + error.message);
-            else {
+            if (error) {
+                Toast.show('Error saving fix: ' + error.message, 'error');
+            } else {
+                if (this.currentUser) {
+                    await supabase.from('audit_logs').insert({
+                        user_email: this.currentUser.email,
+                        action: 'Single Manual Fix Added',
+                        affected_references: ref,
+                        details: { correctId, correctName, correctMapping }
+                    });
+                }
+                
+                Toast.show('Manual fix saved successfully!', 'success');
                 const { data: existingTx } = await supabase.from('transactions').select('*').eq('reference_number', ref);
                 if (existingTx && existingTx.length > 0) {
                     for (const tx of existingTx) {
@@ -1371,7 +1501,7 @@ class App {
     async applyAutoMatches() {
         const checkboxes = document.querySelectorAll('.automatch-checkbox:checked');
         if (checkboxes.length === 0) {
-            alert('Please select at least one proposed match to apply.');
+            Toast.show('Please select at least one proposed match to apply.', 'warning');
             return;
         }
 
@@ -1380,6 +1510,8 @@ class App {
         btn.disabled = true;
 
         try {
+            const fp = new FawryProcessor();
+            const appliedRefs = [];
             for (const cb of checkboxes) {
                 const tx_id = parseInt(cb.value);
                 const proposal = this.automatchProposals.find(p => p.tx_id === tx_id);
@@ -1388,18 +1520,29 @@ class App {
                         .from('transactions')
                         .update({ 
                             student_id: proposal.student_id,
-                            id_status: 'Valid'
+                            id_status: fp.validateID(proposal.student_id)
                         })
                         .eq('id', tx_id);
+                    appliedRefs.push(proposal.reference_number);
                 }
             }
 
-            alert(`Successfully applied ${checkboxes.length} fixes!`);
+            // Audit Log
+            if (this.currentUser && appliedRefs.length > 0) {
+                await supabase.from('audit_logs').insert({
+                    user_email: this.currentUser.email,
+                    action: 'Applied Auto-Matches',
+                    affected_references: appliedRefs.join(', '),
+                    details: { count: appliedRefs.length }
+                });
+            }
+
+            Toast.show(`Successfully applied ${checkboxes.length} fixes!`, 'success');
             this.runAutoMatcher();
             this.loadDashboard();
             this.loadTransactions();
-        } catch(err) {
-            alert('Error applying fixes: ' + err.message);
+        } catch (err) {
+            Toast.show('Error applying fixes: ' + err.message, 'error');
         } finally {
             btn.innerText = 'Apply Selected Fixes';
             btn.disabled = false;
