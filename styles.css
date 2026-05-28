@@ -697,6 +697,11 @@ body {
         width: 100vw;
     }
 
+    .header-actions {
+        width: 100%;
+        flex-direction: column;
+    }
+
     #btn-close-sidebar {
         display: flex !important;
     }
@@ -802,4 +807,9 @@ body {
     gap: 1.5rem;
     align-items: flex-start;
     margin-top: 1rem;
+}
+.header-actions {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
 }
