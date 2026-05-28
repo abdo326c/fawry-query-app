@@ -97,7 +97,7 @@ body {
     flex-direction: column;
     padding: 1.5rem;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 999;
+    z-index: 10001;
 }
 
 .logo-container {
@@ -219,6 +219,8 @@ body {
     padding: 2.5rem;
     overflow-y: auto;
     overflow-x: hidden;
+    min-width: 0;
+    width: 100%;
 }
 
 .view {
@@ -391,6 +393,8 @@ body {
     overflow-x: auto;
     padding: 0;
     border-radius: 1.25rem;
+    width: 100%;
+    max-width: 100%;
 }
 
 .data-table {
@@ -676,7 +680,8 @@ body {
         position: fixed;
         top: 0; bottom: 0; left: 0;
         transform: translateX(-100%);
-        box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+        box-shadow: 10px 0 30px rgba(0,0,0,0.8);
+        background-color: rgba(13, 19, 38, 0.95);
     }
 
     .sidebar.open {
@@ -685,6 +690,11 @@ body {
 
     .main-content {
         padding: 5rem 1rem 1.5rem 1rem; /* Space for mobile header */
+        width: 100vw;
+    }
+
+    #btn-close-sidebar {
+        display: flex !important;
     }
 
     .filters-card {

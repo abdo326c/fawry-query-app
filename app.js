@@ -111,11 +111,18 @@ class App {
 
     initNavigation() {
         const btnMobileMenu = document.getElementById('btn-mobile-menu');
+        const btnCloseSidebar = document.getElementById('btn-close-sidebar');
         const sidebar = document.querySelector('.sidebar');
 
         if (btnMobileMenu) {
             btnMobileMenu.addEventListener('click', () => {
-                sidebar.classList.toggle('open');
+                sidebar.classList.add('open');
+            });
+        }
+        
+        if (btnCloseSidebar) {
+            btnCloseSidebar.addEventListener('click', () => {
+                sidebar.classList.remove('open');
             });
         }
 
