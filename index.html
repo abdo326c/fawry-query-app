@@ -362,7 +362,7 @@
                 </div>
 
                 <!-- 3 Tabs Navigation -->
-                <div class="card" style="margin-bottom: 1.5rem; padding: 0;">
+                <div class="glass-card" style="margin-bottom: 1.5rem; padding: 0;">
                     <div class="student-tabs" style="display: flex; border-bottom: 1px solid var(--border-color);">
                         <button class="student-tab-btn active" data-target="student-lookup">Lookup Student</button>
                         <button class="student-tab-btn" data-target="student-import">Import Data</button>
@@ -372,19 +372,19 @@
 
                 <!-- Tab 1: Lookup -->
                 <div id="student-lookup" class="student-tab-content active">
-                    <div class="card" style="margin-bottom: 1.5rem;">
+                    <div class="glass-card" style="margin-bottom: 1.5rem;">
                         <h2>Search Students</h2>
-                        <div class="filters-grid" style="margin-top: 1rem;">
-                            <div class="filter-group">
+                        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem;">
+                            <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 250px;">
                                 <label>Search Term</label>
-                                <input type="text" id="student-search-input" placeholder="Name, Phone, Email, ID...">
+                                <input type="text" id="student-search-input" class="input-text" placeholder="Name, Phone, Email, ID...">
                             </div>
-                            <div class="filter-group" style="justify-content: flex-end;">
-                                <button class="btn btn-primary" id="btn-search-students">Search</button>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <button class="btn btn-primary" id="btn-search-students"><i data-lucide="search"></i> Search</button>
                             </div>
                         </div>
                     </div>
-                    <div class="card table-container">
+                    <div class="glass-card table-container" style="padding: 0; overflow: hidden;">
                         <table class="data-table" id="students-table">
                             <thead>
                                 <tr>
@@ -405,15 +405,15 @@
 
                 <!-- Tab 2: Import -->
                 <div id="student-import" class="student-tab-content" style="display: none;">
-                    <div class="card" style="margin-bottom: 1.5rem;">
+                    <div class="glass-card" style="margin-bottom: 1.5rem;">
                         <h2>Import Student Excel Files</h2>
                         <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Upload ApplicantReport or StudentDetails .xlsx files. The system will automatically parse and merge them.</p>
                         
-                        <div class="upload-zone" id="student-upload-zone" style="border: 2px dashed var(--border-color); padding: 3rem; text-align: center; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
-                            <i data-lucide="file-spreadsheet" style="width: 48px; height: 48px; color: var(--text-muted); margin-bottom: 1rem;"></i>
+                        <div class="upload-zone" id="student-upload-zone">
+                            <i data-lucide="file-spreadsheet" class="upload-icon"></i>
                             <h3>Drop Excel file here or click to upload</h3>
                             <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports .xlsx files only</p>
-                            <input type="file" id="student-file-input" accept=".xlsx" style="display: none;">
+                            <input type="file" id="student-file-input" accept=".xlsx" class="hidden-input">
                         </div>
                         <div id="student-upload-status" class="alert" style="display: none; margin-top: 1rem;"></div>
                     </div>
@@ -421,7 +421,7 @@
 
                 <!-- Tab 3: Auto-Matcher -->
                 <div id="student-automatcher" class="student-tab-content" style="display: none;">
-                    <div class="card" style="margin-bottom: 1.5rem;">
+                    <div class="glass-card" style="margin-bottom: 1.5rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                             <h2>Auto-Matcher (Invalid IDs)</h2>
                             <div class="header-actions">
@@ -431,25 +431,25 @@
                         </div>
                         <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Select the Invalid ID transactions you want the system to try and fix using the Student Master list and Links data.</p>
                         
-                        <div class="filters-grid" style="margin-bottom: 1.5rem;">
-                            <div class="filter-group">
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
+                            <div class="form-group" style="flex: 1; min-width: 250px;">
                                 <label>Targeted Import (Optional)</label>
-                                <div class="upload-zone" id="automatcher-import-zone" style="border: 1px dashed var(--border-color); padding: 1rem; text-align: center; border-radius: 8px; cursor: pointer;">
-                                    <i data-lucide="upload-cloud" style="width: 24px; height: 24px; color: var(--text-muted);"></i>
+                                <div class="upload-zone" id="automatcher-import-zone" style="padding: 2rem;">
+                                    <i data-lucide="upload-cloud" class="upload-icon" style="margin-bottom: 0.5rem; width: 32px; height: 32px;"></i>
                                     <p style="margin-top: 0.5rem; font-size: 0.9rem;">Upload specific transactions to match</p>
-                                    <input type="file" id="automatcher-file-input" accept=".xlsx,.csv" style="display: none;">
+                                    <input type="file" id="automatcher-file-input" accept=".xlsx,.csv" class="hidden-input">
                                 </div>
-                                <div id="automatcher-import-status" style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--primary-color);"></div>
+                                <div id="automatcher-import-status" style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--primary);"></div>
                             </div>
-                            <div class="filter-group">
+                            <div class="form-group" style="flex: 1; min-width: 250px;">
                                 <label>Filter by Mapping</label>
-                                <div id="automatcher-filter-mapping" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; background: var(--bg-card);">
+                                <div id="automatcher-filter-mapping" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; background: rgba(0,0,0,0.2);">
                                     <span style="color: var(--text-muted); font-size: 0.85rem;">Click Run Auto-Match to load</span>
                                 </div>
                             </div>
-                            <div class="filter-group">
+                            <div class="form-group" style="flex: 1; min-width: 250px;">
                                 <label>Filter by Item Name</label>
-                                <div id="automatcher-filter-item" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; background: var(--bg-card);">
+                                <div id="automatcher-filter-item" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; background: rgba(0,0,0,0.2);">
                                     <span style="color: var(--text-muted); font-size: 0.85rem;">Click Run Auto-Match to load</span>
                                 </div>
                             </div>

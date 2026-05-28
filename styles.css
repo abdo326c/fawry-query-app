@@ -813,3 +813,25 @@ body {
     gap: 1rem;
     flex-wrap: wrap;
 }
+/* Student Tabs */
+.student-tab-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 1rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    border-bottom: 2px solid transparent;
+}
+.student-tab-btn:hover {
+    color: var(--text-main);
+    background: rgba(255,255,255,0.02);
+}
+.student-tab-btn.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    background: rgba(0, 229, 255, 0.05);
+}
