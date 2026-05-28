@@ -1116,6 +1116,24 @@ class App {
             });
         });
 
+        const tbodyGlobal = document.getElementById('students-table-body');
+        if (tbodyGlobal) {
+            tbodyGlobal.addEventListener('click', async (e) => {
+                const target = e.target.closest('.copyable-email');
+                if (target) {
+                    const email = target.getAttribute('data-email');
+                    if (email) {
+                        try {
+                            await navigator.clipboard.writeText(email);
+                            Toast.show('Email copied to clipboard!', 'success');
+                        } catch (err) {
+                            Toast.show('Failed to copy email.', 'error');
+                        }
+                    }
+                }
+            });
+        }
+
         const btnSearch = document.getElementById('btn-search-students');
         if (btnSearch) {
             btnSearch.addEventListener('click', async () => {
@@ -1136,7 +1154,7 @@ class App {
                         <tr>
                             <td><strong>${s.student_id}</strong></td>
                             <td>${s.full_name || ''}</td>
-                            <td>${s.email || ''}</td>
+                            <td><span class="copyable-email" style="cursor: pointer; color: var(--primary); font-weight: 500;" data-email="${s.email || ''}" title="Click to copy">${s.email || ''}</span></td>
                             <td>${s.mobile || ''}</td>
                             <td>${s.college || ''}</td>
                             <td>${s.program || ''}</td>
