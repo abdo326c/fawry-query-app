@@ -121,7 +121,7 @@ body {
     font-size: 1.25rem;
     font-weight: 700;
     letter-spacing: -0.025em;
-    color: #fff;
+    color: var(--text-main);
 }
 
 .nav-menu {
@@ -253,7 +253,7 @@ body {
     font-size: 2rem;
     font-weight: 700;
     letter-spacing: -0.025em;
-    color: #fff;
+    color: var(--text-main);
 }
 
 /* Glass Cards */
@@ -542,7 +542,7 @@ body {
 .upload-zone h3 {
     font-size: 1.25rem;
     margin-bottom: 0.5rem;
-    color: #fff;
+    color: var(--text-main);
 }
 
 .hidden-input { display: none; }
@@ -644,7 +644,7 @@ body {
 
 .btn-close:hover {
     background: rgba(255,255,255,0.1);
-    color: #fff;
+    color: var(--text-main);
     transform: rotate(90deg);
 }
 
@@ -849,7 +849,7 @@ body {
     font-weight: 700;
     background-color: rgba(0, 229, 255, 0.05);
     border-top: 2px solid var(--border-color);
-    color: #fff;
+    color: var(--text-main);
 }
 
 .pivot-table tbody td.highlight-cell {
@@ -1182,21 +1182,21 @@ body {
 
 /* Light Mode */
 :root.light {
-    --bg-dark: #f5f7fa;
-    --bg-card: rgba(255, 255, 255, 0.85);
-    --bg-card-hover: rgba(255, 255, 255, 0.95);
-    --text-main: #1e293b;
+    --bg-dark: #f8fafc;
+    --bg-card: #ffffff;
+    --bg-card-hover: #ffffff;
+    --text-main: #334155;
     --text-muted: #64748b;
     --text-dark: #0f172a;
-    --border-color: rgba(0, 0, 0, 0.1);
-    --border-glow: rgba(0, 150, 200, 0.2);
-    --primary: #0891b2;
-    --primary-hover: #0e7490;
-    --primary-glow: rgba(8, 145, 178, 0.2);
+    --border-color: rgba(0, 0, 0, 0.08);
+    --border-glow: rgba(0, 150, 200, 0.1);
+    --primary: #0284c7;
+    --primary-hover: #0369a1;
+    --primary-glow: rgba(2, 132, 199, 0.1);
 }
 
 :root.light body {
-    background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 50%, #f0f4f8 100%);
+    background: #f8fafc;
     color: var(--text-main);
 }
 
@@ -1252,6 +1252,10 @@ body {
 :root.light .modal-content {
     background: white;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+:root.light .btn-close:hover {
+    background: rgba(0, 0, 0, 0.05);
 }
 
 :root.light .badge.valid {
