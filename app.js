@@ -1,6 +1,57 @@
 import { supabase } from './supabase.js';
 import { FawryProcessor } from './csv-processor.js';
 
+// Shared utility: escape HTML to prevent XSS
+function escapeHTML(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+// Shared utility: format money
+function formatMoney(num) {
+    return parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Shared utility: standalone validateID (no need to instantiate FawryProcessor)
+function validateID(id) {
+    if (!id) return "Missing ID";
+    const idText = String(id).trim();
+    const idLength = idText.length;
+    const onlyTextLeft = idText.replace(/[0-9]/g, '');
+    if (idLength === 17 && idText.toUpperCase().startsWith("DIP")) {
+        const remainder = idText.substring(3).replace(/[0-9]/g, '');
+        if (remainder === "") return "Valid";
+    }
+    if (onlyTextLeft !== "") return "Error: Text/Name detected";
+    if (idLength > 9) return `Error: ID Too Long (${idLength} digits)`;
+    if (idText.startsWith("2") && idLength !== 9) return `Error: Invalid 2-Series Length (${idLength} digits)`;
+    return "Valid";
+}
+
+// Shared utility: fetch all rows from a table with pagination
+async function fetchAll(table, selectCols = '*', queryFn = null) {
+    let allData = [];
+    let from = 0;
+    let fetchMore = true;
+    while (fetchMore) {
+        let query = supabase.from(table).select(selectCols);
+        if (queryFn) query = queryFn(query);
+        query = query.range(from, from + 999);
+        const { data, error } = await query;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allData = allData.concat(data);
+        if (data.length < 1000) fetchMore = false;
+        else from += 1000;
+    }
+    return allData;
+}
+
 class Toast {
     static show(msg, type = 'info') {
         const container = document.getElementById('toast-container');
@@ -16,7 +67,7 @@ class Toast {
         
         toast.innerHTML = `
             <i data-lucide="${iconName}" class="toast-icon"></i>
-            <div class="toast-content">${msg}</div>
+            <div class="toast-content">${escapeHTML(msg)}</div>
         `;
         
         container.appendChild(toast);
@@ -37,6 +88,8 @@ class App {
         this.currentUser = null;
         this.currentPage = 1;
         this.pageSize = 50;
+
+        this.initTheme();
 
         this.initNavigation();
         this.initImport();
@@ -107,6 +160,44 @@ class App {
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
         this.loadTransactions();
+    }
+
+    initTheme() {
+        const btnToggle = document.getElementById('btn-theme-toggle');
+        if (!btnToggle) return;
+
+        const htmlEl = document.documentElement;
+        const iconEl = document.getElementById('theme-icon');
+        const textEl = document.getElementById('theme-text');
+
+        // Check local storage or system preference
+        const savedTheme = localStorage.getItem('fawry-theme');
+        const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+
+        if (savedTheme === 'light' || (!savedTheme && prefersLight)) {
+            htmlEl.classList.remove('dark');
+            htmlEl.classList.add('light');
+            if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
+            if(textEl) textEl.innerText = 'Dark Mode';
+        }
+
+        btnToggle.addEventListener('click', () => {
+            const isLight = htmlEl.classList.contains('light');
+            if (isLight) {
+                htmlEl.classList.remove('light');
+                htmlEl.classList.add('dark');
+                localStorage.setItem('fawry-theme', 'dark');
+                if(iconEl) iconEl.setAttribute('data-lucide', 'sun');
+                if(textEl) textEl.innerText = 'Light Mode';
+            } else {
+                htmlEl.classList.remove('dark');
+                htmlEl.classList.add('light');
+                localStorage.setItem('fawry-theme', 'light');
+                if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
+                if(textEl) textEl.innerText = 'Dark Mode';
+            }
+            if (window.lucide) lucide.createIcons();
+        });
     }
 
     initNavigation() {
@@ -233,7 +324,7 @@ class App {
                         if (window.lucide) lucide.createIcons();
                     }, 2000);
                 }).catch(err => {
-                    alert("Failed to copy: " + err.message);
+                    Toast.show('Failed to copy: ' + err.message, 'error');
                 });
             });
         }
@@ -340,7 +431,7 @@ class App {
             }
 
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="4" style="color: red;">Error: ${err.message}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
         }
     }
 
@@ -376,7 +467,7 @@ class App {
         document.getElementById('import-progress').classList.remove('hidden');
         document.getElementById('import-log').innerHTML = '';
         
-        const processor = new FawryProcessor();
+        const processor = new FawryProcessor(this.currentUser?.email || 'System');
         await processor.processFiles(files);
         
         // Auto-switch back to transactions tab after 1.5 seconds
@@ -431,7 +522,7 @@ class App {
             const adjusted = document.getElementById('map-adjusted').value;
             const category = document.getElementById('map-category').value;
             
-            if (!original) return alert('Original Item Name is required');
+            if (!original) return Toast.show('Original Item Name is required', 'warning');
 
             const { error } = await supabase.from('item_mappings').upsert([{
                 item_name: original,
@@ -439,8 +530,16 @@ class App {
                 mapping: category || null
             }], { onConflict: 'item_name', ignoreDuplicates: false });
 
-            if (error) alert('Error saving mapping: ' + error.message);
+            if (error) Toast.show('Error saving mapping: ' + error.message, 'error');
             else {
+                if (this.currentUser) {
+                    await supabase.from('audit_logs').insert({
+                        user_email: this.currentUser.email,
+                        action: 'Single Mapping Added',
+                        affected_references: original,
+                        details: { original, adjusted, category }
+                    });
+                }
                 let fetchMore = true;
                 let from = 0;
                 while (fetchMore) {
@@ -497,7 +596,7 @@ class App {
                     for (const tx of existingTx) {
                         if (correctId) {
                             tx.student_id = correctId;
-                            tx.id_status = new FawryProcessor().validateID(tx.student_id);
+                            tx.id_status = validateID(tx.student_id);
                         }
                         if (correctName) tx.item_name = correctName;
                         if (correctMapping) tx.mapping = correctMapping;
@@ -526,7 +625,7 @@ class App {
             const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
 
             if (data.length === 0) {
-                alert("File is empty!");
+                Toast.show('File is empty!', 'warning');
                 return;
             }
 
@@ -552,7 +651,7 @@ class App {
                 for (let i = 0; i < mappings.length; i += chunkSize) {
                     const chunk = mappings.slice(i, i + chunkSize);
                     const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
-                    if (error) return alert('Error uploading mappings: ' + error.message);
+                    if (error) return Toast.show('Error uploading mappings: ' + error.message, 'error');
                     inserted += chunk.length;
                 }
 
@@ -577,7 +676,15 @@ class App {
                     }
                 }
 
-                alert(`Successfully uploaded ${inserted} item mappings and updated existing transactions!`);
+                if (this.currentUser) {
+                    await supabase.from('audit_logs').insert({
+                        user_email: this.currentUser.email,
+                        action: 'Bulk Mappings Uploaded',
+                        affected_references: `Batch of ${inserted} items`,
+                        details: { count: inserted }
+                    });
+                }
+                Toast.show(`Successfully uploaded ${inserted} item mappings and updated existing transactions!`, 'success');
                 this.loadMappings();
 
             } else if (type === 'fixes') {
@@ -592,7 +699,7 @@ class App {
                 for (let i = 0; i < fixes.length; i += chunkSize) {
                     const chunk = fixes.slice(i, i + chunkSize);
                     const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
-                    if (error) return alert('Error uploading fixes: ' + error.message);
+                    if (error) return Toast.show('Error uploading fixes: ' + error.message, 'error');
                     inserted += chunk.length;
                 }
 
@@ -606,7 +713,7 @@ class App {
                             if (fix) {
                                 if (fix.correct_id) {
                                     tx.student_id = fix.correct_id;
-                                    tx.id_status = new FawryProcessor().validateID(tx.student_id);
+                                    tx.id_status = validateID(tx.student_id);
                                 }
                                 if (fix.item_name) tx.item_name = fix.item_name;
                                 if (fix.mapping) tx.mapping = fix.mapping;
@@ -616,7 +723,15 @@ class App {
                     }
                 }
 
-                alert(`Successfully uploaded ${inserted} manual fixes and updated existing transactions!`);
+                if (this.currentUser) {
+                    await supabase.from('audit_logs').insert({
+                        user_email: this.currentUser.email,
+                        action: 'Bulk Fixes Uploaded',
+                        affected_references: `Batch of ${inserted} items`,
+                        details: { count: inserted }
+                    });
+                }
+                Toast.show(`Successfully uploaded ${inserted} manual fixes and updated existing transactions!`, 'success');
                 this.loadFixes();
             }
         };
@@ -657,42 +772,20 @@ class App {
             btn.disabled = true;
 
             try {
-                let mappings = [];
+                const mappings = await fetchAll('item_mappings');
+                const fixes = await fetchAll('manual_fixes');
+                const links = await fetchAll('links');
+
+                // Build hash maps for O(1) lookups instead of O(n) find()
+                const linksMap = new Map();
+                links.forEach(l => linksMap.set(String(l.payment_reference_number), l));
+                const fixesMap = new Map();
+                fixes.forEach(f => fixesMap.set(String(f.reference_number), f));
+                const mappingsMap = new Map();
+                mappings.forEach(m => mappingsMap.set(m.item_name, m));
+
                 let fetchMore = true;
                 let from = 0;
-                while (fetchMore) {
-                    const { data } = await supabase.from('item_mappings').select('*').range(from, from + 999);
-                    if (!data || data.length === 0) break;
-                    mappings = mappings.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
-
-                let fixes = [];
-                fetchMore = true;
-                from = 0;
-                while (fetchMore) {
-                    const { data } = await supabase.from('manual_fixes').select('*').range(from, from + 999);
-                    if (!data || data.length === 0) break;
-                    fixes = fixes.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
-
-                let links = [];
-                fetchMore = true;
-                from = 0;
-                while (fetchMore) {
-                    const { data } = await supabase.from('links').select('*').range(from, from + 999);
-                    if (!data || data.length === 0) break;
-                    links = links.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
-
-                const fp = new FawryProcessor();
-                fetchMore = true;
-                from = 0;
                 let updatedCount = 0;
                 
                 while (fetchMore) {
@@ -700,7 +793,7 @@ class App {
                     if (error) throw error;
                     if (!txs || txs.length === 0) break;
 
-                    let needsUpdate = false;
+                    const updatedTxs = [];
 
                     for (const tx of txs) {
                         let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
@@ -709,50 +802,50 @@ class App {
                         let newItemName = originalItemName;
                         let newMapping = null;
 
-                        const link = links.find(l => String(l.payment_reference_number) === String(tx.reference_number));
+                        const link = linksMap.get(String(tx.reference_number));
                         if (link && link.custom_input_value) {
                             newStudentId = link.custom_input_value;
                         }
 
-                        const mapDef = mappings.find(m => m.item_name === newItemName);
+                        const mapDef = mappingsMap.get(newItemName);
                         if (mapDef) {
                             if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
                             if (mapDef.mapping) newMapping = mapDef.mapping;
                         }
 
-                        const fix = fixes.find(f => String(f.reference_number) === String(tx.reference_number));
+                        const fix = fixesMap.get(String(tx.reference_number));
                         if (fix) {
                             if (fix.correct_id) newStudentId = fix.correct_id;
                             if (fix.item_name) newItemName = fix.item_name;
                             if (fix.mapping) newMapping = fix.mapping;
                         }
 
-                        let newStatus = fp.validateID(newStudentId);
+                        let newStatus = validateID(newStudentId);
 
                         if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.id_status !== newStatus) {
                             tx.student_id = newStudentId;
                             tx.item_name = newItemName;
                             tx.mapping = newMapping;
                             tx.id_status = newStatus;
-                            needsUpdate = true;
+                            updatedTxs.push(tx);
                         }
                     }
 
-                    if (needsUpdate) {
-                        const { error: upsertErr } = await supabase.from('transactions').upsert(txs, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                    if (updatedTxs.length > 0) {
+                        const { error: upsertErr } = await supabase.from('transactions').upsert(updatedTxs, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
                         if (upsertErr) throw upsertErr;
-                        updatedCount += txs.length;
+                        updatedCount += updatedTxs.length;
                     }
 
                     if (txs.length < 1000) fetchMore = false;
                     else from += 1000;
                 }
 
-                alert(`Successfully re-applied all rules to all transactions!`);
+                Toast.show(`Successfully re-applied all rules! ${updatedCount} transactions updated.`, 'success');
                 this.loadTransactions();
 
             } catch (err) {
-                alert("Error re-applying rules: " + err.message);
+                Toast.show('Error re-applying rules: ' + err.message, 'error');
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -867,7 +960,7 @@ class App {
                 }
 
                 if (allData.length === 0) {
-                    alert("No data to export.");
+                    Toast.show('No data to export.', 'warning');
                     return;
                 }
 
@@ -907,7 +1000,7 @@ class App {
                 XLSX.writeFile(workbook, `Fawry_Query_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
 
             } catch (err) {
-                alert("Export failed: " + err.message);
+                Toast.show('Export failed: ' + err.message, 'error');
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -928,7 +1021,7 @@ class App {
                     else from += 1000;
                 }
 
-                if (allData.length === 0) return alert("No mappings to export.");
+                if (allData.length === 0) return Toast.show('No mappings to export.', 'warning');
 
                 const formattedData = allData.map(m => ({
                     "Item Name": m.item_name,
@@ -941,7 +1034,7 @@ class App {
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Item Mappings");
                 XLSX.writeFile(workbook, `Item_Mappings_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
             } catch (err) {
-                alert("Export failed: " + err.message);
+                Toast.show('Export failed: ' + err.message, 'error');
             }
         });
 
@@ -958,7 +1051,7 @@ class App {
                     else from += 1000;
                 }
 
-                if (allData.length === 0) return alert("No fixes to export.");
+                if (allData.length === 0) return Toast.show('No fixes to export.', 'warning');
 
                 const formattedData = allData.map(f => ({
                     "Reference Number": f.reference_number,
@@ -972,14 +1065,14 @@ class App {
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Manual Fixes");
                 XLSX.writeFile(workbook, `Manual_Fixes_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
             } catch (err) {
-                alert("Export failed: " + err.message);
+                Toast.show('Export failed: ' + err.message, 'error');
             }
         });
     }
 
     async loadTransactions() {
         const tbody = document.getElementById('transactions-body');
-        tbody.innerHTML = '<tr><td colspan="9">Loading...</td></tr>';
+        tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(9) + '</tr>').join('');
 
         const dateFrom = document.getElementById('filter-date-from')?.value;
         const dateTo = document.getElementById('filter-date-to')?.value;
@@ -1017,37 +1110,66 @@ class App {
             .order('payment_date', { ascending: false })
             .range(fromRange, toRange);
 
+        // Get total count for pagination
+        let countQuery = supabase.from('transactions').select('*', { count: 'exact', head: true });
+        if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom);
+        if (dateTo) countQuery = countQuery.lte('payment_date', dateTo);
+        if (bank) countQuery = countQuery.eq('bank', bank);
+        if (mapping) countQuery = countQuery.ilike('mapping', `%${mapping}%`);
+        if (item) countQuery = countQuery.ilike('item_name', `%${item}%`);
+        if (search) {
+            if (/^\d+$/.test(search)) {
+                countQuery = countQuery.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
+            } else {
+                countQuery = countQuery.ilike('student_id', `%${search}%`);
+            }
+        }
+        if (status) {
+            if (status === 'valid') countQuery = countQuery.eq('id_status', 'Valid');
+            else if (status === 'missing') countQuery = countQuery.eq('id_status', 'Missing ID');
+            else if (status === 'error') countQuery = countQuery.ilike('id_status', '%Error%');
+        }
+        const { count: totalCount } = await countQuery;
+        const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
+
         // Update pagination UI
-        document.getElementById('page-info').innerText = `Page ${this.currentPage}`;
+        document.getElementById('page-info').innerText = totalCount 
+            ? `Page ${this.currentPage} of ${totalPages} (${totalCount.toLocaleString()} records)` 
+            : `Page ${this.currentPage}`;
         document.getElementById('btn-prev').disabled = this.currentPage === 1;
         document.getElementById('btn-next').disabled = !data || data.length < this.pageSize;
 
         if (error) {
-            tbody.innerHTML = `<tr><td colspan="9" style="color:red">Error: ${error.message}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="9" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
             return;
         }
 
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9">No transactions found. Go to Import CSV to add some!</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
+            if (window.lucide) lucide.createIcons();
             return;
         }
 
         tbody.innerHTML = data.map(t => {
             let statusClass = 'valid';
-            if (t.id_status.includes('Missing')) statusClass = 'missing';
-            if (t.id_status.includes('Error')) statusClass = 'error';
+            if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
+            if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
+
+            const statusText = escapeHTML(t.id_status || '');
+            const statusTitle = statusClass === 'error' ? ` title="${statusText}"` : '';
+            const shortStatus = statusClass === 'error' ? 'Error' : statusText;
 
             return `
                 <tr>
-                    <td>${t.reference_number || ''}</td>
-                    <td>${t.payment_date || ''}</td>
-                    <td><strong>${t.student_id || ''}</strong></td>
-                    <td>${t.customer_mobile || ''}</td>
-                    <td>EGP ${t.item_price || '0'}</td>
-                    <td>${t.item_name || ''}</td>
-                    <td>${t.mapping || '-'}</td>
-                    <td>${t.bank || ''}</td>
-                    <td><span class="badge ${statusClass}">${t.id_status || ''}</span></td>
+                    <td>${escapeHTML(t.reference_number)}</td>
+                    <td>${escapeHTML(t.payment_date)}</td>
+                    <td><strong>${escapeHTML(t.student_id)}</strong></td>
+                    <td>${escapeHTML(t.customer_mobile)}</td>
+                    <td>EGP ${formatMoney(t.item_price)}</td>
+                    <td>${escapeHTML(t.item_name)}</td>
+                    <td>${escapeHTML(t.mapping) || '-'}</td>
+                    <td>${escapeHTML(t.bank)}</td>
+                    <td><span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span></td>
                 </tr>
             `;
         }).join('');
@@ -1055,53 +1177,118 @@ class App {
 
     async loadMappings() {
         const tbody = document.getElementById('mappings-body');
-        let allData = [];
-        let from = 0;
-        let fetchMore = true;
-        while (fetchMore) {
-            const { data } = await supabase.from('item_mappings').select('*').range(from, from + 999);
-            if (!data || data.length === 0) break;
-            allData = allData.concat(data);
-            if (data.length < 1000) fetchMore = false;
-            else from += 1000;
+        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(4) + '</tr>').join('');
+        try {
+            const allData = await fetchAll('item_mappings');
+
+            if (allData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state"><i data-lucide="git-merge" style="width:48px;height:48px;opacity:0.5;"></i><h3>No mappings yet</h3><p>Click "Add Mapping" to create your first item mapping.</p></div></td></tr>';
+                if (window.lucide) lucide.createIcons();
+                return;
+            }
+
+            tbody.innerHTML = allData.map(m => `
+                <tr>
+                    <td>${escapeHTML(m.item_name)}</td>
+                    <td>${escapeHTML(m.adjusted_item_name) || '-'}</td>
+                    <td>${escapeHTML(m.mapping) || '-'}</td>
+                    <td>
+                        <button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>
+                        <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            // Wire up Edit buttons
+            tbody.querySelectorAll('[data-edit-mapping]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const itemName = btn.getAttribute('data-edit-mapping');
+                    const mapping = allData.find(m => m.item_name === itemName);
+                    if (mapping) {
+                        document.getElementById('map-original').value = mapping.item_name || '';
+                        document.getElementById('map-adjusted').value = mapping.adjusted_item_name || '';
+                        document.getElementById('map-category').value = mapping.mapping || '';
+                        document.getElementById('modal-mapping-title').innerText = 'Edit Mapping';
+                        document.getElementById('modal-mapping').classList.remove('hidden');
+                    }
+                });
+            });
+
+            // Wire up Delete buttons
+            tbody.querySelectorAll('[data-delete-mapping]').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const itemName = btn.getAttribute('data-delete-mapping');
+                    if (!confirm(`Delete mapping for "${itemName}"?`)) return;
+                    const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
+                    if (error) Toast.show('Error deleting mapping: ' + error.message, 'error');
+                    else {
+                        Toast.show('Mapping deleted', 'success');
+                        this.loadMappings();
+                    }
+                });
+            });
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
         }
-
-        if (allData.length === 0) return;
-
-        tbody.innerHTML = allData.map(m => `
-            <tr>
-                <td>${m.item_name}</td>
-                <td>${m.adjusted_item_name || '-'}</td>
-                <td>${m.mapping || '-'}</td>
-                <td><button class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem">Edit</button></td>
-            </tr>
-        `).join('');
     }
 
     async loadFixes() {
         const tbody = document.getElementById('fixes-body');
-        let allData = [];
-        let from = 0;
-        let fetchMore = true;
-        while (fetchMore) {
-            const { data } = await supabase.from('manual_fixes').select('*').range(from, from + 999);
-            if (!data || data.length === 0) break;
-            allData = allData.concat(data);
-            if (data.length < 1000) fetchMore = false;
-            else from += 1000;
+        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
+        try {
+            const allData = await fetchAll('manual_fixes');
+
+            if (allData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
+                if (window.lucide) lucide.createIcons();
+                return;
+            }
+
+            tbody.innerHTML = allData.map(f => `
+                <tr>
+                    <td>${escapeHTML(f.reference_number)}</td>
+                    <td>${escapeHTML(f.correct_id) || '-'}</td>
+                    <td>${escapeHTML(f.item_name) || '-'}</td>
+                    <td>${escapeHTML(f.mapping) || '-'}</td>
+                    <td>
+                        <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
+                        <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            // Wire up Edit buttons
+            tbody.querySelectorAll('[data-edit-fix]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const ref = btn.getAttribute('data-edit-fix');
+                    const fix = allData.find(f => f.reference_number === ref);
+                    if (fix) {
+                        document.getElementById('fix-ref').value = fix.reference_number || '';
+                        document.getElementById('fix-id').value = fix.correct_id || '';
+                        document.getElementById('fix-name').value = fix.item_name || '';
+                        document.getElementById('fix-mapping').value = fix.mapping || '';
+                        document.getElementById('modal-fix-title').innerText = 'Edit Fix';
+                        document.getElementById('modal-fix').classList.remove('hidden');
+                    }
+                });
+            });
+
+            // Wire up Delete buttons
+            tbody.querySelectorAll('[data-delete-fix]').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const ref = btn.getAttribute('data-delete-fix');
+                    if (!confirm(`Delete fix for reference "${ref}"?`)) return;
+                    const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
+                    if (error) Toast.show('Error deleting fix: ' + error.message, 'error');
+                    else {
+                        Toast.show('Fix deleted', 'success');
+                        this.loadFixes();
+                    }
+                });
+            });
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
         }
-
-        if (allData.length === 0) return;
-
-        tbody.innerHTML = allData.map(f => `
-            <tr>
-                <td>${f.reference_number}</td>
-                <td>${f.correct_id || '-'}</td>
-                <td>${f.item_name || '-'}</td>
-                <td>${f.mapping || '-'}</td>
-                <td><button class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem">Edit</button></td>
-            </tr>
-        `).join('');
     }
 
     initStudentMaster() {
@@ -1150,18 +1337,23 @@ class App {
                     if (error) throw error;
 
                     const tbody = document.getElementById('students-table-body');
+                    if (!data || data.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="users" style="width:48px;height:48px;opacity:0.5;"></i><h3>No students found</h3><p>Try a different search term.</p></div></td></tr>';
+                        if (window.lucide) lucide.createIcons();
+                        return;
+                    }
                     tbody.innerHTML = data.map(s => `
                         <tr>
-                            <td><strong>${s.student_id}</strong></td>
-                            <td>${s.full_name || ''}</td>
-                            <td><span class="copyable-email" style="cursor: pointer; color: var(--primary); font-weight: 500;" data-email="${s.email || ''}" title="Click to copy">${s.email || ''}</span></td>
-                            <td>${s.mobile || ''}</td>
-                            <td>${s.college || ''}</td>
-                            <td>${s.program || ''}</td>
+                            <td><strong>${escapeHTML(s.student_id)}</strong></td>
+                            <td>${escapeHTML(s.full_name)}</td>
+                            <td><span class="copyable-email" style="cursor: pointer; color: var(--primary); font-weight: 500;" data-email="${escapeHTML(s.email || '')}" title="Click to copy">${escapeHTML(s.email)}</span></td>
+                            <td>${escapeHTML(s.mobile)}</td>
+                            <td>${escapeHTML(s.college)}</td>
+                            <td>${escapeHTML(s.program)}</td>
                         </tr>
                     `).join('');
                 } catch(err) {
-                    alert('Search error: ' + err.message);
+                    Toast.show('Search error: ' + err.message, 'error');
                 }
             });
         }
@@ -1218,7 +1410,7 @@ class App {
         if (btnExportAm) {
             btnExportAm.addEventListener('click', () => {
                 if (!this.automatchProposals || this.automatchProposals.length === 0) {
-                    alert('No results to export. Run Auto-Match first to generate matches.');
+                    Toast.show('No results to export. Run Auto-Match first to generate matches.', 'warning');
                     return;
                 }
                 const csvData = this.automatchProposals.map(tx => ({
@@ -1254,6 +1446,119 @@ class App {
         const btnApplyMatch = document.getElementById('btn-apply-automatch-fixes');
         if(btnApplyMatch) {
             btnApplyMatch.addEventListener('click', () => this.applyAutoMatches());
+        }
+    }
+    
+    async handleStudentImport(file) {
+        const status = document.getElementById('student-upload-status');
+        status.style.display = 'block';
+        status.className = 'alert alert-info';
+        status.innerHTML = `<i data-lucide="loader" class="spin"></i> Parsing Excel file...`;
+        if (window.lucide) lucide.createIcons();
+
+        try {
+            const data = await file.arrayBuffer();
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+            
+            if (!rows || rows.length === 0) throw new Error("File is empty.");
+
+            let headers = rows[0];
+            let dataRows = rows.slice(1);
+
+            if (!headers.includes('Student ID') && !headers.includes('PEOPLE_ID1')) {
+                if (rows.length > 1 && rows[1].includes('Student ID')) {
+                    headers = rows[1];
+                    dataRows = rows.slice(2);
+                }
+            }
+
+            const headerMap = {};
+            headers.forEach((h, i) => { if (h) headerMap[h.toString().trim()] = i; });
+
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing data for upload...`;
+            
+            const records = [];
+            for (const row of dataRows) {
+                if (!row || row.length === 0) continue;
+                
+                const cleanPhone = (val) => val ? String(val).replace(/\s+/g, '').trim() : null;
+
+                let student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
+
+                if ('PEOPLE_ID1' in headerMap) {
+                    student_id = String(row[headerMap['PEOPLE_ID1']] || '').trim();
+                    full_name = row[headerMap['Full name']] || row[headerMap['FIRST_NAME1']] || '';
+                    arabic_name = row[headerMap['ARABICNAME']];
+                    national_id = row[headerMap['GOVERNMENT_ID1']];
+                    email = row[headerMap['personalEmail']] || row[headerMap['Email1']];
+                    mobile = cleanPhone(row[headerMap['PhoneNumber1']]);
+                    guardian_name = row[headerMap['Guardian_NAME']];
+                    guardian_mobile = cleanPhone(row[headerMap['Guardian_Mobile']]);
+                    college = row[headerMap['University1']];
+                    program = row[headerMap['PROGRAM1']];
+                    source = 'ApplicantReport';
+                } else if ('Student ID' in headerMap) {
+                    student_id = String(row[headerMap['Student ID']] || '').trim();
+                    full_name = row[headerMap['Student Name']];
+                    email = row[headerMap['Email']];
+                    mobile = cleanPhone(row[headerMap['Mobile Phone Number']]);
+                    college = row[headerMap['College']];
+                    program = row[headerMap['Program']];
+                    source = 'StudentDetails';
+                } else {
+                    throw new Error("Unrecognized Excel format.");
+                }
+
+                if (student_id) {
+                    records.push({
+                        student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
+                    });
+                }
+            }
+
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${records.length} records to database...`;
+            
+            let insertedCount = 0;
+            for (let i = 0; i < records.length; i += 1000) {
+                const batch = records.slice(i, i + 1000);
+                const { error } = await supabase.from('student_master').upsert(batch);
+                if (error) throw error;
+                insertedCount += batch.length;
+                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/records.length)*100)}%`;
+            }
+
+            if (this.currentUser) {
+                await supabase.from('import_batches').insert({
+                    user_email: this.currentUser.email,
+                    file_name: file.name,
+                    status: 'success',
+                    records_processed: records.length,
+                    records_inserted: insertedCount,
+                    details: { type: 'student_master' }
+                });
+            }
+
+            status.className = 'alert alert-success';
+            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${records.length} students!`;
+            if (window.lucide) lucide.createIcons();
+
+        } catch (err) {
+            status.className = 'alert alert-danger';
+            status.innerHTML = `<i data-lucide="alert-triangle"></i> Error: ${err.message}`;
+            if (window.lucide) lucide.createIcons();
+            console.error(err);
+            if (this.currentUser) {
+                await supabase.from('import_batches').insert({
+                    user_email: this.currentUser.email,
+                    file_name: file.name,
+                    status: 'failed',
+                    records_processed: 0,
+                    records_inserted: 0,
+                    details: { type: 'student_master', error: err.message }
+                });
+            }
         }
     }
     
@@ -1529,7 +1834,7 @@ class App {
             btnApply.style.display = this.automatchProposals.filter(p => p.proposedStudent).length > 0 ? 'inline-block' : 'none';
 
         } catch (err) {
-            alert('Matcher Error: ' + err.message);
+            Toast.show('Matcher Error: ' + err.message, 'error');
         } finally {
             btn.innerHTML = `<i data-lucide="zap"></i> Run Auto-Match`;
             btn.disabled = false;
@@ -1549,7 +1854,7 @@ class App {
         btn.disabled = true;
 
         try {
-            const fp = new FawryProcessor();
+            const fp = new FawryProcessor(this.currentUser?.email || 'System');
             const appliedRefs = [];
             for (const cb of checkboxes) {
                 const tx_id = parseInt(cb.value);
@@ -1558,11 +1863,11 @@ class App {
                     await supabase
                         .from('transactions')
                         .update({ 
-                            student_id: proposal.student_id,
-                            id_status: fp.validateID(proposal.student_id)
+                            student_id: proposal.proposedStudent.student_id,
+                            id_status: validateID(proposal.proposedStudent.student_id)
                         })
                         .eq('id', tx_id);
-                    appliedRefs.push(proposal.reference_number);
+                    appliedRefs.push(proposal.original_ref);
                 }
             }
 

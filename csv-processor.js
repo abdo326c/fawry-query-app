@@ -1,7 +1,8 @@
 import { supabase } from './supabase.js';
 
 export class FawryProcessor {
-    constructor() {
+    constructor(userEmail = 'System') {
+        this.userEmail = userEmail;
         this.mappings = [];
         this.fixes = [];
         this.tuiList = [
@@ -18,8 +19,10 @@ export class FawryProcessor {
 
     async loadConfig() {
         // Load mappings and fixes from Supabase
-        const { data: mappings } = await supabase.from('item_mappings').select('*');
-        const { data: fixes } = await supabase.from('manual_fixes').select('*');
+        const { data: mappings, error: mapErr } = await supabase.from('item_mappings').select('*');
+        const { data: fixes, error: fixErr } = await supabase.from('manual_fixes').select('*');
+        if (mapErr) this.log(`Warning: Failed to load item mappings: ${mapErr.message}`);
+        if (fixErr) this.log(`Warning: Failed to load manual fixes: ${fixErr.message}`);
         this.mappings = mappings || [];
         this.fixes = fixes || [];
     }
@@ -27,7 +30,9 @@ export class FawryProcessor {
     log(msg) {
         const consoleEl = document.getElementById('import-log');
         if (consoleEl) {
-            consoleEl.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            const div = document.createElement('div');
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            consoleEl.appendChild(div);
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
         console.log(msg);
@@ -139,11 +144,25 @@ export class FawryProcessor {
                 
                 // Upsert links
                 const chunkSize = 500;
+                let insertedCount = 0;
                 for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
                     const chunk = uniqueLinks.slice(i, i + chunkSize);
                     const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
-                    if (error) this.log(`Error saving links: ${error.message}`);
+                    if (error) {
+                        this.log(`Error saving links: ${error.message}`);
+                    } else {
+                        insertedCount += chunk.length;
+                    }
                 }
+
+                await supabase.from('import_batches').insert({
+                    user_email: this.userEmail,
+                    file_name: item.file.name,
+                    status: insertedCount === uniqueLinks.length ? 'success' : (insertedCount > 0 ? 'partial' : 'failed'),
+                    records_processed: uniqueLinks.length,
+                    records_inserted: insertedCount,
+                    details: { type: 'links' }
+                });
 
                 // Re-enrich existing transactions with these new links
                 this.log(`Re-enriching existing transactions with new links...`);
@@ -272,7 +291,7 @@ export class FawryProcessor {
                 const uniqueTrans = [];
                 const seenTrans = new Set();
                 for (const t of transformedRows) {
-                    const key = `${t.reference_number}-${t.payment_date}-${t.item_name}-${t.item_price}`;
+                    const key = `${t.reference_number}-${t.item_price}-${t.check_column}`;
                     if (!seenTrans.has(key)) {
                         seenTrans.add(key);
                         uniqueTrans.push(t);
@@ -281,7 +300,7 @@ export class FawryProcessor {
 
                 // Now we need to enrich with Links, Fixes, and Mappings
                 this.log(`Enriching ${uniqueTrans.length} transactions...`);
-                await this.enrichTransactions(uniqueTrans);
+                await this.enrichTransactions(uniqueTrans, item.file.name);
                 resolve();
             };
 
@@ -298,7 +317,7 @@ export class FawryProcessor {
         });
     }
 
-    async enrichTransactions(transactions) {
+    async enrichTransactions(transactions, fileName = 'Unknown') {
         // Collect references to fetch links
         const refs = transactions.map(t => t.reference_number);
         
@@ -378,6 +397,15 @@ export class FawryProcessor {
                 document.getElementById('progress-text').innerText = `${inserted} / ${transactions.length} rows processed`;
             }
         }
+
+        await supabase.from('import_batches').insert({
+            user_email: this.userEmail,
+            file_name: fileName,
+            status: inserted === transactions.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
+            records_processed: transactions.length,
+            records_inserted: inserted,
+            details: { type: 'transactions' }
+        });
     }
 
     validateID(id) {
