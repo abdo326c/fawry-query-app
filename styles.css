@@ -1211,6 +1211,10 @@ body {
     border-right-color: var(--border-color);
 }
 
+:root.light .mobile-header {
+    background-color: rgba(255, 255, 255, 0.95);
+}
+
 :root.light .input-text,
 :root.light .input-select {
     background: rgba(0, 0, 0, 0.03);
