@@ -1382,6 +1382,34 @@ body {
 .mt-3 { margin-top: 1.5rem; }
 .p-0 { padding: 0; }
 
+/* Pivot Table Light Mode Overrides */
+:root.light .pivot-table th {
+    background-color: rgba(0, 0, 0, 0.04);
+    color: var(--text-muted);
+}
+
+:root.light .pivot-header, 
+:root.light .pivot-row-label, 
+:root.light .pivot-col-label {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+:root.light .pivot-table tbody tr:hover {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+:root.light .pivot-table tbody td.highlight-cell {
+    background-color: rgba(217, 119, 6, 0.08);
+    color: #d97706; /* Amber-600 */
+    font-weight: 600;
+}
+
+:root.light .pivot-table tfoot td.highlight-cell {
+    background-color: rgba(217, 119, 6, 0.15);
+    color: #b45309; /* Amber-700 */
+    font-weight: 700;
+}
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
