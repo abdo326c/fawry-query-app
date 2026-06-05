@@ -984,11 +984,11 @@ class App {
                         "Payment Status": t.payment_status,
                         "Item Name": t.item_name,
                         "Item Price": t.item_price,
+                        "Mapping": t.mapping,
                         "Merchant Name": t.merchant_name,
                         "Bank": t.bank,
                         "Check Column": t.check_column,
-                        "ID Status": t.id_status,
-                        "Mapping": t.mapping
+                        "ID Status": t.id_status
                     };
                 });
 
