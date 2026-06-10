@@ -2139,59 +2139,68 @@ class App {
                     original_ref: tx.reference_number,
                     original_date: tx.payment_date,
                     original_bank: tx.bank,
+                    original_mapping: tx.mapping,
                     original_item: tx.item_name,
                     original_amount: tx.item_price,
                     original_status: tx.id_status
                 };
 
-                const pfStatus = proposedStudent ? 'Has Proposed Match' : 'No Match Found';
-                const pfFilter = activeFilters['proposed_fix'];
-                const shouldRender = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
+                this.automatchProposals.push(proposalTx);
+            }
 
-                if (proposedStudent) {
-                    this.automatchProposals.push(proposalTx);
-                    
-                    if (shouldRender) {
-                        const isNameMatch = matchReason.includes('Name');
-                        html += `
-                            <tr>
-                                <td><input type="checkbox" class="automatch-checkbox" value="${tx.id}"></td>
-                                <td>${tx.reference_number}</td>
-                                <td>${tx.payment_date}</td>
-                                <td>${tx.bank}</td>
-                                <td>${escapeHTML(tx.mapping || '-')}</td>
-                                <td>${tx.item_name}</td>
-                                <td>${formatMoney(tx.item_price)}</td>
-                                <td>
-                                    <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${matchReason}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
-                                        Matched: ${proposedStudent.student_id} ${isNameMatch ? ' (By Name)' : ''}
-                                    </span>
-                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${proposedStudent.full_name}</div>
-                                </td>
-                            </tr>
-                        `;
-                    }
+            // Sort matched proposals on top
+            this.automatchProposals.sort((a, b) => {
+                if (a.proposedStudent && !b.proposedStudent) return -1;
+                if (!a.proposedStudent && b.proposedStudent) return 1;
+                return 0;
+            });
+
+            // Generate HTML
+            const pfFilter = activeFilters['proposed_fix'];
+            for (const proposal of this.automatchProposals) {
+                const pfStatus = proposal.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
+                const shouldRender = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
+                
+                if (!shouldRender) continue;
+
+                if (proposal.proposedStudent) {
+                    const isNameMatch = proposal.matchReason.includes('Name');
+                    html += `
+                        <tr>
+                            <td><input type="checkbox" class="automatch-checkbox" value="${proposal.tx_id}"></td>
+                            <td>${proposal.original_ref}</td>
+                            <td>${proposal.original_date}</td>
+                            <td>${proposal.original_bank}</td>
+                            <td>${escapeHTML(proposal.original_mapping || '-')}</td>
+                            <td>${proposal.original_item}</td>
+                            <td>${formatMoney(proposal.original_amount)}</td>
+                            <td><span style="font-size:0.85rem; color:var(--text-muted)">${proposal.matchReason}</span></td>
+                            <td>
+                                <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${proposal.matchReason}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
+                                    Matched: ${proposal.proposedStudent.student_id} ${isNameMatch ? ' (By Name)' : ''}
+                                </span>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${proposal.proposedStudent.full_name}</div>
+                            </td>
+                        </tr>
+                    `;
                 } else {
-                    // We still want to export unmatched ones
-                    this.automatchProposals.push(proposalTx);
-                    if (shouldRender) {
-                        html += `
-                            <tr>
-                                <td></td>
-                                <td>${tx.reference_number}</td>
-                                <td>${tx.payment_date}</td>
-                                <td>${tx.bank}</td>
-                                <td>${escapeHTML(tx.mapping || '-')}</td>
-                                <td>${tx.item_name}</td>
-                                <td>${formatMoney(tx.item_price)}</td>
-                                <td><span class="status-badge invalid-id">No Match Found</span></td>
-                            </tr>
-                        `;
-                    }
+                    html += `
+                        <tr>
+                            <td></td>
+                            <td>${proposal.original_ref}</td>
+                            <td>${proposal.original_date}</td>
+                            <td>${proposal.original_bank}</td>
+                            <td>${escapeHTML(proposal.original_mapping || '-')}</td>
+                            <td>${proposal.original_item}</td>
+                            <td>${formatMoney(proposal.original_amount)}</td>
+                            <td><span style="color:var(--text-muted)">-</span></td>
+                            <td><span class="status-badge invalid-id">No Match Found</span></td>
+                        </tr>
+                    `;
                 }
             }
 
-            tbody.innerHTML = html || '<tr><td colspan="7" class="text-center">No fixable transactions found.</td></tr>';
+            tbody.innerHTML = html || '<tr><td colspan="9" class="text-center">No fixable transactions found.</td></tr>';
             btnApply.style.display = this.automatchProposals.filter(p => p.proposedStudent).length > 0 ? 'inline-block' : 'none';
             
             const selectAllMatcher = document.getElementById('automatcher-select-all');
