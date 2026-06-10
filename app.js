@@ -1683,6 +1683,25 @@ class App {
         if(btnConfirmMatch) {
             btnConfirmMatch.addEventListener('click', () => this.applyAutoMatches());
         }
+
+        const nameMatchCb = document.getElementById('automatch-enable-name');
+        if (nameMatchCb) {
+            nameMatchCb.addEventListener('click', (e) => {
+                if (nameMatchCb.checked) {
+                    e.preventDefault(); // Stop it from actually checking yet
+                    document.getElementById('modal-name-match-warn')?.classList.remove('hidden');
+                }
+            });
+        }
+        
+        const btnConfirmName = document.getElementById('btn-confirm-name-match');
+        if (btnConfirmName) {
+            btnConfirmName.addEventListener('click', () => {
+                const cb = document.getElementById('automatch-enable-name');
+                if (cb) cb.checked = true;
+                document.getElementById('modal-name-match-warn')?.classList.add('hidden');
+            });
+        }
     }
     
     initHistory() {
@@ -2097,15 +2116,18 @@ class App {
                 }
 
                 // Try 5: Name (Link & Transaction)
-                if (!proposedStudent && link && link.customer_name) {
-                    proposedStudent = studentNameMap.get(String(link.customer_name).toLowerCase().trim());
-                    if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
-                }
-                if (!proposedStudent && tx.student_id) {
-                    const searchStr = String(tx.student_id).trim().toLowerCase();
-                    if (/[a-zA-Z]/.test(searchStr) && searchStr.length > 3) {
-                        proposedStudent = studentNameMap.get(searchStr);
-                        if (proposedStudent) matchReason = 'Exact Name matched via Transaction data';
+                const enableNameMatch = document.getElementById('automatch-enable-name')?.checked;
+                if (enableNameMatch) {
+                    if (!proposedStudent && link && link.customer_name) {
+                        proposedStudent = studentNameMap.get(String(link.customer_name).toLowerCase().trim());
+                        if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
+                    }
+                    if (!proposedStudent && tx.student_id) {
+                        const searchStr = String(tx.student_id).trim().toLowerCase();
+                        if (/[a-zA-Z]/.test(searchStr) && searchStr.length > 3) {
+                            proposedStudent = studentNameMap.get(searchStr);
+                            if (proposedStudent) matchReason = 'Exact Name matched via Transaction data';
+                        }
                     }
                 }
                 
