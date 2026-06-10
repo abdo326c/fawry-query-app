@@ -907,6 +907,26 @@ class App {
             this.loadTransactions();
         });
 
+        document.getElementById('btn-clear-automatcher')?.addEventListener('click', () => {
+            document.getElementById('automatcher-date-from').value = '';
+            document.getElementById('automatcher-date-to').value = '';
+            document.getElementById('automatcher-search').value = '';
+            this.headerFilters.automatch = { bank: [], mapping: [], item_name: [] };
+            document.querySelectorAll('[data-table="automatch"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
+            this.runAutoMatcher();
+        });
+
+        let automatchSearchTimeout;
+        document.getElementById('automatcher-search')?.addEventListener('input', () => {
+            clearTimeout(automatchSearchTimeout);
+            automatchSearchTimeout = setTimeout(() => {
+                this.runAutoMatcher();
+            }, 300);
+        });
+
+        document.getElementById('automatcher-date-from')?.addEventListener('change', () => this.runAutoMatcher());
+        document.getElementById('automatcher-date-to')?.addEventListener('change', () => this.runAutoMatcher());
+
         let searchTimeout;
         document.getElementById('search-input').addEventListener('input', () => {
             clearTimeout(searchTimeout);
@@ -1833,8 +1853,22 @@ class App {
         lucide.createIcons();
 
         try {
+            const dateFrom = document.getElementById('automatcher-date-from')?.value;
+            const dateTo = document.getElementById('automatcher-date-to')?.value;
+            const search = document.getElementById('automatcher-search')?.value;
+
             // First fetch the base invalidTx (with or without targeted filter)
             let query = supabase.from('transactions').select('*').neq('id_status', 'Valid');
+            if (dateFrom) query = query.gte('payment_date', dateFrom);
+            if (dateTo) query = query.lte('payment_date', dateTo);
+            if (search) {
+                if (/^\d+$/.test(search)) {
+                    query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
+                } else {
+                    query = query.ilike('student_id', `%${search}%`);
+                }
+            }
+
             if (this.targetedMatchRefs && this.targetedMatchRefs.length > 0) {
                 // If there are many references, doing an IN query can fail if too large.
                 // We'll process them in JS instead.
@@ -2024,6 +2058,7 @@ class App {
                             <td>${tx.reference_number}</td>
                             <td>${tx.payment_date}</td>
                             <td>${tx.bank}</td>
+                            <td>${escapeHTML(tx.mapping || '-')}</td>
                             <td>${tx.item_name}</td>
                             <td>${formatMoney(tx.item_price)}</td>
                             <td>
@@ -2043,6 +2078,7 @@ class App {
                             <td>${tx.reference_number}</td>
                             <td>${tx.payment_date}</td>
                             <td>${tx.bank}</td>
+                            <td>${escapeHTML(tx.mapping || '-')}</td>
                             <td>${tx.item_name}</td>
                             <td>${formatMoney(tx.item_price)}</td>
                             <td><span class="status-badge invalid-id">No Match Found</span></td>
