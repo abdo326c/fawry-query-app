@@ -399,6 +399,11 @@ body {
     box-shadow: 0 0 0 3px var(--primary-glow);
 }
 
+select option {
+    background-color: #0d1326;
+    color: var(--text-main);
+}
+
 /* Tables */
 .table-container {
     overflow-x: auto;

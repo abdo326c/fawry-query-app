@@ -221,14 +221,18 @@
                     </div>
                 </div>
 
-                <div class="glass-card table-container">
-                    <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref...">
-                    <select id="status-filter" class="input-select">
-                        <option value="">All Statuses</option>
-                        <option value="valid">Valid</option>
-                        <option value="missing">Missing ID</option>
-                        <option value="error">Error</option>
-                    </select>
+                <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div style="flex: 2; min-width: 200px;">
+                        <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref...">
+                    </div>
+                    <div style="flex: 1; min-width: 150px;">
+                        <select id="status-filter" class="input-select">
+                            <option value="">All Statuses</option>
+                            <option value="valid">Valid</option>
+                            <option value="missing">Missing ID</option>
+                            <option value="error">Error</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <div class="table-container glass-card">
