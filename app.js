@@ -968,38 +968,54 @@ class App {
         const renderList = async (searchTerm = '') => {
             let options = [];
             
-            if (currentColumn === 'id_status') options = ['Valid', 'Missing ID', 'Error'];
-            else if (currentColumn === 'bank') options = ['NUADIB64', 'NUADCB136'];
+            if (currentColumn === 'id_status') {
+                options = ['Valid', 'Missing ID', 'Error'];
+                if (searchTerm) options = options.filter(opt => opt.toLowerCase().includes(searchTerm.toLowerCase()));
+            }
+            else if (currentColumn === 'bank') {
+                options = ['NUADIB64', 'NUADCB136'];
+                if (searchTerm) options = options.filter(opt => opt.toLowerCase().includes(searchTerm.toLowerCase()));
+            }
             else {
-                if (!this.uniqueLists[currentColumn]) {
-                    listContainer.innerHTML = '<div style="padding: 1rem; text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</div>';
-                    if (window.lucide) lucide.createIcons();
-                    
-                    try {
-                        if (currentTable === 'automatch' && this.invalidTx) {
-                            options = [...new Set(this.invalidTx.map(t => t[currentColumn]).filter(Boolean))].sort();
-                        } else {
-                            const { data, error } = await supabase.from('transactions').select(currentColumn);
-                            if (!error && data) {
-                                options = [...new Set(data.map(d => d[currentColumn]).filter(Boolean))].sort();
+                listContainer.innerHTML = '<div style="padding: 1rem; text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</div>';
+                if (window.lucide) lucide.createIcons();
+                
+                try {
+                    if (currentTable === 'automatch' && this.invalidTx) {
+                        options = [...new Set(this.invalidTx.map(t => t[currentColumn]).filter(v => v !== null && v !== undefined))].sort();
+                        if (searchTerm) {
+                            options = options.filter(opt => String(opt).toLowerCase().includes(searchTerm.toLowerCase()));
+                        }
+                    } else {
+                        let query = supabase.from('transactions').select(currentColumn);
+                        if (searchTerm) {
+                            if (currentColumn === 'item_price') {
+                                if (!isNaN(searchTerm)) query = query.eq(currentColumn, Number(searchTerm));
+                            } else {
+                                query = query.ilike(currentColumn, `%${searchTerm}%`);
                             }
                         }
-                        this.uniqueLists[currentColumn] = options;
-                    } catch (e) {
-                        console.error('Error fetching dynamic filter values', e);
+                        const { data, error } = await query.limit(100);
+                        if (!error && data) {
+                            options = [...new Set(data.map(d => d[currentColumn]).filter(v => v !== null && v !== undefined))].sort();
+                        }
                     }
+                } catch (e) {
+                    console.error('Error fetching dynamic filter values', e);
                 }
-                options = this.uniqueLists[currentColumn] || [];
             }
 
-            const lowerSearch = searchTerm.toLowerCase();
-            const filteredOptions = options.filter(opt => String(opt).toLowerCase().includes(lowerSearch));
             const selectedSet = new Set(this.headerFilters[currentTable][currentColumn] || []);
 
-            listContainer.innerHTML = filteredOptions.map(opt => `
+            if (options.length === 0) {
+                listContainer.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No options found</div>';
+                return;
+            }
+
+            listContainer.innerHTML = options.map(opt => `
                 <label>
-                    <input type="checkbox" value="${escapeHTML(opt)}" ${selectedSet.has(String(opt)) ? 'checked' : ''}>
-                    ${escapeHTML(opt)}
+                    <input type="checkbox" value="${escapeHTML(String(opt))}" ${selectedSet.has(String(opt)) ? 'checked' : ''}>
+                    ${escapeHTML(String(opt))}
                 </label>
             `).join('');
         };
@@ -1930,7 +1946,7 @@ class App {
             const activeFilters = this.headerFilters.automatch || {};
             for (const [col, values] of Object.entries(activeFilters)) {
                 if (values && values.length > 0) {
-                    invalidTx = invalidTx.filter(t => values.includes(t[col]));
+                    invalidTx = invalidTx.filter(t => values.includes(String(t[col])));
                 }
             }
             
