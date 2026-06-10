@@ -127,7 +127,7 @@ export class FawryProcessor {
                         paid_amount: parseFloat(this.getVal(row, 'PAID AMOUNT')) || 0,
                         payment_reference_number: String(this.getVal(row, 'PAYMENT REFERENCE NUMBER') || this.getVal(row, 'REFERENCE NUMBER') || this.getVal(row, 'BANK TRANSACTION ID')),
                         customer_national_id: this.getVal(row, 'CUSTOMER NATIONAL ID'),
-                        custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID')
+                        custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID') || this.getVal(row, 'CUSTOMER NATIONAL ID')
                     };
                 }).filter(r => r.payment_reference_number && r.payment_reference_number !== "null");
 
