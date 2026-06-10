@@ -88,8 +88,15 @@ class App {
         this.currentUser = null;
         this.currentPage = 1;
         this.pageSize = 50;
+        
+        this.headerFilters = {
+            transactions: { bank: [], mapping: [], item_name: [], id_status: [] },
+            automatch: { bank: [], mapping: [], item_name: [] }
+        };
+        this.uniqueLists = { mapping: [], item_name: [] };
 
         this.initTheme();
+        this.fetchUniqueFilters();
 
         this.initNavigation();
         this.initImport();
@@ -881,11 +888,9 @@ class App {
         document.getElementById('btn-clear-filters').addEventListener('click', () => {
             document.getElementById('filter-date-from').value = '';
             document.getElementById('filter-date-to').value = '';
-            document.getElementById('filter-bank').value = '';
-            document.getElementById('filter-mapping').value = '';
-            document.getElementById('filter-item').value = '';
             document.getElementById('search-input').value = '';
-            document.getElementById('status-filter').value = '';
+            this.headerFilters.transactions = { bank: [], mapping: [], item_name: [], id_status: [] };
+            document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.currentPage = 1;
             this.loadTransactions();
         });
@@ -899,9 +904,114 @@ class App {
             }, 500);
         });
 
-        document.getElementById('status-filter').addEventListener('change', () => {
-            this.currentPage = 1;
-            this.loadTransactions();
+        this.setupHeaderFilters();
+    }
+
+    setupHeaderFilters() {
+        let popover = document.getElementById('global-header-filter-popover');
+        if (!popover) {
+            popover = document.createElement('div');
+            popover.id = 'global-header-filter-popover';
+            popover.className = 'header-filter-popover';
+            popover.innerHTML = `
+                <input type="text" class="header-filter-search" placeholder="Search...">
+                <div class="header-filter-list"></div>
+                <div class="header-filter-actions">
+                    <button class="btn btn-outline" id="hfp-clear">Clear</button>
+                    <button class="btn btn-primary" id="hfp-apply">Apply</button>
+                </div>
+            `;
+            document.body.appendChild(popover);
+        }
+
+        const searchInput = popover.querySelector('.header-filter-search');
+        const listContainer = popover.querySelector('.header-filter-list');
+        const btnClear = document.getElementById('hfp-clear');
+        const btnApply = document.getElementById('hfp-apply');
+
+        let currentWrapper = null;
+        let currentTable = null;
+        let currentColumn = null;
+
+        const renderList = (searchTerm = '') => {
+            let options = [];
+            if (currentColumn === 'bank') options = ['NUADIB64', 'NUADCB136'];
+            else if (currentColumn === 'id_status') options = ['Valid', 'Missing ID', 'Error'];
+            else if (currentColumn === 'mapping') {
+                options = currentTable === 'automatch' ? (this.automatchDistinctMappings || []) : (this.uniqueLists.mapping || []);
+            }
+            else if (currentColumn === 'item_name') {
+                options = currentTable === 'automatch' ? (this.automatchDistinctItems || []) : (this.uniqueLists.item_name || []);
+            }
+
+            const lowerSearch = searchTerm.toLowerCase();
+            const filteredOptions = options.filter(opt => String(opt).toLowerCase().includes(lowerSearch));
+            const selectedSet = new Set(this.headerFilters[currentTable][currentColumn] || []);
+
+            listContainer.innerHTML = filteredOptions.map(opt => `
+                <label>
+                    <input type="checkbox" value="${escapeHTML(opt)}" ${selectedSet.has(String(opt)) ? 'checked' : ''}>
+                    ${escapeHTML(opt)}
+                </label>
+            `).join('');
+        };
+
+        const closePopover = () => {
+            popover.classList.remove('open');
+            currentWrapper = null;
+        };
+
+        document.querySelectorAll('.th-filter-wrapper').forEach(wrapper => {
+            wrapper.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (currentWrapper === wrapper) {
+                    closePopover();
+                    return;
+                }
+                
+                currentWrapper = wrapper;
+                currentTable = wrapper.dataset.table;
+                currentColumn = wrapper.dataset.column;
+
+                const rect = wrapper.getBoundingClientRect();
+                popover.style.top = `${rect.bottom + window.scrollY + 5}px`;
+                popover.style.left = `${rect.left + window.scrollX}px`;
+                
+                searchInput.value = '';
+                renderList();
+                
+                popover.classList.add('open');
+                searchInput.focus();
+            });
+        });
+
+        searchInput.addEventListener('input', (e) => renderList(e.target.value));
+        popover.addEventListener('click', e => e.stopPropagation());
+        
+        document.addEventListener('click', () => {
+            if (popover.classList.contains('open')) closePopover();
+        });
+
+        btnClear.addEventListener('click', () => {
+            if (!currentWrapper) return;
+            this.headerFilters[currentTable][currentColumn] = [];
+            currentWrapper.querySelector('.header-filter-icon').classList.remove('active');
+            closePopover();
+            if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
+            else { this.runAutoMatcher(); }
+        });
+
+        btnApply.addEventListener('click', () => {
+            if (!currentWrapper) return;
+            const checked = Array.from(listContainer.querySelectorAll('input:checked')).map(cb => cb.value);
+            this.headerFilters[currentTable][currentColumn] = checked;
+            
+            if (checked.length > 0) currentWrapper.querySelector('.header-filter-icon').classList.add('active');
+            else currentWrapper.querySelector('.header-filter-icon').classList.remove('active');
+            
+            closePopover();
+            if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
+            else { this.runAutoMatcher(); }
         });
     }
 
@@ -934,11 +1044,7 @@ class App {
 
                 const dateFrom = document.getElementById('filter-date-from').value;
                 const dateTo = document.getElementById('filter-date-to').value;
-                const bank = document.getElementById('filter-bank').value;
-                const mapping = document.getElementById('filter-mapping').value;
-                const item = document.getElementById('filter-item').value;
                 const search = document.getElementById('search-input').value;
-                const status = document.getElementById('status-filter').value;
 
                 // Fetch all data in pages
                 while (fetchMore) {
@@ -946,21 +1052,23 @@ class App {
                     
                     if (dateFrom) query = query.gte('payment_date', dateFrom);
                     if (dateTo) query = query.lte('payment_date', dateTo);
-                    if (bank) query = query.eq('bank', bank);
-                    if (mapping) query = query.ilike('mapping', `%${mapping}%`);
-                    if (item) query = query.ilike('item_name', `%${item}%`);
+                    if (this.headerFilters.transactions.bank.length > 0) query = query.in('bank', this.headerFilters.transactions.bank);
+                    if (this.headerFilters.transactions.mapping.length > 0) query = query.in('mapping', this.headerFilters.transactions.mapping);
+                    if (this.headerFilters.transactions.item_name.length > 0) query = query.in('item_name', this.headerFilters.transactions.item_name);
+                    if (this.headerFilters.transactions.id_status.length > 0) {
+                        const statuses = this.headerFilters.transactions.id_status;
+                        const filters = [];
+                        if (statuses.includes('Valid')) filters.push('id_status.eq.Valid');
+                        if (statuses.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+                        if (statuses.includes('Error')) filters.push('id_status.ilike.%Error%');
+                        if (filters.length > 0) query = query.or(filters.join(','));
+                    }
                     if (search) {
                         if (/^\d+$/.test(search)) {
                             query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
                         } else {
                             query = query.ilike('student_id', `%${search}%`);
                         }
-                    }
-                    
-                    if (status) {
-                        if (status === 'valid') query = query.eq('id_status', 'Valid');
-                        else if (status === 'missing') query = query.eq('id_status', 'Missing ID');
-                        else if (status === 'error') query = query.ilike('id_status', '%Error%');
                     }
 
                     const { data, error } = await query
@@ -1095,31 +1203,29 @@ class App {
 
         const dateFrom = document.getElementById('filter-date-from')?.value;
         const dateTo = document.getElementById('filter-date-to')?.value;
-        const bank = document.getElementById('filter-bank')?.value;
-        const mapping = document.getElementById('filter-mapping')?.value;
-        const item = document.getElementById('filter-item')?.value;
         const search = document.getElementById('search-input')?.value;
-        const status = document.getElementById('status-filter')?.value;
 
         let query = supabase.from('transactions').select('*');
 
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
-        if (bank) query = query.eq('bank', bank);
-        if (mapping) query = query.ilike('mapping', `%${mapping}%`);
-        if (item) query = query.ilike('item_name', `%${item}%`);
+        if (this.headerFilters.transactions.bank.length > 0) query = query.in('bank', this.headerFilters.transactions.bank);
+        if (this.headerFilters.transactions.mapping.length > 0) query = query.in('mapping', this.headerFilters.transactions.mapping);
+        if (this.headerFilters.transactions.item_name.length > 0) query = query.in('item_name', this.headerFilters.transactions.item_name);
+        if (this.headerFilters.transactions.id_status.length > 0) {
+            const statuses = this.headerFilters.transactions.id_status;
+            const filters = [];
+            if (statuses.includes('Valid')) filters.push('id_status.eq.Valid');
+            if (statuses.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+            if (statuses.includes('Error')) filters.push('id_status.ilike.%Error%');
+            if (filters.length > 0) query = query.or(filters.join(','));
+        }
         if (search) {
             if (/^\d+$/.test(search)) {
                 query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
             } else {
                 query = query.ilike('student_id', `%${search}%`);
             }
-        }
-        
-        if (status) {
-            if (status === 'valid') query = query.eq('id_status', 'Valid');
-            else if (status === 'missing') query = query.eq('id_status', 'Missing ID');
-            else if (status === 'error') query = query.ilike('id_status', '%Error%');
         }
 
         const fromRange = (this.currentPage - 1) * this.pageSize;
@@ -1747,38 +1853,21 @@ class App {
             const distinctMappings = [...new Set(invalidTx.map(t => t.mapping).filter(Boolean))].sort();
             const distinctItems = [...new Set(invalidTx.map(t => t.item_name).filter(Boolean))].sort();
             
-            const mapContainer = document.getElementById('automatcher-filter-mapping');
-            const itemContainer = document.getElementById('automatcher-filter-item');
-            
-            // If filters are empty (first run), populate them
-            if (mapContainer.innerHTML.includes('Click Run Auto-Match to load')) {
-                mapContainer.innerHTML = distinctMappings.map(m => `
-                    <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.9rem; cursor: pointer;">
-                        <input type="checkbox" value="${m}" class="am-filter-mapping"> ${m}
-                    </label>
-                `).join('');
-            }
-            if (itemContainer.innerHTML.includes('Click Run Auto-Match to load')) {
-                itemContainer.innerHTML = distinctItems.map(i => `
-                    <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.9rem; cursor: pointer;">
-                        <input type="checkbox" value="${i}" class="am-filter-item"> ${i}
-                    </label>
-                `).join('');
-            }
-            
+            // Store for header filters
+            this.automatchDistinctMappings = distinctMappings;
+            this.automatchDistinctItems = distinctItems;
+
             // Now apply selected filters
-            const selectedMappings = Array.from(document.querySelectorAll('.am-filter-mapping:checked')).map(cb => cb.value);
-            const selectedItems = Array.from(document.querySelectorAll('.am-filter-item:checked')).map(cb => cb.value);
+            const selectedMappings = this.headerFilters.automatch.mapping || [];
+            const selectedItems = this.headerFilters.automatch.item_name || [];
+            const selectedBanks = this.headerFilters.automatch.bank || [];
             
-            // Only apply filters if the DOM is populated (not first load)
-            let filteredTx = invalidTx;
-            if (document.querySelectorAll('.am-filter-mapping').length > 0) {
-                filteredTx = invalidTx.filter(t => {
-                    const matchMap = selectedMappings.length === 0 || (t.mapping && selectedMappings.includes(t.mapping));
-                    const matchItem = selectedItems.length === 0 || (t.item_name && selectedItems.includes(t.item_name));
-                    return matchMap && matchItem;
-                });
-            }
+            let filteredTx = invalidTx.filter(t => {
+                const matchMap = selectedMappings.length === 0 || (t.mapping && selectedMappings.includes(t.mapping));
+                const matchItem = selectedItems.length === 0 || (t.item_name && selectedItems.includes(t.item_name));
+                const matchBank = selectedBanks.length === 0 || (t.bank && selectedBanks.includes(t.bank));
+                return matchMap && matchItem && matchBank;
+            });
             
             if (filteredTx.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" class="text-center">No transactions match selected filters.</td></tr>';
