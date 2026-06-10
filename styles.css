@@ -1227,6 +1227,11 @@ select option {
     color: var(--text-main);
 }
 
+:root.light select option {
+    background-color: #ffffff;
+    color: var(--text-main);
+}
+
 :root.light .data-table thead th {
     background: rgba(0, 0, 0, 0.03);
     color: var(--text-muted);
