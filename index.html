@@ -240,11 +240,6 @@
                                     </div>
                                 </th>
                                 <th>
-                                    <div class="th-filter-wrapper" data-column="customer_mobile" data-table="transactions">
-                                        Mobile <i data-lucide="filter" class="header-filter-icon"></i>
-                                    </div>
-                                </th>
-                                <th>
                                     <div class="th-filter-wrapper" data-column="item_price" data-table="transactions">
                                         Item Price <i data-lucide="filter" class="header-filter-icon"></i>
                                     </div>
@@ -275,10 +270,19 @@
                             <!-- Data populated by JS -->
                         </tbody>
                     </table>
-                    <div id="pagination-controls" class="pagination">
-                        <button id="btn-prev" class="btn btn-outline" disabled><i data-lucide="chevron-left"></i> Prev</button>
-                        <span id="page-info">Page 1</span>
-                        <button id="btn-next" class="btn btn-outline" disabled>Next <i data-lucide="chevron-right"></i></button>
+                    <div id="pagination-controls" class="pagination" style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <label for="page-size" style="font-size: 0.85rem; color: var(--text-muted);">Rows per page:</label>
+                            <select id="page-size" class="input-text" style="padding: 0.3rem 1.5rem 0.3rem 0.5rem; font-size: 0.85rem;">
+                                <option value="10">10</option>
+                                <option value="50">50</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 1rem; align-items: center;">
+                            <button id="btn-prev" class="btn btn-outline" disabled><i data-lucide="chevron-left"></i> Prev</button>
+                            <span id="page-info">Page 1</span>
+                            <button id="btn-next" class="btn btn-outline" disabled>Next <i data-lucide="chevron-right"></i></button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -630,7 +634,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=10"></script>
+    <script type="module" src="app.js?v=11"></script>
     <script>
         // Initialize icons
         lucide.createIcons();

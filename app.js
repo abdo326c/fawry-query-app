@@ -87,7 +87,7 @@ class App {
     constructor() {
         this.currentUser = null;
         this.currentPage = 1;
-        this.pageSize = 50;
+        this.pageSize = 10;
         
         this.headerFilters = {
             transactions: {},
@@ -1091,6 +1091,15 @@ class App {
             this.currentPage++;
             this.loadTransactions();
         });
+
+        const pageSizeSelect = document.getElementById('page-size');
+        if (pageSizeSelect) {
+            pageSizeSelect.addEventListener('change', (e) => {
+                this.pageSize = parseInt(e.target.value);
+                this.currentPage = 1;
+                this.loadTransactions();
+            });
+        }
     }
 
     initExport() {
@@ -1271,8 +1280,8 @@ class App {
 
         let query = supabase.from('transactions').select('*');
 
-        if (dateFrom) query = query.gte('payment_date', dateFrom);
-        if (dateTo) query = query.lte('payment_date', dateTo);
+        if (dateFrom) query = query.gte('payment_date', dateFrom + 'T00:00:00.000Z');
+        if (dateTo) query = query.lte('payment_date', dateTo + 'T23:59:59.999Z');
         for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
             if (values && values.length > 0) {
                 if (col === 'id_status') {
@@ -1303,8 +1312,8 @@ class App {
 
         // Get total count for pagination
         let countQuery = supabase.from('transactions').select('*', { count: 'exact', head: true });
-        if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom);
-        if (dateTo) countQuery = countQuery.lte('payment_date', dateTo);
+        if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom + 'T00:00:00.000Z');
+        if (dateTo) countQuery = countQuery.lte('payment_date', dateTo + 'T23:59:59.999Z');
         for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
             if (values && values.length > 0) {
                 if (col === 'id_status') {
@@ -1360,7 +1369,6 @@ class App {
                     <td>${escapeHTML(t.reference_number)}</td>
                     <td>${escapeHTML(t.payment_date)}</td>
                     <td><strong>${escapeHTML(t.student_id)}</strong></td>
-                    <td>${escapeHTML(t.customer_mobile)}</td>
                     <td>EGP ${formatMoney(t.item_price)}</td>
                     <td>${escapeHTML(t.item_name)}</td>
                     <td>${escapeHTML(t.mapping) || '-'}</td>
@@ -1895,8 +1903,8 @@ class App {
 
             // First fetch the base invalidTx (with or without targeted filter)
             let query = supabase.from('transactions').select('*').neq('id_status', 'Valid');
-            if (dateFrom) query = query.gte('payment_date', dateFrom);
-            if (dateTo) query = query.lte('payment_date', dateTo);
+            if (dateFrom) query = query.gte('payment_date', dateFrom + 'T00:00:00.000Z');
+            if (dateTo) query = query.lte('payment_date', dateTo + 'T23:59:59.999Z');
             if (search) {
                 if (/^\d+$/.test(search)) {
                     query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
