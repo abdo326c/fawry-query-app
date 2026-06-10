@@ -472,6 +472,23 @@ class App {
         const processor = new FawryProcessor(this.currentUser?.email || 'System');
         await processor.processFiles(files);
         
+        if (processor.skippedTransactions && processor.skippedTransactions.length > 0) {
+            const summary = {};
+            processor.skippedTransactions.forEach(t => {
+                const statusName = t.status ? String(t.status).trim() : 'Unknown';
+                summary[statusName] = (summary[statusName] || 0) + 1;
+            });
+            
+            let msg = `IMPORTANT: Skipped ${processor.skippedTransactions.length} transactions due to invalid Payment Status.\n\nSummary:\n`;
+            for (const [status, count] of Object.entries(summary)) {
+                msg += `- ${status}: ${count} transaction(s)\n`;
+            }
+            msg += `\nThese transactions were NOT imported.`;
+            
+            // Force the user to acknowledge
+            alert(msg);
+        }
+
         // Auto-switch back to transactions tab after 1.5 seconds
         setTimeout(() => {
             document.querySelector('[data-tab="transactions"]').click();

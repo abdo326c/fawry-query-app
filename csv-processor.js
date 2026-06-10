@@ -5,6 +5,7 @@ export class FawryProcessor {
         this.userEmail = userEmail;
         this.mappings = [];
         this.fixes = [];
+        this.skippedTransactions = [];
         this.tuiList = [
             "Eng EGP New ST 2025", "ITCS25 EGP New St 2025", "BBA25 EGP New St 2025", 
             "BioTech25 EGP New St 2025", "Egyptian IT&CS Fees CONT 2024", 
@@ -283,6 +284,17 @@ export class FawryProcessor {
                     }
 
                     let mobileNum = this.getVal(row, 'Customer Mobile Number');
+                    let pStatus = this.getVal(row, 'Payment Status') || 'PAID';
+                    
+                    const pStatusUpper = String(pStatus).trim().toUpperCase();
+                    if (pStatusUpper !== 'PAID' && pStatusUpper !== 'SUCCESS' && pStatusUpper !== 'SUCCESSFUL') {
+                        this.skippedTransactions.push({
+                            reference_number: refNumber,
+                            status: pStatus,
+                            file_name: item.file.name
+                        });
+                        continue;
+                    }
 
                     transformedRows.push({
                         reference_number: refNumber,
@@ -292,7 +304,7 @@ export class FawryProcessor {
                         total_amount: totalAmount,
                         net_amount: netAmount,
                         fawry_fees: fawryFees,
-                        payment_status: this.getVal(row, 'Payment Status') || 'PAID',
+                        payment_status: pStatus,
                         item_name: itemName,
                         item_price: itemPrice,
                         merchant_name: merchant,
