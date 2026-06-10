@@ -510,6 +510,11 @@
                                 <button class="btn btn-outline" id="btn-clear-automatcher" style="padding: 0.4rem 1rem;">Clear</button>
                             </div>
                         </div>
+                          
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3 style="margin: 0; color: var(--text-main);">Suggested Matches</h3>
+                            <button class="btn btn-primary" id="btn-apply-automatch-fixes" style="display: none; padding: 0.8rem 2rem; font-size: 1rem; font-weight: bold; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);"><i data-lucide="check-circle" style="width: 20px; height: 20px; margin-right: 0.5rem; vertical-align: middle;"></i> Apply Selected Fixes</button>
+                        </div>
 
                         <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
                             <div class="form-group" style="flex: 1; min-width: 250px;">
@@ -567,10 +572,6 @@
                                 </tbody>
                             </table>
                         </div>
-                        
-                        <div style="margin-top: 1rem; text-align: right;">
-                            <button class="btn btn-success" id="btn-apply-automatch-fixes" style="display: none;">Apply Selected Fixes</button>
-                        </div>
                     </div>
                 </div>
 
@@ -623,18 +624,40 @@
                 </div>
                 <div class="form-group">
                     <label>Correct Item Name (Optional)</label>
-                    <input type="text" id="fix-name" class="input-text">
+                    <input type="text" id="fix-item" class="input-text">
                 </div>
                 <div class="form-group">
                     <label>Correct Mapping (Optional)</label>
                     <input type="text" id="fix-mapping" class="input-text">
                 </div>
-                <button class="btn btn-primary" id="btn-save-fix" style="width: 100%; margin-top: 1rem;">Save Fix</button>
+                <div style="display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1rem;">
+                    <button class="btn btn-outline" onclick="document.getElementById('modal-fix').classList.add('hidden')">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-fix">Save Fix</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-Matcher Confirm Modal -->
+    <div id="modal-automatch-confirm" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
+            <div class="modal-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
+                <div style="background: rgba(59, 130, 246, 0.1); color: var(--primary-color); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                    <i data-lucide="alert-circle" style="width: 30px; height: 30px;"></i>
+                </div>
+            </div>
+            <div class="modal-body" style="padding-top: 0;">
+                <h2 style="margin-bottom: 1rem;">Apply Fixes?</h2>
+                <p style="color: var(--text-muted); margin-bottom: 2rem;" id="automatch-confirm-msg">Are you sure you want to apply the selected auto-matcher fixes?</p>
+                <div style="display: flex; gap: 1rem; justify-content: center;">
+                    <button class="btn btn-outline" onclick="document.getElementById('modal-automatch-confirm').classList.add('hidden')" style="flex: 1;">Cancel</button>
+                    <button class="btn btn-primary" id="btn-confirm-automatch" style="flex: 1;">Yes, Apply</button>
+                </div>
             </div>
         </div>
     </div>
     
-    <script type="module" src="app.js?v=12"></script>
+    <script type="module" src="app.js?v=13"></script>
     <script>
         // Initialize icons
         lucide.createIcons();

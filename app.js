@@ -1662,7 +1662,19 @@ class App {
         }
         const btnApplyMatch = document.getElementById('btn-apply-automatch-fixes');
         if(btnApplyMatch) {
-            btnApplyMatch.addEventListener('click', () => this.applyAutoMatches());
+            btnApplyMatch.addEventListener('click', () => {
+                const checkboxes = document.querySelectorAll('.automatch-checkbox:checked');
+                if (checkboxes.length === 0) {
+                    Toast.show('Please select at least one proposed match to apply.', 'warning');
+                    return;
+                }
+                document.getElementById('modal-automatch-confirm')?.classList.remove('hidden');
+            });
+        }
+        
+        const btnConfirmMatch = document.getElementById('btn-confirm-automatch');
+        if(btnConfirmMatch) {
+            btnConfirmMatch.addEventListener('click', () => this.applyAutoMatches());
         }
     }
     
@@ -2161,9 +2173,15 @@ class App {
             return;
         }
 
-        const btn = document.getElementById('btn-apply-automatch-fixes');
-        btn.innerText = 'Applying...';
-        btn.disabled = true;
+        const btn = document.getElementById('btn-confirm-automatch');
+        if (btn) {
+            btn.innerText = 'Applying...';
+            btn.disabled = true;
+        }
+        const originalBtn = document.getElementById('btn-apply-automatch-fixes');
+        if (originalBtn) {
+            originalBtn.disabled = true;
+        }
 
         try {
             const fp = new FawryProcessor(this.currentUser?.email || 'System');
@@ -2213,8 +2231,14 @@ class App {
         } catch (err) {
             Toast.show('Error applying fixes: ' + err.message, 'error');
         } finally {
-            btn.innerText = 'Apply Selected Fixes';
-            btn.disabled = false;
+            if (btn) {
+                btn.innerText = 'Yes, Apply';
+                btn.disabled = false;
+            }
+            if (originalBtn) {
+                originalBtn.disabled = false;
+            }
+            document.getElementById('modal-automatch-confirm')?.classList.add('hidden');
         }
     }
 
