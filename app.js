@@ -1142,16 +1142,19 @@ class App {
                     
                     if (dateFrom) query = query.gte('payment_date', dateFrom);
                     if (dateTo) query = query.lte('payment_date', dateTo);
-                    if (this.headerFilters.transactions.bank.length > 0) query = query.in('bank', this.headerFilters.transactions.bank);
-                    if (this.headerFilters.transactions.mapping.length > 0) query = query.in('mapping', this.headerFilters.transactions.mapping);
-                    if (this.headerFilters.transactions.item_name.length > 0) query = query.in('item_name', this.headerFilters.transactions.item_name);
-                    if (this.headerFilters.transactions.id_status.length > 0) {
-                        const statuses = this.headerFilters.transactions.id_status;
-                        const filters = [];
-                        if (statuses.includes('Valid')) filters.push('id_status.eq.Valid');
-                        if (statuses.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
-                        if (statuses.includes('Error')) filters.push('id_status.ilike.%Error%');
-                        if (filters.length > 0) query = query.or(filters.join(','));
+                    
+                    for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
+                        if (values && values.length > 0) {
+                            if (col === 'id_status') {
+                                const filters = [];
+                                if (values.includes('Valid')) filters.push('id_status.eq.Valid');
+                                if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+                                if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
+                                if (filters.length > 0) query = query.or(filters.join(','));
+                            } else {
+                                query = query.in(col, values);
+                            }
+                        }
                     }
                     if (search) {
                         if (/^\d+$/.test(search)) {
