@@ -1251,20 +1251,23 @@ class App {
         let countQuery = supabase.from('transactions').select('*', { count: 'exact', head: true });
         if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom);
         if (dateTo) countQuery = countQuery.lte('payment_date', dateTo);
-        if (bank) countQuery = countQuery.eq('bank', bank);
-        if (mapping) countQuery = countQuery.ilike('mapping', `%${mapping}%`);
-        if (item) countQuery = countQuery.ilike('item_name', `%${item}%`);
+        if (this.headerFilters.transactions.bank.length > 0) countQuery = countQuery.in('bank', this.headerFilters.transactions.bank);
+        if (this.headerFilters.transactions.mapping.length > 0) countQuery = countQuery.in('mapping', this.headerFilters.transactions.mapping);
+        if (this.headerFilters.transactions.item_name.length > 0) countQuery = countQuery.in('item_name', this.headerFilters.transactions.item_name);
+        if (this.headerFilters.transactions.id_status.length > 0) {
+            const statuses = this.headerFilters.transactions.id_status;
+            const filters = [];
+            if (statuses.includes('Valid')) filters.push('id_status.eq.Valid');
+            if (statuses.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+            if (statuses.includes('Error')) filters.push('id_status.ilike.%Error%');
+            if (filters.length > 0) countQuery = countQuery.or(filters.join(','));
+        }
         if (search) {
             if (/^\d+$/.test(search)) {
                 countQuery = countQuery.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
             } else {
                 countQuery = countQuery.ilike('student_id', `%${search}%`);
             }
-        }
-        if (status) {
-            if (status === 'valid') countQuery = countQuery.eq('id_status', 'Valid');
-            else if (status === 'missing') countQuery = countQuery.eq('id_status', 'Missing ID');
-            else if (status === 'error') countQuery = countQuery.ilike('id_status', '%Error%');
         }
         const { count: totalCount } = await countQuery;
         const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
