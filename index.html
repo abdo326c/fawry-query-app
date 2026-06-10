@@ -73,6 +73,9 @@
                 <a href="#import" class="nav-link" data-tab="import">
                     <i data-lucide="upload-cloud"></i> Import CSV
                 </a>
+                <a href="#history" class="nav-link" data-tab="history">
+                    <i data-lucide="history"></i> Import History
+                </a>
                 <a href="#mappings" class="nav-link" data-tab="mappings">
                     <i data-lucide="git-merge"></i> Item Mappings
                 </a>
@@ -278,6 +281,33 @@
                         <p id="progress-text">0 / 0 rows processed</p>
                         <div id="import-log" class="log-console mt-4"></div>
                     </div>
+                </div>
+            </section>
+
+            <!-- Import History View -->
+            <section id="view-history" class="view">
+                <div class="header">
+                    <h1>Import History</h1>
+                    <button class="btn btn-outline" id="btn-refresh-history">
+                        <i data-lucide="refresh-cw"></i> Refresh
+                    </button>
+                </div>
+                <div class="table-container glass-card">
+                    <table class="data-table" id="history-table">
+                        <thead>
+                            <tr>
+                                <th>File Name</th>
+                                <th>Processed At</th>
+                                <th>Processed By</th>
+                                <th>Records</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
                 </div>
             </section>
 

@@ -101,6 +101,7 @@ class App {
         this.initReapply();
         this.initDashboard();
         this.initStudentMaster();
+        this.initHistory();
         this.initAuth();
     }
 
@@ -240,6 +241,7 @@ class App {
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
                 if (tabId === 'fixes') this.loadFixes();
+                if (tabId === 'history') this.loadHistory();
                 // Students Details does not require initial data load
             });
         });
@@ -1449,6 +1451,104 @@ class App {
         }
     }
     
+    initHistory() {
+        const btnRefresh = document.getElementById('btn-refresh-history');
+        if (btnRefresh) {
+            btnRefresh.addEventListener('click', () => this.loadHistory());
+        }
+        
+        // Setup revert buttons delegation
+        const historyBody = document.getElementById('history-body');
+        if (historyBody) {
+            historyBody.addEventListener('click', async (e) => {
+                const btn = e.target.closest('.btn-revert-batch');
+                if (!btn) return;
+                
+                const batchId = btn.getAttribute('data-batch-id');
+                const fileName = btn.getAttribute('data-file-name');
+                const type = btn.getAttribute('data-type');
+                
+                if (type !== 'transactions') {
+                    Toast.show('Only transaction batches can be reverted currently.', 'warning');
+                    return;
+                }
+
+                if (!confirm(`Are you sure you want to revert the import for "${fileName}"? This will delete all its transactions.`)) return;
+                
+                btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Reverting...';
+                btn.disabled = true;
+                if (window.lucide) lucide.createIcons();
+
+                try {
+                    // Delete transactions
+                    const { error: txError } = await supabase.from('transactions').delete().eq('file_name', fileName);
+                    if (txError) throw txError;
+                    
+                    // Update batch status
+                    const { error: batchError } = await supabase.from('import_batches').update({ status: 'reverted' }).eq('id', batchId);
+                    if (batchError) throw batchError;
+                    
+                    Toast.show(`Successfully reverted ${fileName}`, 'success');
+                    this.loadHistory();
+                    this.loadDashboard();
+                    this.loadTransactions();
+                } catch (err) {
+                    Toast.show('Error reverting batch: ' + err.message, 'error');
+                    btn.innerHTML = '<i data-lucide="rotate-ccw"></i> Revert';
+                    btn.disabled = false;
+                    if (window.lucide) lucide.createIcons();
+                }
+            });
+        }
+    }
+
+    async loadHistory() {
+        const tbody = document.getElementById('history-body');
+        if (!tbody) return;
+        
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</td></tr>';
+        if (window.lucide) lucide.createIcons();
+        
+        try {
+            const { data, error } = await supabase.from('import_batches').select('*').order('created_at', { ascending: false }).limit(50);
+            if (error) throw error;
+            
+            if (!data || data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No import history found.</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = data.map(b => {
+                const date = new Date(b.created_at).toLocaleString();
+                const type = b.details && b.details.type ? b.details.type : 'transactions';
+                const canRevert = type === 'transactions' && b.status !== 'reverted' && b.status !== 'failed';
+                
+                let statusColor = 'var(--text-muted)';
+                if (b.status === 'success') statusColor = 'var(--success)';
+                else if (b.status === 'failed') statusColor = 'var(--danger)';
+                else if (b.status === 'reverted') statusColor = 'var(--warning)';
+                else if (b.status === 'partial') statusColor = '#eab308'; // yellow-500
+                
+                return `
+                    <tr>
+                        <td>${escapeHTML(b.file_name)} <span style="font-size: 0.75rem; color: var(--text-muted);">(${escapeHTML(type)})</span></td>
+                        <td>${date}</td>
+                        <td>${escapeHTML(b.user_email || 'System')}</td>
+                        <td>${b.records_processed || 0}</td>
+                        <td style="color: ${statusColor}; text-transform: capitalize;">${escapeHTML(b.status)}</td>
+                        <td>
+                            ${canRevert ? `<button class="btn btn-outline btn-revert-batch" data-batch-id="${b.id}" data-file-name="${escapeHTML(b.file_name)}" data-type="${escapeHTML(type)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;"><i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i> Revert</button>` : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            
+            if (window.lucide) lucide.createIcons();
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger); text-align: center;">Error loading history: ${escapeHTML(err.message)}</td></tr>`;
+        }
+    }
+    
     async handleStudentImport(file) {
         const status = document.getElementById('student-upload-status');
         status.style.display = 'block';
@@ -1856,6 +1956,8 @@ class App {
         try {
             const fp = new FawryProcessor(this.currentUser?.email || 'System');
             const appliedRefs = [];
+            const manualFixesToInsert = [];
+
             for (const cb of checkboxes) {
                 const tx_id = parseInt(cb.value);
                 const proposal = this.automatchProposals.find(p => p.tx_id === tx_id);
@@ -1867,8 +1969,19 @@ class App {
                             id_status: validateID(proposal.proposedStudent.student_id)
                         })
                         .eq('id', tx_id);
+                    
+                    manualFixesToInsert.push({
+                        reference_number: proposal.original_ref,
+                        correct_id: proposal.proposedStudent.student_id
+                    });
+
                     appliedRefs.push(proposal.original_ref);
                 }
+            }
+
+            // Insert into manual_fixes
+            if (manualFixesToInsert.length > 0) {
+                await supabase.from('manual_fixes').upsert(manualFixesToInsert, { onConflict: 'reference_number', ignoreDuplicates: false });
             }
 
             // Audit Log

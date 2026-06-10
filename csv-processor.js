@@ -171,11 +171,25 @@ export class FawryProcessor {
                     const chunkRefs = refs.slice(i, i + 200);
                     const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
                     if (existingTx && existingTx.length > 0) {
+                        const { data: existingFixes } = await supabase.from('manual_fixes').select('*').in('reference_number', chunkRefs);
+                        const fixesMap = new Map();
+                        if (existingFixes) {
+                            existingFixes.forEach(f => fixesMap.set(String(f.reference_number), f));
+                        }
+
                         for (const tx of existingTx) {
                             const link = uniqueLinks.find(l => String(l.payment_reference_number) === String(tx.reference_number));
                             if (link && link.custom_input_value) {
-                                tx.student_id = link.custom_input_value;
-                                tx.id_status = this.validateID(tx.student_id);
+                                if (!fixesMap.has(String(tx.reference_number))) {
+                                    tx.student_id = link.custom_input_value;
+                                    tx.id_status = this.validateID(tx.student_id);
+                                } else {
+                                    const fix = fixesMap.get(String(tx.reference_number));
+                                    if (fix.correct_id) {
+                                        tx.student_id = fix.correct_id;
+                                        tx.id_status = this.validateID(tx.student_id);
+                                    }
+                                }
                             }
                         }
                         await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
@@ -283,7 +297,8 @@ export class FawryProcessor {
                         item_price: itemPrice,
                         merchant_name: merchant,
                         bank: bank,
-                        check_column: `${refNumber}-${itemName}`
+                        check_column: `${refNumber}-${itemName}`,
+                        file_name: item.file.name
                     });
                 }
 
