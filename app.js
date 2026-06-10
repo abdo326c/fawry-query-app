@@ -208,6 +208,18 @@ class App {
         });
     }
 
+    async fetchUniqueFilters() {
+        try {
+            const { data, error } = await supabase.from('item_mapping').select('mapping, item_name');
+            if (!error && data) {
+                this.uniqueLists.mapping = [...new Set(data.map(d => d.mapping).filter(Boolean))].sort();
+                this.uniqueLists.item_name = [...new Set(data.map(d => d.item_name).filter(Boolean))].sort();
+            }
+        } catch (err) {
+            console.error('Error fetching distinct mappings:', err);
+        }
+    }
+
     initNavigation() {
         const btnMobileMenu = document.getElementById('btn-mobile-menu');
         const btnCloseSidebar = document.getElementById('btn-close-sidebar');
