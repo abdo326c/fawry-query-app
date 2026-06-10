@@ -927,13 +927,24 @@ class App {
         document.getElementById('automatcher-date-from')?.addEventListener('change', () => this.runAutoMatcher());
         document.getElementById('automatcher-date-to')?.addEventListener('change', () => this.runAutoMatcher());
 
+        const searchInput = document.getElementById('search-input');
         let searchTimeout;
-        document.getElementById('search-input').addEventListener('input', () => {
+        searchInput?.addEventListener('input', (e) => {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
                 this.currentPage = 1;
                 this.loadTransactions();
             }, 500);
+        });
+
+        // Make date filters auto-update on change like the search input
+        document.getElementById('filter-date-from')?.addEventListener('change', () => {
+            this.currentPage = 1;
+            this.loadTransactions();
+        });
+        document.getElementById('filter-date-to')?.addEventListener('change', () => {
+            this.currentPage = 1;
+            this.loadTransactions();
         });
 
         this.setupHeaderFilters();
@@ -991,6 +1002,8 @@ class App {
                         if (searchTerm) {
                             if (currentColumn === 'item_price') {
                                 if (!isNaN(searchTerm)) query = query.eq(currentColumn, Number(searchTerm));
+                            } else if (currentColumn === 'payment_date') {
+                                query = query.eq(currentColumn, searchTerm);
                             } else {
                                 query = query.ilike(currentColumn, `%${searchTerm}%`);
                             }
@@ -1280,8 +1293,8 @@ class App {
 
         let query = supabase.from('transactions').select('*');
 
-        if (dateFrom) query = query.gte('payment_date', dateFrom + 'T00:00:00.000Z');
-        if (dateTo) query = query.lte('payment_date', dateTo + 'T23:59:59.999Z');
+        if (dateFrom) query = query.gte('payment_date', dateFrom);
+        if (dateTo) query = query.lte('payment_date', dateTo);
         for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
             if (values && values.length > 0) {
                 if (col === 'id_status') {
@@ -1312,8 +1325,8 @@ class App {
 
         // Get total count for pagination
         let countQuery = supabase.from('transactions').select('*', { count: 'exact', head: true });
-        if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom + 'T00:00:00.000Z');
-        if (dateTo) countQuery = countQuery.lte('payment_date', dateTo + 'T23:59:59.999Z');
+        if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom);
+        if (dateTo) countQuery = countQuery.lte('payment_date', dateTo);
         for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
             if (values && values.length > 0) {
                 if (col === 'id_status') {
@@ -1903,8 +1916,8 @@ class App {
 
             // First fetch the base invalidTx (with or without targeted filter)
             let query = supabase.from('transactions').select('*').neq('id_status', 'Valid');
-            if (dateFrom) query = query.gte('payment_date', dateFrom + 'T00:00:00.000Z');
-            if (dateTo) query = query.lte('payment_date', dateTo + 'T23:59:59.999Z');
+            if (dateFrom) query = query.gte('payment_date', dateFrom);
+            if (dateTo) query = query.lte('payment_date', dateTo);
             if (search) {
                 if (/^\d+$/.test(search)) {
                     query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
