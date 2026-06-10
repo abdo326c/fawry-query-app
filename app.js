@@ -2170,17 +2170,16 @@ class App {
                             <td><input type="checkbox" class="automatch-checkbox" value="${proposal.tx_id}"></td>
                             <td>${proposal.original_ref}</td>
                             <td>${proposal.original_date}</td>
-                            <td>${proposal.original_bank}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
                             <td>${proposal.original_item}</td>
                             <td>${formatMoney(proposal.original_amount)}</td>
-                            <td><span style="font-size:0.85rem; color:var(--text-muted)">${proposal.matchReason}</span></td>
                             <td>
                                 <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${proposal.matchReason}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
                                     Matched: ${proposal.proposedStudent.student_id} ${isNameMatch ? ' (By Name)' : ''}
                                 </span>
                                 <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${proposal.proposedStudent.full_name}</div>
                             </td>
+                            <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${proposal.matchReason}</span></td>
                         </tr>
                     `;
                 } else {
@@ -2189,18 +2188,17 @@ class App {
                             <td></td>
                             <td>${proposal.original_ref}</td>
                             <td>${proposal.original_date}</td>
-                            <td>${proposal.original_bank}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
                             <td>${proposal.original_item}</td>
                             <td>${formatMoney(proposal.original_amount)}</td>
-                            <td><span style="color:var(--text-muted)">-</span></td>
                             <td><span class="status-badge invalid-id">No Match Found</span></td>
+                            <td><span style="color:var(--text-muted)">-</span></td>
                         </tr>
                     `;
                 }
             }
 
-            tbody.innerHTML = html || '<tr><td colspan="9" class="text-center">No fixable transactions found.</td></tr>';
+            tbody.innerHTML = html || '<tr><td colspan="8" class="text-center">No fixable transactions found.</td></tr>';
             btnApply.style.display = this.automatchProposals.filter(p => p.proposedStudent).length > 0 ? 'inline-block' : 'none';
             
             const selectAllMatcher = document.getElementById('automatcher-select-all');
