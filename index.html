@@ -3,7 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fawry Query Dashboard</title>
+    <title>Fawry Query - NU</title>
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            alert("JS Error: " + msg + " at line " + line);
+        };
+        window.addEventListener("unhandledrejection", function(event) {
+            alert("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
+        });
+    </script>
     <link rel="stylesheet" href="styles.css?v=3">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
