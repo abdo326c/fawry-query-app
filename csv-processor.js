@@ -156,7 +156,7 @@ export class FawryProcessor {
                     }
                 }
 
-                await supabase.from('import_batches').insert({
+                const { error: batchError } = await supabase.from('import_batches').insert({
                     user_email: this.userEmail,
                     file_name: item.file.name,
                     status: insertedCount === uniqueLinks.length ? 'success' : (insertedCount > 0 ? 'partial' : 'failed'),
@@ -164,6 +164,11 @@ export class FawryProcessor {
                     records_inserted: insertedCount,
                     details: { type: 'links' }
                 });
+                
+                if (batchError) {
+                    this.log(`History Warning: Could not record links import history. Error: ${batchError.message}`);
+                    console.error("Links History Error:", batchError);
+                }
 
                 // Re-enrich existing transactions with these new links
                 this.log(`Re-enriching existing transactions with new links...`);
@@ -425,7 +430,7 @@ export class FawryProcessor {
             }
         }
 
-        await supabase.from('import_batches').insert({
+        const { error: batchError } = await supabase.from('import_batches').insert({
             user_email: this.userEmail,
             file_name: fileName,
             status: inserted === transactions.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
@@ -433,6 +438,11 @@ export class FawryProcessor {
             records_inserted: inserted,
             details: { type: 'transactions' }
         });
+        
+        if (batchError) {
+            this.log(`History Warning: Could not record transaction import history. Error: ${batchError.message}`);
+            console.error("Tx History Error:", batchError);
+        }
     }
 
     validateID(id) {
