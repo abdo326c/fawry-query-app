@@ -90,8 +90,8 @@ class App {
         this.pageSize = 50;
         
         this.headerFilters = {
-            transactions: { bank: [], mapping: [], item_name: [], id_status: [] },
-            automatch: { bank: [], mapping: [], item_name: [] }
+            transactions: {},
+            automatch: {}
         };
         this.uniqueLists = { mapping: [], item_name: [] };
 
@@ -901,7 +901,7 @@ class App {
             document.getElementById('filter-date-from').value = '';
             document.getElementById('filter-date-to').value = '';
             document.getElementById('search-input').value = '';
-            this.headerFilters.transactions = { bank: [], mapping: [], item_name: [], id_status: [] };
+            this.headerFilters.transactions = {};
             document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.currentPage = 1;
             this.loadTransactions();
@@ -911,7 +911,7 @@ class App {
             document.getElementById('automatcher-date-from').value = '';
             document.getElementById('automatcher-date-to').value = '';
             document.getElementById('automatcher-search').value = '';
-            this.headerFilters.automatch = { bank: [], mapping: [], item_name: [] };
+            this.headerFilters.automatch = {};
             document.querySelectorAll('[data-table="automatch"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.runAutoMatcher();
         });
@@ -965,15 +965,31 @@ class App {
         let currentTable = null;
         let currentColumn = null;
 
-        const renderList = (searchTerm = '') => {
+        const renderList = async (searchTerm = '') => {
             let options = [];
-            if (currentColumn === 'bank') options = ['NUADIB64', 'NUADCB136'];
-            else if (currentColumn === 'id_status') options = ['Valid', 'Missing ID', 'Error'];
-            else if (currentColumn === 'mapping') {
-                options = currentTable === 'automatch' ? (this.automatchDistinctMappings || []) : (this.uniqueLists.mapping || []);
-            }
-            else if (currentColumn === 'item_name') {
-                options = currentTable === 'automatch' ? (this.automatchDistinctItems || []) : (this.uniqueLists.item_name || []);
+            
+            if (currentColumn === 'id_status') options = ['Valid', 'Missing ID', 'Error'];
+            else if (currentColumn === 'bank') options = ['NUADIB64', 'NUADCB136'];
+            else {
+                if (!this.uniqueLists[currentColumn]) {
+                    listContainer.innerHTML = '<div style="padding: 1rem; text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</div>';
+                    if (window.lucide) lucide.createIcons();
+                    
+                    try {
+                        if (currentTable === 'automatch' && this.invalidTx) {
+                            options = [...new Set(this.invalidTx.map(t => t[currentColumn]).filter(Boolean))].sort();
+                        } else {
+                            const { data, error } = await supabase.from('transactions').select(currentColumn);
+                            if (!error && data) {
+                                options = [...new Set(data.map(d => d[currentColumn]).filter(Boolean))].sort();
+                            }
+                        }
+                        this.uniqueLists[currentColumn] = options;
+                    } catch (e) {
+                        console.error('Error fetching dynamic filter values', e);
+                    }
+                }
+                options = this.uniqueLists[currentColumn] || [];
             }
 
             const lowerSearch = searchTerm.toLowerCase();
@@ -1241,16 +1257,18 @@ class App {
 
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
-        if (this.headerFilters.transactions.bank.length > 0) query = query.in('bank', this.headerFilters.transactions.bank);
-        if (this.headerFilters.transactions.mapping.length > 0) query = query.in('mapping', this.headerFilters.transactions.mapping);
-        if (this.headerFilters.transactions.item_name.length > 0) query = query.in('item_name', this.headerFilters.transactions.item_name);
-        if (this.headerFilters.transactions.id_status.length > 0) {
-            const statuses = this.headerFilters.transactions.id_status;
-            const filters = [];
-            if (statuses.includes('Valid')) filters.push('id_status.eq.Valid');
-            if (statuses.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
-            if (statuses.includes('Error')) filters.push('id_status.ilike.%Error%');
-            if (filters.length > 0) query = query.or(filters.join(','));
+        for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
+            if (values && values.length > 0) {
+                if (col === 'id_status') {
+                    const filters = [];
+                    if (values.includes('Valid')) filters.push('id_status.eq.Valid');
+                    if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+                    if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
+                    if (filters.length > 0) query = query.or(filters.join(','));
+                } else {
+                    query = query.in(col, values);
+                }
+            }
         }
         if (search) {
             if (/^\d+$/.test(search)) {
@@ -1271,16 +1289,18 @@ class App {
         let countQuery = supabase.from('transactions').select('*', { count: 'exact', head: true });
         if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom);
         if (dateTo) countQuery = countQuery.lte('payment_date', dateTo);
-        if (this.headerFilters.transactions.bank.length > 0) countQuery = countQuery.in('bank', this.headerFilters.transactions.bank);
-        if (this.headerFilters.transactions.mapping.length > 0) countQuery = countQuery.in('mapping', this.headerFilters.transactions.mapping);
-        if (this.headerFilters.transactions.item_name.length > 0) countQuery = countQuery.in('item_name', this.headerFilters.transactions.item_name);
-        if (this.headerFilters.transactions.id_status.length > 0) {
-            const statuses = this.headerFilters.transactions.id_status;
-            const filters = [];
-            if (statuses.includes('Valid')) filters.push('id_status.eq.Valid');
-            if (statuses.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
-            if (statuses.includes('Error')) filters.push('id_status.ilike.%Error%');
-            if (filters.length > 0) countQuery = countQuery.or(filters.join(','));
+        for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
+            if (values && values.length > 0) {
+                if (col === 'id_status') {
+                    const filters = [];
+                    if (values.includes('Valid')) filters.push('id_status.eq.Valid');
+                    if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+                    if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
+                    if (filters.length > 0) countQuery = countQuery.or(filters.join(','));
+                } else {
+                    countQuery = countQuery.in(col, values);
+                }
+            }
         }
         if (search) {
             if (/^\d+$/.test(search)) {
@@ -1906,17 +1926,15 @@ class App {
             this.automatchDistinctMappings = distinctMappings;
             this.automatchDistinctItems = distinctItems;
 
-            // Now apply selected filters
-            const selectedMappings = this.headerFilters.automatch.mapping || [];
-            const selectedItems = this.headerFilters.automatch.item_name || [];
-            const selectedBanks = this.headerFilters.automatch.bank || [];
+            // Apply dynamic header filters for Auto-Matcher
+            const activeFilters = this.headerFilters.automatch || {};
+            for (const [col, values] of Object.entries(activeFilters)) {
+                if (values && values.length > 0) {
+                    invalidTx = invalidTx.filter(t => values.includes(t[col]));
+                }
+            }
             
-            let filteredTx = invalidTx.filter(t => {
-                const matchMap = selectedMappings.length === 0 || (t.mapping && selectedMappings.includes(t.mapping));
-                const matchItem = selectedItems.length === 0 || (t.item_name && selectedItems.includes(t.item_name));
-                const matchBank = selectedBanks.length === 0 || (t.bank && selectedBanks.includes(t.bank));
-                return matchMap && matchItem && matchBank;
-            });
+            let filteredTx = invalidTx;
             
             if (filteredTx.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" class="text-center">No transactions match selected filters.</td></tr>';

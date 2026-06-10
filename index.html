@@ -224,11 +224,31 @@
                     <table class="data-table" id="transactions-table">
                         <thead>
                             <tr>
-                                <th>Ref Number</th>
-                                <th>Date</th>
-                                <th>Student ID</th>
-                                <th>Mobile</th>
-                                <th>Item Price</th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="reference_number" data-table="transactions">
+                                        Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="payment_date" data-table="transactions">
+                                        Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="student_id" data-table="transactions">
+                                        Student ID <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="customer_mobile" data-table="transactions">
+                                        Mobile <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="item_price" data-table="transactions">
+                                        Item Price <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
                                 <th>
                                     <div class="th-filter-wrapper" data-column="item_name" data-table="transactions">
                                         Item Name <i data-lucide="filter" class="header-filter-icon"></i>
@@ -505,8 +525,16 @@
                                 <thead>
                                     <tr>
                                         <th><input type="checkbox" id="automatcher-select-all"></th>
-                                        <th>Ref Number</th>
-                                        <th>Payment Date</th>
+                                        <th>
+                                            <div class="th-filter-wrapper" data-column="reference_number" data-table="automatch">
+                                                Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th>
+                                            <div class="th-filter-wrapper" data-column="payment_date" data-table="automatch">
+                                                Payment Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
                                         <th>
                                             <div class="th-filter-wrapper" data-column="bank" data-table="automatch">
                                                 Bank <i data-lucide="filter" class="header-filter-icon"></i>
@@ -522,7 +550,11 @@
                                                 Item Name <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>Amount</th>
+                                        <th>
+                                            <div class="th-filter-wrapper" data-column="item_price" data-table="automatch">
+                                                Amount <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
                                         <th>Proposed Fix</th>
                                     </tr>
                                 </thead>
@@ -598,7 +630,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=8"></script>
+    <script type="module" src="app.js?v=9"></script>
     <script>
         // Initialize icons
         lucide.createIcons();
