@@ -1377,7 +1377,7 @@ class App {
             });
         }
 
-        const dropzone = document.getElementById('student-import-zone');
+        const dropzone = document.getElementById('student-upload-zone');
         const fileInput = document.getElementById('student-file-input');
         if (dropzone && fileInput) {
             dropzone.addEventListener('click', () => fileInput.click());
