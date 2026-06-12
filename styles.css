@@ -1562,3 +1562,14 @@ select option {
 :root.light .header-filter-list label:hover {
     background: rgba(0,0,0,0.03);
 }
+
+/* Logo specific styles */
+.site-logo {
+    background-color: #ffffff;
+    border-radius: 4px;
+    padding: 2px;
+    transition: background-color 0.3s ease;
+}
+html.light .site-logo {
+    background-color: transparent;
+}
