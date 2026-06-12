@@ -1563,13 +1563,20 @@ select option {
     background: rgba(0,0,0,0.03);
 }
 
-/* Logo specific styles */
-.site-logo {
-    background-color: #ffffff;
-    border-radius: 4px;
-    padding: 2px;
-    transition: background-color 0.3s ease;
+/* Branding Watermark */
+.main-watermark {
+    position: fixed;
+    top: 50%;
+    left: 55%;
+    transform: translate(-50%, -50%);
+    width: 50vw;
+    max-width: 800px;
+    height: auto;
+    opacity: 0.02;
+    pointer-events: none;
+    z-index: 0;
+    filter: grayscale(100%);
 }
-html.light .site-logo {
-    background-color: transparent;
+html.light .main-watermark {
+    opacity: 0.04;
 }
