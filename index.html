@@ -694,5 +694,41 @@
         // Initialize icons
         lucide.createIcons();
     </script>
+
+    <!-- Re-apply Rules Preview Modal -->
+    <div id="modal-reapply-preview" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 id="modal-reapply-title">Review Proposed Changes</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-reapply-preview').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 0;">
+                <p style="margin-bottom: 1rem; padding: 0 1.5rem; color: var(--text-muted);">
+                    The following transactions will be updated based on the latest mappings, links, and manual fixes. Please review and select the changes you want to apply.
+                </p>
+                <div class="table-container" style="margin: 0 1.5rem;">
+                    <table class="data-table" id="reapply-preview-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;"><input type="checkbox" id="reapply-select-all" checked></th>
+                                <th>Ref Number</th>
+                                <th>Change Type</th>
+                                <th>Old Value <i data-lucide="arrow-right" style="width: 14px; height: 14px; margin-left: 4px; vertical-align: middle;"></i> New Value</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reapply-preview-table-body">
+                            <!-- Proposals will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 1rem;">
+                <button class="btn btn-outline" onclick="document.getElementById('modal-reapply-preview').classList.add('hidden')">Cancel</button>
+                <button class="btn btn-primary" id="btn-apply-reapply-fixes"><i data-lucide="check-circle" style="width: 18px; height: 18px; margin-right: 8px;"></i> Apply Selected Changes</button>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>

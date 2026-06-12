@@ -828,10 +828,11 @@ class App {
     }
 
     initReapply() {
+        // Event listener for the main "Re-apply Rules" button
         document.getElementById('btn-reapply-rules').addEventListener('click', async () => {
             const btn = document.getElementById('btn-reapply-rules');
             const originalText = btn.innerHTML;
-            btn.innerHTML = '<i data-lucide="loader"></i> Applying...';
+            btn.innerHTML = '<i data-lucide="loader"></i> Computing...';
             btn.disabled = true;
 
             try {
@@ -849,14 +850,14 @@ class App {
 
                 let fetchMore = true;
                 let from = 0;
-                let updatedCount = 0;
                 
+                // Store proposals globally for the modal
+                window.reapplyProposals = [];
+
                 while (fetchMore) {
                     const { data: txs, error } = await supabase.from('transactions').select('*').range(from, from + 999);
                     if (error) throw error;
                     if (!txs || txs.length === 0) break;
-
-                    const updatedTxs = [];
 
                     for (const tx of txs) {
                         let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
@@ -864,16 +865,20 @@ class App {
                         let newStudentId = tx.student_id;
                         let newItemName = originalItemName;
                         let newMapping = null;
+                        
+                        let reasons = [];
 
                         const link = linksMap.get(String(tx.reference_number));
                         if (link && link.custom_input_value) {
                             newStudentId = link.custom_input_value;
+                            reasons.push("Student Link");
                         }
 
                         const mapDef = mappingsMap.get(newItemName);
                         if (mapDef) {
                             if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
                             if (mapDef.mapping) newMapping = mapDef.mapping;
+                            reasons.push("Mapping Rule");
                         }
 
                         const fix = fixesMap.get(String(tx.reference_number));
@@ -881,34 +886,124 @@ class App {
                             if (fix.correct_id) newStudentId = fix.correct_id;
                             if (fix.item_name) newItemName = fix.item_name;
                             if (fix.mapping) newMapping = fix.mapping;
+                            reasons.push("Manual Fix");
                         }
 
                         let newStatus = validateID(newStudentId);
 
                         if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.id_status !== newStatus) {
-                            tx.student_id = newStudentId;
-                            tx.item_name = newItemName;
-                            tx.mapping = newMapping;
-                            tx.id_status = newStatus;
-                            updatedTxs.push(tx);
-                        }
-                    }
+                            
+                            // Determine what exactly changed
+                            let oldValues = [];
+                            let newValues = [];
+                            let changeType = [];
+                            if (tx.student_id !== newStudentId) {
+                                changeType.push('ID');
+                                oldValues.push(tx.student_id || 'Empty');
+                                newValues.push(newStudentId || 'Empty');
+                            }
+                            if (tx.mapping !== newMapping) {
+                                changeType.push('Mapping');
+                                oldValues.push(tx.mapping || 'Empty');
+                                newValues.push(newMapping || 'Empty');
+                            }
+                            if (tx.id_status !== newStatus && tx.student_id === newStudentId) {
+                                changeType.push('Status');
+                                oldValues.push(tx.id_status || 'Empty');
+                                newValues.push(newStatus || 'Empty');
+                            }
 
-                    if (updatedTxs.length > 0) {
-                        const { error: upsertErr } = await supabase.from('transactions').upsert(updatedTxs, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
-                        if (upsertErr) throw upsertErr;
-                        updatedCount += updatedTxs.length;
+                            window.reapplyProposals.push({
+                                originalTx: tx,
+                                updatedTx: {
+                                    ...tx,
+                                    student_id: newStudentId,
+                                    item_name: newItemName,
+                                    mapping: newMapping,
+                                    id_status: newStatus
+                                },
+                                changeType: changeType.join(', '),
+                                oldStr: oldValues.join(', '),
+                                newStr: newValues.join(', '),
+                                reason: [...new Set(reasons)].join(' + ') || 'Status Re-validation'
+                            });
+                        }
                     }
 
                     if (txs.length < 1000) fetchMore = false;
                     else from += 1000;
                 }
 
-                Toast.show(`Successfully re-applied all rules! ${updatedCount} transactions updated.`, 'success');
-                this.loadTransactions();
+                if (window.reapplyProposals.length === 0) {
+                    Toast.show('No rules need to be applied. Everything is up to date!', 'info');
+                } else {
+                    // Populate modal
+                    const tbody = document.getElementById('reapply-preview-table-body');
+                    tbody.innerHTML = window.reapplyProposals.map((prop, idx) => `
+                        <tr>
+                            <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" checked></td>
+                            <td>${prop.originalTx.reference_number}</td>
+                            <td><span class="badge" style="background: rgba(0, 229, 255, 0.1); color: var(--primary-color);">${prop.changeType}</span></td>
+                            <td style="color: var(--text-muted); text-decoration: line-through;">${prop.oldStr}</td>
+                            <td style="color: var(--success-color); font-weight: 500;">${prop.newStr}</td>
+                            <td style="font-size: 0.85rem; color: var(--text-muted);">${prop.reason}</td>
+                        </tr>
+                    `).join('');
+                    
+                    document.getElementById('modal-reapply-preview').classList.remove('hidden');
+                    if (window.lucide) lucide.createIcons();
+                }
 
             } catch (err) {
-                Toast.show('Error re-applying rules: ' + err.message, 'error');
+                Toast.show('Error computing rules: ' + err.message, 'error');
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            }
+        });
+
+        // Event listener for "Select All" checkbox
+        document.getElementById('reapply-select-all')?.addEventListener('change', (e) => {
+            const checkboxes = document.querySelectorAll('.reapply-checkbox');
+            checkboxes.forEach(cb => cb.checked = e.target.checked);
+        });
+
+        // Event listener for the "Apply Selected" button in the modal
+        document.getElementById('btn-apply-reapply-fixes')?.addEventListener('click', async () => {
+            const btn = document.getElementById('btn-apply-reapply-fixes');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Applying...';
+            btn.disabled = true;
+
+            try {
+                const checkboxes = document.querySelectorAll('.reapply-checkbox:checked');
+                const selectedTxs = Array.from(checkboxes).map(cb => {
+                    const idx = parseInt(cb.getAttribute('data-index'));
+                    return window.reapplyProposals[idx].updatedTx;
+                });
+
+                if (selectedTxs.length === 0) {
+                    Toast.show("No transactions selected.", "info");
+                    document.getElementById('modal-reapply-preview').classList.add('hidden');
+                    return;
+                }
+
+                // Chunk upserts
+                let updatedCount = 0;
+                for (let i = 0; i < selectedTxs.length; i += 1000) {
+                    const chunk = selectedTxs.slice(i, i + 1000);
+                    const { error } = await supabase.from('transactions').upsert(chunk, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                    if (error) throw error;
+                    updatedCount += chunk.length;
+                }
+
+                Toast.show(`Successfully updated ${updatedCount} transactions!`, 'success');
+                document.getElementById('modal-reapply-preview').classList.add('hidden');
+                this.loadTransactions();
+
+            } catch(err) {
+                Toast.show('Error applying rules: ' + err.message, 'error');
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
