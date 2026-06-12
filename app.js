@@ -1390,7 +1390,7 @@ class App {
                     <td>${escapeHTML(t.payment_date)}</td>
                     <td><strong>${escapeHTML(t.student_id)}</strong></td>
                     <td>EGP ${formatMoney(t.item_price)}</td>
-                    <td>${escapeHTML(t.item_name)}</td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 250px;">${escapeHTML(t.item_name)}</td>
                     <td>${escapeHTML(t.mapping) || '-'}</td>
                     <td>${escapeHTML(t.bank)}</td>
                     <td><span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span></td>
