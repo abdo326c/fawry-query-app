@@ -1165,7 +1165,7 @@ class App {
                     }
 
                     const { data, error } = await query
-                        .order('payment_date', { ascending: false })
+                        .order('payment_date', { ascending: true })
                         .range(from, from + pageSize - 1);
 
                     if (error) throw error;
