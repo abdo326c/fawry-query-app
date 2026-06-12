@@ -89,6 +89,9 @@
                 <a href="#fixes" class="nav-link" data-tab="fixes">
                     <i data-lucide="wrench"></i> Manual Fixes
                 </a>
+                <a href="#automatcher" class="nav-link" data-tab="automatcher">
+                    <i data-lucide="zap"></i> Auto-Matcher
+                </a>
                 <a href="#student-master" class="nav-link" data-tab="student-master">
                     <i data-lucide="users"></i> Students Details
                 </a>
@@ -433,8 +436,7 @@
                     <div class="student-tabs" style="display: flex; border-bottom: 1px solid var(--border-color);">
                         <button class="student-tab-btn active" data-target="student-lookup">Lookup Student</button>
                         <button class="student-tab-btn" data-target="student-import">Import Data</button>
-                        <button class="student-tab-btn" data-target="student-automatcher">Auto-Matcher</button>
-                    </div>
+                        </div>
                 </div>
 
                 <!-- Tab 1: Lookup -->
@@ -487,7 +489,10 @@
                 </div>
 
                 <!-- Tab 3: Auto-Matcher -->
-                <div id="student-automatcher" class="student-tab-content" style="display: none;">
+                </section>
+
+        <section id="automatcher" class="view-section hidden">
+
                     <div class="glass-card" style="margin-bottom: 1.5rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                             <h2>Auto-Matcher (Invalid IDs)</h2>
@@ -582,9 +587,7 @@
                             </table>
                         </div>
                     </div>
-                </div>
-
-            </section>
+                </section>
             
         </main>
     </div>
