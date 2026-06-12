@@ -182,23 +182,42 @@ export class FawryProcessor {
                         if (existingFixes) {
                             existingFixes.forEach(f => fixesMap.set(String(f.reference_number), f));
                         }
+                        
+                        const linkLookup = new Map();
+                        uniqueLinks.forEach(l => linkLookup.set(String(l.payment_reference_number), l));
 
+                        const updates = [];
                         for (const tx of existingTx) {
-                            const link = uniqueLinks.find(l => String(l.payment_reference_number) === String(tx.reference_number));
+                            const link = linkLookup.get(String(tx.reference_number));
                             if (link && link.custom_input_value) {
+                                let newStudentId = tx.student_id;
+                                let newStatus = tx.id_status;
                                 if (!fixesMap.has(String(tx.reference_number))) {
-                                    tx.student_id = link.custom_input_value;
-                                    tx.id_status = this.validateID(tx.student_id);
+                                    newStudentId = link.custom_input_value;
+                                    newStatus = this.validateID(newStudentId);
                                 } else {
                                     const fix = fixesMap.get(String(tx.reference_number));
                                     if (fix.correct_id) {
-                                        tx.student_id = fix.correct_id;
-                                        tx.id_status = this.validateID(tx.student_id);
+                                        newStudentId = fix.correct_id;
+                                        newStatus = this.validateID(newStudentId);
                                     }
+                                }
+                                
+                                if (tx.student_id !== newStudentId || tx.id_status !== newStatus) {
+                                    updates.push({
+                                        id: tx.id, // Primary key
+                                        reference_number: tx.reference_number,
+                                        item_price: tx.item_price,
+                                        check_column: tx.check_column,
+                                        student_id: newStudentId,
+                                        id_status: newStatus
+                                    });
                                 }
                             }
                         }
-                        await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                        if (updates.length > 0) {
+                            await supabase.from('transactions').upsert(updates, { onConflict: 'id', ignoreDuplicates: false });
+                        }
                     }
                 }
                 
@@ -209,8 +228,11 @@ export class FawryProcessor {
                 Papa.parse(item.data, {
                     header: true,
                     skipEmptyLines: true,
-                    worker: true,
-                    complete: (results) => processData(results.data)
+                    error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(); },
+                    complete: (results) => processData(results.data).catch(err => {
+                        this.log(`Error processing link data: ${err.message}`);
+                        resolve();
+                    })
                 });
             } else {
                 processData(item.data);
@@ -340,8 +362,11 @@ export class FawryProcessor {
                 Papa.parse(item.data, {
                     header: true,
                     skipEmptyLines: true,
-                    worker: true,
-                    complete: (results) => processData(results.data)
+                    error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(); },
+                    complete: (results) => processData(results.data).catch(err => {
+                        this.log(`Error processing transaction data: ${err.message}`);
+                        resolve();
+                    })
                 });
             } else {
                 processData(item.data);
@@ -447,22 +472,20 @@ export class FawryProcessor {
 
     validateID(id) {
         if (!id) return "Missing ID";
-        const idText = String(id).trim();
+        const idText = String(id).trim().replace(/\u00A0/g, '');
+        if (!idText || idText.length === 0) return "Missing ID";
         const idLength = idText.length;
-        
-        // Find non-numeric
         const onlyTextLeft = idText.replace(/[0-9]/g, '');
         
-        // DIP Exception
         if (idLength === 17 && idText.toUpperCase().startsWith("DIP")) {
             const remainder = idText.substring(3).replace(/[0-9]/g, '');
             if (remainder === "") return "Valid";
         }
-
+        
         if (onlyTextLeft !== "") return "Error: Text/Name detected";
+        if (idLength < 4) return `Error: ID Too Short (${idLength} digits)`;
         if (idLength > 9) return `Error: ID Too Long (${idLength} digits)`;
         if (idText.startsWith("2") && idLength !== 9) return `Error: Invalid 2-Series Length (${idLength} digits)`;
-        
         return "Valid";
     }
 }

@@ -17,10 +17,17 @@ function formatMoney(num) {
     return parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Shared utility: sanitize user input for Supabase .or() filter strings
+function sanitizeForFilter(str) {
+    if (!str) return '';
+    return String(str).replace(/[,.)(%\\]/g, '');
+}
+
 // Shared utility: standalone validateID (no need to instantiate FawryProcessor)
 function validateID(id) {
     if (!id) return "Missing ID";
-    const idText = String(id).trim();
+    const idText = String(id).trim().replace(/\u00A0/g, '');
+    if (!idText || idText.length === 0) return "Missing ID";
     const idLength = idText.length;
     const onlyTextLeft = idText.replace(/[0-9]/g, '');
     if (idLength === 17 && idText.toUpperCase().startsWith("DIP")) {
@@ -28,6 +35,7 @@ function validateID(id) {
         if (remainder === "") return "Valid";
     }
     if (onlyTextLeft !== "") return "Error: Text/Name detected";
+    if (idLength < 4) return `Error: ID Too Short (${idLength} digits)`;
     if (idLength > 9) return `Error: ID Too Long (${idLength} digits)`;
     if (idText.startsWith("2") && idLength !== 9) return `Error: Invalid 2-Series Length (${idLength} digits)`;
     return "Valid";
@@ -94,7 +102,11 @@ class App {
             automatch: {}
         };
         this.uniqueLists = { mapping: [], item_name: [] };
-
+        this.automatchDistinctMappings = [];
+        this.automatchDistinctItems = [];
+        this.invalidTx = [];
+        
+        this.isImporting = false;
         this.initTheme();
         this.fetchUniqueFilters();
 
@@ -210,7 +222,7 @@ class App {
 
     async fetchUniqueFilters() {
         try {
-            const { data, error } = await supabase.from('item_mapping').select('mapping, item_name');
+            const { data, error } = await supabase.from('item_mappings').select('mapping, item_name');
             if (!error && data) {
                 this.uniqueLists.mapping = [...new Set(data.map(d => d.mapping).filter(Boolean))].sort();
                 this.uniqueLists.item_name = [...new Set(data.map(d => d.item_name).filter(Boolean))].sort();
@@ -480,38 +492,51 @@ class App {
         fileInput.addEventListener('change', async (e) => {
             if (e.target.files.length) {
                 await this.handleFiles(e.target.files);
+                e.target.value = ''; // Reset file input so same file can be imported again
             }
         });
     }
 
     async handleFiles(files) {
-        document.getElementById('import-progress').classList.remove('hidden');
-        document.getElementById('import-log').innerHTML = '';
-        
-        const processor = new FawryProcessor(this.currentUser?.email || 'System');
-        await processor.processFiles(files);
-        
-        if (processor.skippedTransactions && processor.skippedTransactions.length > 0) {
-            const summary = {};
-            processor.skippedTransactions.forEach(t => {
-                const statusName = t.status ? String(t.status).trim() : 'Unknown';
-                summary[statusName] = (summary[statusName] || 0) + 1;
-            });
-            
-            let msg = `IMPORTANT: Skipped ${processor.skippedTransactions.length} transactions due to invalid Payment Status.\n\nSummary:\n`;
-            for (const [status, count] of Object.entries(summary)) {
-                msg += `- ${status}: ${count} transaction(s)\n`;
-            }
-            msg += `\nThese transactions were NOT imported.`;
-            
-            // Force the user to acknowledge
-            alert(msg);
+        if (this.isImporting) {
+            Toast.show('An import is already in progress. Please wait.', 'warning');
+            return;
         }
+        this.isImporting = true;
+        
+        try {
+            document.getElementById('import-progress').classList.remove('hidden');
+            document.getElementById('import-log').innerHTML = '';
+            
+            const processor = new FawryProcessor(this.currentUser?.email || 'System');
+            await processor.processFiles(files);
+            
+            if (processor.skippedTransactions && processor.skippedTransactions.length > 0) {
+                const summary = {};
+                processor.skippedTransactions.forEach(t => {
+                    const statusName = t.status ? String(t.status).trim() : 'Unknown';
+                    summary[statusName] = (summary[statusName] || 0) + 1;
+                });
+                
+                let msg = `IMPORTANT: Skipped ${processor.skippedTransactions.length} transactions due to invalid Payment Status.\n\nSummary:\n`;
+                for (const [status, count] of Object.entries(summary)) {
+                    msg += `- ${status}: ${count} transaction(s)\n`;
+                }
+                msg += `\nThese transactions were NOT imported.`;
+                
+                // Force the user to acknowledge
+                alert(msg);
+            }
 
-        // Auto-switch back to transactions tab after 1.5 seconds
-        setTimeout(() => {
-            document.querySelector('[data-tab="transactions"]').click();
-        }, 1500);
+            // Auto-switch back to transactions tab after 1.5 seconds
+            setTimeout(() => {
+                document.getElementById('import-progress').classList.add('hidden');
+                document.querySelector('.tab-btn[data-tab="transactions"]').click();
+                this.loadTransactions();
+            }, 1500);
+        } finally {
+            this.isImporting = false;
+        }
     }
 
     initModals() {
@@ -1157,10 +1182,11 @@ class App {
                         }
                     }
                     if (search) {
-                        if (/^\d+$/.test(search)) {
-                            query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
+                        const safeSearch = sanitizeForFilter(search);
+                        if (/^\d+$/.test(safeSearch)) {
+                            query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
                         } else {
-                            query = query.ilike('student_id', `%${search}%`);
+                            query = query.ilike('student_id', `%${safeSearch}%`);
                         }
                     }
 
@@ -1298,7 +1324,7 @@ class App {
         const dateTo = document.getElementById('filter-date-to')?.value;
         const search = document.getElementById('search-input')?.value;
 
-        let query = supabase.from('transactions').select('*');
+        let query = supabase.from('transactions').select('*', { count: 'exact' });
 
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
@@ -1316,45 +1342,21 @@ class App {
             }
         }
         if (search) {
-            if (/^\d+$/.test(search)) {
-                query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
+            const safeSearch = sanitizeForFilter(search);
+            if (/^\d+$/.test(safeSearch)) {
+                query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
             } else {
-                query = query.ilike('student_id', `%${search}%`);
+                query = query.ilike('student_id', `%${safeSearch}%`);
             }
         }
 
         const fromRange = (this.currentPage - 1) * this.pageSize;
         const toRange = fromRange + this.pageSize - 1;
 
-        const { data, error } = await query
+        const { data, count: totalCount, error } = await query
             .order('payment_date', { ascending: false })
             .range(fromRange, toRange);
 
-        // Get total count for pagination
-        let countQuery = supabase.from('transactions').select('*', { count: 'exact', head: true });
-        if (dateFrom) countQuery = countQuery.gte('payment_date', dateFrom);
-        if (dateTo) countQuery = countQuery.lte('payment_date', dateTo);
-        for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
-            if (values && values.length > 0) {
-                if (col === 'id_status') {
-                    const filters = [];
-                    if (values.includes('Valid')) filters.push('id_status.eq.Valid');
-                    if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
-                    if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
-                    if (filters.length > 0) countQuery = countQuery.or(filters.join(','));
-                } else {
-                    countQuery = countQuery.in(col, values);
-                }
-            }
-        }
-        if (search) {
-            if (/^\d+$/.test(search)) {
-                countQuery = countQuery.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
-            } else {
-                countQuery = countQuery.ilike('student_id', `%${search}%`);
-            }
-        }
-        const { count: totalCount } = await countQuery;
         const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
 
         // Update pagination UI
@@ -1362,7 +1364,7 @@ class App {
             ? `Page ${this.currentPage} of ${totalPages} (${totalCount.toLocaleString()} records)` 
             : `Page ${this.currentPage}`;
         document.getElementById('btn-prev').disabled = this.currentPage === 1;
-        document.getElementById('btn-next').disabled = !data || data.length < this.pageSize;
+        document.getElementById('btn-next').disabled = this.currentPage >= totalPages;
 
         if (error) {
             tbody.innerHTML = `<tr><td colspan="9" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
@@ -1555,7 +1557,7 @@ class App {
                     const { data, error } = await supabase
                         .from('student_master')
                         .select('*')
-                        .or(`student_id.ilike.%${term}%,full_name.ilike.%${term}%,mobile.ilike.%${term}%,email.ilike.%${term}%`)
+                        .or(`student_id.ilike.%${sanitizeForFilter(term)}%,full_name.ilike.%${sanitizeForFilter(term)}%,mobile.ilike.%${sanitizeForFilter(term)}%,email.ilike.%${sanitizeForFilter(term)}%`)
                         .limit(50);
                         
                     if (error) throw error;
@@ -1651,9 +1653,11 @@ class App {
                 const csv = Papa.unparse(csvData);
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
+                const url = URL.createObjectURL(blob);
+                link.href = url;
                 link.download = `Auto_Matcher_Results.csv`;
                 link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 100);
             });
         }
 
@@ -1953,33 +1957,30 @@ class App {
             const search = document.getElementById('automatcher-search')?.value;
 
             // First fetch the base invalidTx (with or without targeted filter)
-            let query = supabase.from('transactions').select('*').neq('id_status', 'Valid');
-            if (dateFrom) query = query.gte('payment_date', dateFrom);
-            if (dateTo) query = query.lte('payment_date', dateTo);
-            if (search) {
-                if (/^\d+$/.test(search)) {
-                    query = query.or(`student_id.ilike.%${search}%,reference_number.eq.${search}`);
-                } else {
-                    query = query.ilike('student_id', `%${search}%`);
+            let queryFn = (q) => {
+                q = q.neq('id_status', 'Valid');
+                if (dateFrom) q = q.gte('payment_date', dateFrom);
+                if (dateTo) q = q.lte('payment_date', dateTo);
+                if (search) {
+                    const safeSearch = sanitizeForFilter(search);
+                    if (/^\d+$/.test(safeSearch)) {
+                        q = q.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
+                    } else {
+                        q = q.ilike('student_id', `%${safeSearch}%`);
+                    }
                 }
+                if (this.targetedMatchRefs && this.targetedMatchRefs.length > 0 && this.targetedMatchRefs.length <= 500) {
+                    q = q.in('reference_number', this.targetedMatchRefs);
+                }
+                return q;
+            };
+
+            if (this.targetedMatchRefs && this.targetedMatchRefs.length > 500) {
+                console.warn("Large targeted filter, fetching all and filtering locally.");
             }
 
-            if (this.targetedMatchRefs && this.targetedMatchRefs.length > 0) {
-                // If there are many references, doing an IN query can fail if too large.
-                // We'll process them in JS instead.
-                // Or since it's just a query, we'll try IN. If the array is very large, this could error in PostgREST.
-                // But let's assume it's a manageable chunk (under 1000).
-                if (this.targetedMatchRefs.length > 500) {
-                    console.warn("Large targeted filter, fetching all and filtering locally.");
-                } else {
-                    query = query.in('reference_number', this.targetedMatchRefs);
-                }
-            }
-            
-            const { data: rawInvalidTx, error: err1 } = await query;
-            if (err1) throw err1;
-            
-            let invalidTx = rawInvalidTx || [];
+            let invalidTx = await fetchAll('transactions', '*', queryFn);
+            this.invalidTx = invalidTx; // Store for header filter dropdowns
             
             // If the targeted match list was very large and bypassed the .in(), filter locally
             if (this.targetedMatchRefs && this.targetedMatchRefs.length > 500) {
@@ -2168,16 +2169,16 @@ class App {
                     html += `
                         <tr>
                             <td><input type="checkbox" class="automatch-checkbox" value="${proposal.tx_id}"></td>
-                            <td>${proposal.original_ref}</td>
-                            <td>${proposal.original_date}</td>
+                            <td>${escapeHTML(proposal.original_ref)}</td>
+                            <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
-                            <td>${proposal.original_item}</td>
+                            <td>${escapeHTML(proposal.original_item)}</td>
                             <td>${formatMoney(proposal.original_amount)}</td>
                             <td>
-                                <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${proposal.matchReason}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
-                                    Matched: ${proposal.proposedStudent.student_id} ${isNameMatch ? ' (By Name)' : ''}
+                                <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${escapeHTML(proposal.matchReason)}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
+                                    Matched: ${escapeHTML(proposal.proposedStudent.student_id)} ${isNameMatch ? ' (By Name)' : ''}
                                 </span>
-                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${proposal.proposedStudent.full_name}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
                             </td>
                             <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${proposal.matchReason}</span></td>
                         </tr>
@@ -2186,10 +2187,10 @@ class App {
                     html += `
                         <tr>
                             <td></td>
-                            <td>${proposal.original_ref}</td>
-                            <td>${proposal.original_date}</td>
+                            <td>${escapeHTML(proposal.original_ref)}</td>
+                            <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
-                            <td>${proposal.original_item}</td>
+                            <td>${escapeHTML(proposal.original_item)}</td>
                             <td>${formatMoney(proposal.original_amount)}</td>
                             <td><span class="status-badge invalid-id">No Match Found</span></td>
                             <td><span style="color:var(--text-muted)">-</span></td>
@@ -2235,24 +2236,37 @@ class App {
             const appliedRefs = [];
             const manualFixesToInsert = [];
 
+            const updateGroups = {};
+
             for (const cb of checkboxes) {
                 const tx_id = parseInt(cb.value);
                 const proposal = this.automatchProposals.find(p => p.tx_id === tx_id);
                 if (proposal) {
-                    await supabase
-                        .from('transactions')
-                        .update({ 
-                            student_id: proposal.proposedStudent.student_id,
-                            id_status: validateID(proposal.proposedStudent.student_id)
-                        })
-                        .eq('id', tx_id);
+                    const sid = proposal.proposedStudent.student_id;
+                    if (!updateGroups[sid]) updateGroups[sid] = [];
+                    updateGroups[sid].push(tx_id);
                     
                     manualFixesToInsert.push({
                         reference_number: proposal.original_ref,
-                        correct_id: proposal.proposedStudent.student_id
+                        correct_id: sid
                     });
 
                     appliedRefs.push(proposal.original_ref);
+                }
+            }
+
+            // Execute batched updates
+            for (const [sid, txIds] of Object.entries(updateGroups)) {
+                // Batch up to 500 ids per request to avoid huge URLs
+                for (let i = 0; i < txIds.length; i += 500) {
+                    const chunk = txIds.slice(i, i + 500);
+                    await supabase
+                        .from('transactions')
+                        .update({ 
+                            student_id: sid,
+                            id_status: validateID(sid)
+                        })
+                        .in('id', chunk);
                 }
             }
 
