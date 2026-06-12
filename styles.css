@@ -31,6 +31,10 @@
     scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
+html {
+    font-size: 14px; /* Scales down the entire UI since rem is used everywhere */
+}
+
 body {
     font-family: 'Inter', sans-serif;
     background-color: var(--bg-dark);
