@@ -6,18 +6,18 @@
     <title>NU - Fawry Payments</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
-            console.error("JS Error:", msg, "at line", line, error);
+            alert("JS Error: " + msg + " at line " + line);
         };
         window.addEventListener("unhandledrejection", function(event) {
-            console.error("Promise Error:", event.reason);
+            alert("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
     <link rel="stylesheet" href="styles.css?v=3">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lucide@0.263.1" defer></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" defer></script>
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.js" defer></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.js"></script>
 </head>
 <body>
     <!-- Toast Container -->
@@ -64,7 +64,7 @@
                 <i data-lucide="x" style="width: 24px; height: 24px;"></i>
             </button>
             <div class="logo-container" style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 2.5rem; padding-left: 0.5rem; white-space: normal; word-wrap: break-word; overflow: hidden;">
-                <div style="display: flex; align-items: center; justify-content: center; background: rgba(56, 189, 248, ); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(56, 189, 248, ); flex-shrink: 0;">
+                <div style="display: flex; align-items: center; justify-content: center; background: rgba(0, 229, 255, 0.1); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(0,229,255,0.2); flex-shrink: 0;">
                     <i data-lucide="zap" class="logo-icon" style="margin: 0; filter: none; width: 24px; height: 24px;"></i>
                 </div>
                 <span class="logo-text" style="font-size: 1.25rem; line-height: 1.2;">NU - Fawry Payments</span>

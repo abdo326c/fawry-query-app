@@ -1,18 +1,17 @@
 :root {
-    /* Base Variables (Default Dark Mode - Fintech Premium) */
-    --bg-dark: #0f172a;
-    --bg-card: rgba(30, 41, 59, 0.7);
-    --bg-card-hover: rgba(51, 65, 85, 0.9);
-    --primary: #38bdf8;
-    --primary-hover: #0ea5e9;
-    --primary-glow: rgba(56, 189, 248, 0.2);
+    --bg-dark: #070B14;
+    --bg-card: rgba(13, 19, 38, 0.7);
+    --bg-card-hover: rgba(20, 28, 54, 0.9);
+    --primary: #00e5ff;
+    --primary-hover: #00b8d4;
+    --primary-glow: rgba(0, 229, 255, 0.3);
     
     --text-main: #f8fafc;
     --text-muted: #94a3b8;
     --text-dark: #1e293b;
     
     --border-color: rgba(255, 255, 255, 0.08);
-    --border-glow: rgba(56, 189, 248, 0.1);
+    --border-glow: rgba(0, 229, 255, 0.2);
     
     --success: #10b981;
     --success-bg: rgba(16, 185, 129, 0.15);
@@ -22,22 +21,6 @@
     --danger-bg: rgba(239, 68, 68, 0.15);
     
     --sidebar-width: 260px;
-}
-
-html.light {
-    --bg-dark: #f8fafc;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f1f5f9;
-    --primary: #0284c7;
-    --primary-hover: #0369a1;
-    --primary-glow: rgba(2, 132, 199, 0.1);
-    
-    --text-main: #0f172a;
-    --text-muted: #64748b;
-    --text-dark: #f8fafc;
-    
-    --border-color: rgba(0, 0, 0, 0.08);
-    --border-glow: rgba(2, 132, 199, 0.1);
 }
 
 * {
@@ -58,6 +41,10 @@ body {
     color: var(--text-main);
     min-height: 100vh;
     overflow-x: hidden;
+    /* Deep space gradient */
+    background-image: 
+        radial-gradient(circle at 10% 20%, rgba(0, 229, 255, 0.08), transparent 30%),
+        radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.08), transparent 30%);
 }
 
 /* Custom Scrollbar */
@@ -155,7 +142,7 @@ body {
     padding: 0.75rem 1rem;
     color: var(--text-muted);
     text-decoration: none;
-    border-radius: 6px;
+    border-radius: 0.75rem;
     transition: all 0.2s ease;
     font-weight: 500;
     position: relative;
@@ -182,7 +169,7 @@ body {
 
 .nav-link.active {
     color: var(--primary);
-    background: rgba(56, 189, 248, );
+    background: rgba(0, 229, 255, 0.05);
     border-left: 3px solid var(--primary);
 }
 
@@ -201,7 +188,7 @@ body {
     padding: 1rem;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -279,7 +266,7 @@ body {
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 1.25rem;
     padding: 1.5rem;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     transition: border-color 0.3s ease;
@@ -300,7 +287,7 @@ body {
     justify-content: center;
     gap: 0.5rem;
     padding: 0.625rem 1.25rem;
-    border-radius: 6px;
+    border-radius: 0.75rem;
     font-weight: 600;
     font-size: 0.875rem;
     cursor: pointer;
@@ -323,7 +310,7 @@ body {
 
 .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(56, 189, 248, );
+    box-shadow: 0 6px 20px rgba(0, 229, 255, 0.5);
     filter: brightness(1.1);
 }
 
@@ -403,7 +390,7 @@ body {
     border: 1px solid var(--border-color);
     color: var(--text-main);
     padding: 0.75rem 1rem;
-    border-radius: 6px;
+    border-radius: 0.75rem;
     font-family: inherit;
     font-size: 0.9rem;
     outline: none;
@@ -425,7 +412,7 @@ select option {
 .table-container {
     overflow-x: auto;
     padding: 0;
-    border-radius: 8px;
+    border-radius: 1.25rem;
     width: 100%;
     max-width: 100%;
 }
@@ -530,7 +517,7 @@ select option {
 /* Upload Zone */
 .upload-zone {
     border: 2px dashed var(--border-color);
-    border-radius: 8px;
+    border-radius: 1.25rem;
     padding: 4rem 2rem;
     text-align: center;
     transition: all 0.3s ease;
@@ -594,7 +581,7 @@ select option {
 
 .log-console {
     background-color: #030509;
-    border-radius: 6px;
+    border-radius: 0.75rem;
     padding: 1rem;
     font-family: 'Courier New', monospace;
     font-size: 0.8rem;
@@ -680,7 +667,7 @@ select option {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
     background: var(--bg-dark);
-    background-image: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, ), transparent 50%);
+    background-image: radial-gradient(circle at 50% 50%, rgba(0, 229, 255, 0.1), transparent 50%);
     z-index: 20000;
     display: flex;
     justify-content: center;
@@ -698,7 +685,7 @@ select option {
     background: var(--bg-card);
     backdrop-filter: blur(30px);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
+    border-radius: 1.5rem;
     padding: 3rem 2.5rem;
     width: 100%;
     max-width: 400px;
@@ -721,7 +708,7 @@ select option {
     backdrop-filter: blur(20px);
     color: var(--text-main);
     padding: 1rem 1.25rem;
-    border-radius: 8px;
+    border-radius: 1rem;
     box-shadow: 0 10px 25px rgba(0,0,0,0.5);
     border: 1px solid var(--border-color);
     display: flex;
@@ -874,7 +861,7 @@ select option {
 
 .pivot-table tfoot td {
     font-weight: 700;
-    background-color: rgba(56, 189, 248, );
+    background-color: rgba(0, 229, 255, 0.05);
     border-top: 2px solid var(--border-color);
     color: var(--text-main);
 }
@@ -927,7 +914,7 @@ select option {
 .student-tab-btn.active {
     color: var(--primary);
     border-bottom-color: var(--primary);
-    background: rgba(56, 189, 248, );
+    background: rgba(0, 229, 255, 0.05);
 }
 
 /* Sidebar Backdrop */
@@ -974,7 +961,7 @@ select option {
     align-items: center;
     justify-content: center;
     z-index: 5;
-    border-radius: 8px;
+    border-radius: 1.25rem;
 }
 
 /* Empty State */
@@ -1055,9 +1042,9 @@ select option {
     padding: 0.25rem 0.6rem;
     border-radius: 9999px;
     font-size: 0.8rem;
-    background: rgba(56, 189, 248, );
+    background: rgba(0, 229, 255, 0.1);
     color: var(--primary);
-    border: 1px solid rgba(56, 189, 248, );
+    border: 1px solid rgba(0, 229, 255, 0.2);
 }
 
 .filter-chip button {
@@ -1101,7 +1088,7 @@ select option {
     max-width: 560px;
     background: var(--bg-card);
     border: 1px solid var(--border-glow);
-    border-radius: 8px;
+    border-radius: 1rem;
     padding: 1rem;
     backdrop-filter: blur(24px);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
@@ -1171,7 +1158,7 @@ select option {
 
 .quality-card {
     padding: 1.25rem;
-    border-radius: 8px;
+    border-radius: 1rem;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
 }
@@ -1489,11 +1476,11 @@ select option {
     position: fixed;
     background-color: var(--bg-card);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 0.75rem;
     padding: 0.75rem;
     width: 240px;
     box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-    z-index: 90;
+    z-index: 99999;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
