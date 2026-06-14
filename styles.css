@@ -810,13 +810,13 @@ select option {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: var(--text-main);
     background-color: transparent;
 }
 
 .pivot-table th, .pivot-table td {
-    padding: 1rem 1.5rem;
+    padding: 0.6rem 1rem;
     text-align: right;
     white-space: nowrap;
     border-bottom: 1px solid var(--border-color);
