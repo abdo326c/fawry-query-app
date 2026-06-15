@@ -531,7 +531,7 @@ class App {
             // Auto-switch back to transactions tab after 1.5 seconds
             setTimeout(() => {
                 document.getElementById('import-progress').classList.add('hidden');
-                document.querySelector('.nav-link[data-tab="transactions"]').click();
+                document.querySelector('.tab-btn[data-tab="transactions"]').click();
                 this.loadTransactions();
             }, 1500);
         } finally {
@@ -1409,52 +1409,6 @@ class App {
                 Toast.show('Export failed: ' + err.message, 'error');
             }
         });
-
-        document.getElementById('btn-export-students').addEventListener('click', async () => {
-            const btn = document.getElementById('btn-export-students');
-            const originalHtml = btn.innerHTML;
-            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Exporting...';
-            if (window.lucide) lucide.createIcons();
-
-            try {
-                let allData = [];
-                let from = 0;
-                let fetchMore = true;
-                while (fetchMore) {
-                    const { data, error } = await supabase.from('student_master').select('*').range(from, from + 999);
-                    if (error) throw error;
-                    allData = allData.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
-
-                btn.innerHTML = originalHtml;
-                if (window.lucide) lucide.createIcons();
-
-                if (allData.length === 0) return Toast.show('No students to export.', 'warning');
-
-                const formattedData = allData.map(s => ({
-                    "Student ID": s.student_id,
-                    "Full Name": s.full_name || "",
-                    "Arabic Name": s.arabic_name || "",
-                    "National ID": s.national_id || "",
-                    "Email": s.email || "",
-                    "Mobile": s.mobile || "",
-                    "College": s.college || "",
-                    "Program": s.program || "",
-                    "Source": s.source || ""
-                }));
-
-                const worksheet = XLSX.utils.json_to_sheet(formattedData);
-                const workbook = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(workbook, worksheet, "Students Master List");
-                XLSX.writeFile(workbook, `Students_Master_List_${new Date().toISOString().split('T')[0]}.xlsx`);
-            } catch (err) {
-                btn.innerHTML = originalHtml;
-                if (window.lucide) lucide.createIcons();
-                Toast.show('Export failed: ' + err.message, 'error');
-            }
-        });
     }
 
     async loadTransactions() {
@@ -1977,7 +1931,7 @@ class App {
 
             status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing data for upload...`;
             
-            const records = [];
+            const recordsMap = new Map();
             for (const row of dataRows) {
                 if (!row || row.length === 0) continue;
                 
@@ -2010,11 +1964,13 @@ class App {
                 }
 
                 if (student_id) {
-                    records.push({
+                    recordsMap.set(student_id, {
                         student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
                     });
                 }
             }
+
+            const records = Array.from(recordsMap.values());
 
             status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${records.length} records to database...`;
             
