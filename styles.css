@@ -20,7 +20,7 @@
     --danger: #ef4444;
     --danger-bg: rgba(239, 68, 68, 0.15);
     
-    --sidebar-width: 260px;
+    --sidebar-width: 220px;
 }
 
 * {
@@ -101,7 +101,7 @@ body {
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    padding: 1rem;
+    padding: 1.5rem;
     position: relative;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     z-index: 10001;
@@ -111,7 +111,7 @@ body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 2.5rem;
 }
 
 .logo-icon {
@@ -122,7 +122,7 @@ body {
 }
 
 .logo-text {
-    font-size: 0.95rem;
+    font-size: 1.25rem;
     font-weight: 700;
     letter-spacing: -0.025em;
     color: var(--text-main);
@@ -138,14 +138,13 @@ body {
 .nav-link {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.6rem 0.85rem;
+    gap: 0.85rem;
+    padding: 0.75rem 1rem;
     color: var(--text-muted);
     text-decoration: none;
     border-radius: 0.75rem;
     transition: all 0.2s ease;
     font-weight: 500;
-    font-size: 0.85rem;
     position: relative;
     overflow: hidden;
 }
@@ -179,8 +178,8 @@ body {
 }
 
 .nav-link i {
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
 }
 
 /* User Mini Card */
@@ -189,7 +188,7 @@ body {
     padding: 0.75rem;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border-color);
-    border-radius: 1rem;
+    border-radius: 0.75rem;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -202,8 +201,8 @@ body {
 }
 
 .user-avatar {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     background: linear-gradient(135deg, var(--primary), #8b5cf6);
     border-radius: 50%;
     display: flex;
@@ -810,13 +809,13 @@ select option {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     color: var(--text-main);
     background-color: transparent;
 }
 
 .pivot-table th, .pivot-table td {
-    padding: 0.6rem 1rem;
+    padding: 1rem 1.5rem;
     text-align: right;
     white-space: nowrap;
     border-bottom: 1px solid var(--border-color);
