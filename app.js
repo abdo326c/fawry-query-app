@@ -531,7 +531,7 @@ class App {
             // Auto-switch back to transactions tab after 1.5 seconds
             setTimeout(() => {
                 document.getElementById('import-progress').classList.add('hidden');
-                document.querySelector('.tab-btn[data-tab="transactions"]').click();
+                document.querySelector('.nav-link[data-tab="transactions"]').click();
                 this.loadTransactions();
             }, 1500);
         } finally {
