@@ -274,6 +274,7 @@ class App {
                 if (tabId === 'mappings') this.loadMappings();
                 if (tabId === 'fixes') this.loadFixes();
                 if (tabId === 'history') this.loadHistory();
+                if (tabId === 'payment-links') this.loadPaymentLinks();
                 // Students Details does not require initial data load
             });
         });
