@@ -113,12 +113,12 @@ class App {
         this.initNavigation();
         this.initImport();
         this.initModals();
-        this.initPaymentLinks();
         this.initBulkUploads();
         this.initFilters();
         this.initPagination();
         this.initExport();
         this.initReapply();
+        this.initPaymentLinks();
         this.initDashboard();
         this.initStudentMaster();
         this.initHistory();
@@ -2402,13 +2402,13 @@ class App {
     }
 
 
-
+    // ==========================================
+    // Payment Links Catalog
+    // ==========================================
     initPaymentLinks() {
         this.paymentLinksPage = 1;
         this.paymentLinksSearch = '';
         
-        // Navigation listener is handled by initNavigation(). 
-        // We just need a listener for when the tab is clicked to load data.
         document.querySelectorAll('.nav-item').forEach(item => {
             if (item.getAttribute('data-target') === 'payment-links') {
                 item.addEventListener('click', () => {
@@ -2480,13 +2480,6 @@ class App {
                 try {
                     Toast.show("Importing... Please wait.", "info");
                     
-                    // We'll use a dynamic import of SheetJS or assume it's loaded if CSV processor uses it.
-                    // If not, we'll parse standard CSV or rely on the user converting to CSV.
-                    // For robustness, let's parse basic CSV if it's a CSV, otherwise we need SheetJS.
-                    // Assuming the user has SheetJS loaded or can provide CSV. 
-                    // To keep it simple, we use the already existing file parsing logic if possible, 
-                    // or implement a quick XLSX parse since SheetJS is included in index.html (xlsx.full.min.js is used by csv-processor).
-                    
                     const reader = new FileReader();
                     reader.onload = async (e) => {
                         const data = new Uint8Array(e.target.result);
@@ -2502,20 +2495,18 @@ class App {
                             creation_date: row['Creation Date'] || row['creation_date'] || null,
                             expiry_date: row['Expiry Date'] || row['expiry_date'] || null,
                             invoice_link: row['Invoice Link'] || row['Payment Link'] || row['invoice_link'] || row['PAYMENT LINK'] || null
-                        })).filter(r => r.invoice_link); // Only import rows that have a link
+                        })).filter(r => r.invoice_link);
                         
                         if (upsertData.length === 0) {
                             Toast.show("No valid links found in file.", "error");
                             return;
                         }
 
-                        // Chunk the insert
                         let imported = 0;
                         for (let i = 0; i < upsertData.length; i += 1000) {
                             const chunk = upsertData.slice(i, i + 1000);
                             const { error } = await supabase.from('payment_links').upsert(chunk, { onConflict: 'invoice_number' });
                             if (error) {
-                                // Fallback to raw insert if upsert fails due to missing unique constraint
                                 const { error: insertErr } = await supabase.from('payment_links').insert(chunk);
                                 if (insertErr) throw insertErr;
                             }
@@ -2626,7 +2617,6 @@ class App {
                 tbody.appendChild(tr);
             });
             
-            // Attach event listeners for edit and delete
             tbody.querySelectorAll('.copy-link-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const url = e.currentTarget.getAttribute('data-url');
@@ -2648,11 +2638,9 @@ class App {
                         document.getElementById('link-invoice').value = link.invoice_number || '';
                         document.getElementById('link-created').value = link.creation_date ? link.creation_date.split('T')[0] : '';
                         
-                        // datetime-local input expects YYYY-MM-DDThh:mm
                         let expiryStr = '';
                         if (link.expiry_date) {
                             const d = new Date(link.expiry_date);
-                            // Adjust for local timezone offset to display correctly in input
                             const tzoffset = (new Date()).getTimezoneOffset() * 60000;
                             const localISOTime = (new Date(d - tzoffset)).toISOString().slice(0, 16);
                             expiryStr = localISOTime;
@@ -2679,7 +2667,6 @@ class App {
                 });
             });
 
-            // Update Pagination
             const totalPages = Math.ceil(count / this.pageSize) || 1;
             document.getElementById('links-page-info').textContent = `Page ${this.paymentLinksPage} of ${totalPages}`;
             document.getElementById('btn-links-prev').disabled = this.paymentLinksPage === 1;
@@ -2692,10 +2679,6 @@ class App {
         if (window.lucide) lucide.createIcons();
     }
 
-
-}
-
-// Start app
 }
 
 // Start app
