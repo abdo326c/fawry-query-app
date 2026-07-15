@@ -2679,7 +2679,12 @@ class App {
                 tr.innerHTML = `
                     <td><div class="truncate-text" title="${link.name || ''}">${link.name || '-'}</div></td>
                     <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
-                    <td><span class="badge badge-gray">${link.invoice_number || '-'}</span></td>
+                    <td>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span class="badge badge-gray">${link.invoice_number || '-'}</span>
+                            ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${link.invoice_number}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 14px; height: 14px;"></i></button>` : ''}
+                        </div>
+                    </td>
                     <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
                     <td>${dateBadge}</td>
                     <td>
@@ -2695,13 +2700,22 @@ class App {
             
             tbody.querySelectorAll('.copy-link-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
-                    const url = e.currentTarget.getAttribute('data-url');
+                    const url = e.currentTarget.dataset.url;
                     navigator.clipboard.writeText(url).then(() => {
                         Toast.show("Link copied to clipboard!", "success");
                     });
                 });
             });
-            
+
+            tbody.querySelectorAll('.copy-invoice-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const invoice = e.currentTarget.dataset.invoice;
+                    navigator.clipboard.writeText(invoice).then(() => {
+                        Toast.show("Invoice number copied!", "success");
+                    });
+                });
+            });
+
             tbody.querySelectorAll('.edit-link-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const id = e.currentTarget.getAttribute('data-id');
