@@ -2684,9 +2684,9 @@ class App {
                     <td>${dateBadge}</td>
                     <td>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button class="btn btn-outline btn-sm copy-link-btn" data-url="${link.invoice_link}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy</button>
-                            <button class="btn btn-outline btn-sm edit-link-btn" data-id="${link.id}">Edit</button>
-                            <button class="btn btn-outline btn-sm delete-link-btn" style="color: var(--danger);" data-id="${link.id}">Delete</button>
+                            <button class="btn btn-outline copy-link-btn" data-url="${link.invoice_link}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy</button>
+                            <button class="btn btn-outline edit-link-btn" data-id="${link.id}">Edit</button>
+                            <button class="btn btn-outline delete-link-btn" style="color: var(--danger);" data-id="${link.id}">Delete</button>
                         </div>
                     </td>
                 `;
