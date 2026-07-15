@@ -2469,6 +2469,42 @@ class App {
             }
         });
 
+        // Download Template
+        document.getElementById('btn-template-links')?.addEventListener('click', () => {
+            const templateData = [
+                {
+                    'Name': 'Example - Tuition Fees Fall 2025',
+                    'Invoice Link': 'https://www.atfawry.com/invoice/pay/XXXXX',
+                    'Creation Date': '2025-01-15',
+                    'Expiry Date': '2025-12-31 23:59:59',
+                    'Amount': 12000,
+                    'Invoice Number': 'XXXXX'
+                },
+                {
+                    'Name': '',
+                    'Invoice Link': '',
+                    'Creation Date': '',
+                    'Expiry Date': '',
+                    'Amount': '',
+                    'Invoice Number': ''
+                }
+            ];
+            const ws = XLSX.utils.json_to_sheet(templateData);
+            // Set column widths for readability
+            ws['!cols'] = [
+                { wch: 45 }, // Name
+                { wch: 55 }, // Invoice Link
+                { wch: 15 }, // Creation Date
+                { wch: 22 }, // Expiry Date
+                { wch: 12 }, // Amount
+                { wch: 18 }  // Invoice Number
+            ];
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Payment Links");
+            XLSX.writeFile(wb, "Payment_Links_Import_Template.xlsx");
+            Toast.show("Template downloaded!", "success");
+        });
+
         // Import Links
         document.getElementById('btn-import-links')?.addEventListener('click', () => {
             const input = document.createElement('input');
