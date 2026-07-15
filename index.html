@@ -95,7 +95,12 @@
                 <a href="#student-master" class="nav-link" data-tab="student-master">
                     <i data-lucide="users"></i> Students Details
                 </a>
-            </nav>
+            
+            <a href="#" class="nav-item" data-target="payment-links">
+                <i data-lucide="link"></i>
+                <span>Payment Links</span>
+            </a>
+</nav>
 
             <!-- User Profile & Logout -->
             <div class="user-profile" id="user-profile-section" style="display: none;">
@@ -590,7 +595,61 @@
                     </div>
                 </section>
             
-        </main>
+        
+        <!-- Payment Links View -->
+        <section id="view-payment-links" class="view hidden">
+            <header class="header">
+                <div class="header-content">
+                    <h1>Payment Links Catalog</h1>
+                    <p class="subtitle">Categorize and fetch payment links for any purpose</p>
+                </div>
+            </header>
+
+            <div class="controls-bar glass-card">
+                <div class="search-box">
+                    <i data-lucide="search"></i>
+                    <input type="text" id="links-search" placeholder="Search by name, invoice, amount...">
+                </div>
+                <div class="actions">
+                    <button class="btn btn-outline" id="btn-import-links">
+                        <i data-lucide="upload"></i> Import Excel
+                    </button>
+                    <button class="btn btn-outline" id="btn-export-links">
+                        <i data-lucide="download"></i> Export
+                    </button>
+                    <button class="btn btn-primary" id="btn-add-link">
+                        <i data-lucide="plus"></i> Add Link
+                    </button>
+                </div>
+            </div>
+
+            <div class="table-container glass-card">
+                <table class="data-table" id="links-table">
+                    <thead>
+                        <tr>
+                            <th>Item Name</th>
+                            <th>Amount</th>
+                            <th>Invoice Number</th>
+                            <th>Creation Date</th>
+                            <th>Expiry Date</th>
+                            <th>Payment Link</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="links-table-body">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="pagination">
+                <button class="btn btn-outline btn-sm" id="btn-links-prev" disabled>Previous</button>
+                <span id="links-page-info">Page 1</span>
+                <button class="btn btn-outline btn-sm" id="btn-links-next">Next</button>
+            </div>
+        </section>
+
+    </main>
     </div>
 
     <!-- Mappings Modal -->
@@ -726,6 +785,52 @@
             <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 1rem;">
                 <button class="btn btn-outline" onclick="document.getElementById('modal-reapply-preview').classList.add('hidden')">Cancel</button>
                 <button class="btn btn-primary" id="btn-apply-reapply-fixes"><i data-lucide="check-circle" style="width: 18px; height: 18px; margin-right: 8px;"></i> Apply Selected Changes</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Add/Edit Link Modal -->
+    <div id="modal-link" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 id="modal-link-title">Add Payment Link</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-link').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="link-id">
+                <div class="form-group">
+                    <label>Item Name</label>
+                    <input type="text" id="link-name" class="form-control" placeholder="e.g., Diploma Fees">
+                </div>
+                <div class="form-group" style="display: flex; gap: 1rem;">
+                    <div style="flex: 1;">
+                        <label>Amount (EGP)</label>
+                        <input type="number" id="link-amount" class="form-control" placeholder="1000">
+                    </div>
+                    <div style="flex: 1;">
+                        <label>Invoice Number</label>
+                        <input type="text" id="link-invoice" class="form-control" placeholder="1234ABC">
+                    </div>
+                </div>
+                <div class="form-group" style="display: flex; gap: 1rem;">
+                    <div style="flex: 1;">
+                        <label>Creation Date</label>
+                        <input type="date" id="link-created" class="form-control">
+                    </div>
+                    <div style="flex: 1;">
+                        <label>Expiry Date</label>
+                        <input type="datetime-local" id="link-expiry" class="form-control">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Payment Link (URL)</label>
+                    <input type="url" id="link-url" class="form-control" placeholder="https://atfawry.com/...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="document.getElementById('modal-link').classList.add('hidden')">Cancel</button>
+                <button class="btn btn-primary" id="btn-save-link">Save Link</button>
             </div>
         </div>
     </div>

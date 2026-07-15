@@ -113,6 +113,7 @@ class App {
         this.initNavigation();
         this.initImport();
         this.initModals();
+        this.initPaymentLinks();
         this.initBulkUploads();
         this.initFilters();
         this.initPagination();
@@ -2403,6 +2404,297 @@ class App {
 }
 
 // Start app
+
+    initPaymentLinks() {
+        this.paymentLinksPage = 1;
+        this.paymentLinksSearch = '';
+        
+        // Navigation listener is handled by initNavigation(). 
+        // We just need a listener for when the tab is clicked to load data.
+        document.querySelectorAll('.nav-item').forEach(item => {
+            if (item.getAttribute('data-target') === 'payment-links') {
+                item.addEventListener('click', () => {
+                    this.loadPaymentLinks();
+                });
+            }
+        });
+        
+        document.getElementById('links-search')?.addEventListener('input', (e) => {
+            this.paymentLinksSearch = e.target.value.toLowerCase();
+            this.paymentLinksPage = 1;
+            this.loadPaymentLinks();
+        });
+
+        document.getElementById('btn-add-link')?.addEventListener('click', () => {
+            document.getElementById('modal-link-title').textContent = 'Add Payment Link';
+            document.getElementById('link-id').value = '';
+            document.getElementById('link-name').value = '';
+            document.getElementById('link-amount').value = '';
+            document.getElementById('link-invoice').value = '';
+            document.getElementById('link-created').value = '';
+            document.getElementById('link-expiry').value = '';
+            document.getElementById('link-url').value = '';
+            document.getElementById('modal-link').classList.remove('hidden');
+        });
+
+        document.getElementById('btn-save-link')?.addEventListener('click', async () => {
+            const id = document.getElementById('link-id').value;
+            const linkData = {
+                name: document.getElementById('link-name').value,
+                amount: parseFloat(document.getElementById('link-amount').value) || null,
+                invoice_number: document.getElementById('link-invoice').value || null,
+                creation_date: document.getElementById('link-created').value || null,
+                expiry_date: document.getElementById('link-expiry').value ? new Date(document.getElementById('link-expiry').value).toISOString() : null,
+                invoice_link: document.getElementById('link-url').value
+            };
+            
+            if (!linkData.name || !linkData.invoice_link) {
+                Toast.show("Name and Link URL are required", "error");
+                return;
+            }
+
+            try {
+                if (id) {
+                    const { error } = await supabase.from('payment_links').update(linkData).eq('id', id);
+                    if (error) throw error;
+                    Toast.show("Link updated", "success");
+                } else {
+                    const { error } = await supabase.from('payment_links').insert(linkData);
+                    if (error) throw error;
+                    Toast.show("Link added", "success");
+                }
+                document.getElementById('modal-link').classList.add('hidden');
+                this.loadPaymentLinks();
+            } catch (err) {
+                Toast.show("Error: " + err.message, "error");
+            }
+        });
+
+        // Import Links
+        document.getElementById('btn-import-links')?.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.xlsx, .csv';
+            input.onchange = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                try {
+                    Toast.show("Importing... Please wait.", "info");
+                    
+                    // We'll use a dynamic import of SheetJS or assume it's loaded if CSV processor uses it.
+                    // If not, we'll parse standard CSV or rely on the user converting to CSV.
+                    // For robustness, let's parse basic CSV if it's a CSV, otherwise we need SheetJS.
+                    // Assuming the user has SheetJS loaded or can provide CSV. 
+                    // To keep it simple, we use the already existing file parsing logic if possible, 
+                    // or implement a quick XLSX parse since SheetJS is included in index.html (xlsx.full.min.js is used by csv-processor).
+                    
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        const json = XLSX.utils.sheet_to_json(worksheet);
+                        
+                        const upsertData = json.map(row => ({
+                            name: row['Name'] || row['Item Name'] || row['name'] || 'Unknown',
+                            amount: row['Amount'] || row['amount'] || null,
+                            invoice_number: row['Invoice Number'] || row['invoice_number'] || null,
+                            creation_date: row['Creation Date'] || row['creation_date'] || null,
+                            expiry_date: row['Expiry Date'] || row['expiry_date'] || null,
+                            invoice_link: row['Invoice Link'] || row['Payment Link'] || row['invoice_link'] || row['PAYMENT LINK'] || null
+                        })).filter(r => r.invoice_link); // Only import rows that have a link
+                        
+                        if (upsertData.length === 0) {
+                            Toast.show("No valid links found in file.", "error");
+                            return;
+                        }
+
+                        // Chunk the insert
+                        let imported = 0;
+                        for (let i = 0; i < upsertData.length; i += 1000) {
+                            const chunk = upsertData.slice(i, i + 1000);
+                            const { error } = await supabase.from('payment_links').upsert(chunk, { onConflict: 'invoice_number' });
+                            if (error) {
+                                // Fallback to raw insert if upsert fails due to missing unique constraint
+                                const { error: insertErr } = await supabase.from('payment_links').insert(chunk);
+                                if (insertErr) throw insertErr;
+                            }
+                            imported += chunk.length;
+                        }
+                        
+                        Toast.show(`Imported ${imported} links successfully`, "success");
+                        this.loadPaymentLinks();
+                    };
+                    reader.readAsArrayBuffer(file);
+                } catch (err) {
+                    Toast.show("Error importing: " + err.message, "error");
+                }
+            };
+            input.click();
+        });
+
+        // Export Links
+        document.getElementById('btn-export-links')?.addEventListener('click', async () => {
+            try {
+                Toast.show("Preparing export...", "info");
+                let allData = [];
+                let fetchMore = true;
+                let from = 0;
+                while (fetchMore) {
+                    const { data, error } = await supabase.from('payment_links').select('*').range(from, from + 999);
+                    if (error) throw error;
+                    if (!data || data.length === 0) break;
+                    allData = allData.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+                
+                const ws = XLSX.utils.json_to_sheet(allData);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Payment Links");
+                XLSX.writeFile(wb, "Payment_Links_Export.xlsx");
+                Toast.show("Export complete", "success");
+            } catch (err) {
+                Toast.show("Error exporting: " + err.message, "error");
+            }
+        });
+        
+        // Setup pagination
+        document.getElementById('btn-links-prev')?.addEventListener('click', () => {
+            if (this.paymentLinksPage > 1) {
+                this.paymentLinksPage--;
+                this.loadPaymentLinks();
+            }
+        });
+        document.getElementById('btn-links-next')?.addEventListener('click', () => {
+            this.paymentLinksPage++;
+            this.loadPaymentLinks();
+        });
+    }
+
+    async loadPaymentLinks() {
+        const tbody = document.getElementById('links-table-body');
+        if (!tbody) return;
+        
+        tbody.innerHTML = '<tr><td colspan="7" class="loading-state"><i data-lucide="loader" class="spin"></i> Loading links...</td></tr>';
+        if (window.lucide) lucide.createIcons();
+
+        try {
+            let query = supabase.from('payment_links').select('*', { count: 'exact' });
+            
+            if (this.paymentLinksSearch) {
+                query = query.or(`name.ilike.%${this.paymentLinksSearch}%,invoice_number.ilike.%${this.paymentLinksSearch}%`);
+            }
+            
+            const from = (this.paymentLinksPage - 1) * this.pageSize;
+            const to = from + this.pageSize - 1;
+            
+            const { data, count, error } = await query.order('created_at', { ascending: false }).range(from, to);
+            
+            if (error) throw error;
+            
+            if (!data || data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No payment links found</td></tr>';
+                document.getElementById('btn-links-prev').disabled = true;
+                document.getElementById('btn-links-next').disabled = true;
+                document.getElementById('links-page-info').textContent = 'Page 1 of 1';
+                return;
+            }
+            
+            tbody.innerHTML = '';
+            
+            data.forEach(link => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><div class="truncate-text" title="${link.name || ''}">${link.name || '-'}</div></td>
+                    <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
+                    <td><span class="badge badge-gray">${link.invoice_number || '-'}</span></td>
+                    <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
+                    <td>${link.expiry_date ? new Date(link.expiry_date).toLocaleDateString() : '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline copy-link-btn" data-url="${link.invoice_link}">
+                            <i data-lucide="copy"></i> Copy
+                        </button>
+                    </td>
+                    <td>
+                        <div class="action-buttons">
+                            <button class="btn-icon edit-link-btn" data-id="${link.id}" title="Edit"><i data-lucide="edit-2"></i></button>
+                            <button class="btn-icon delete-link-btn" data-id="${link.id}" title="Delete"><i data-lucide="trash-2"></i></button>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+            
+            // Attach event listeners for edit and delete
+            tbody.querySelectorAll('.copy-link-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const url = e.currentTarget.getAttribute('data-url');
+                    navigator.clipboard.writeText(url).then(() => {
+                        Toast.show("Link copied to clipboard!", "success");
+                    });
+                });
+            });
+            
+            tbody.querySelectorAll('.edit-link-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const id = e.currentTarget.getAttribute('data-id');
+                    const link = data.find(l => l.id === id);
+                    if (link) {
+                        document.getElementById('modal-link-title').textContent = 'Edit Payment Link';
+                        document.getElementById('link-id').value = link.id;
+                        document.getElementById('link-name').value = link.name || '';
+                        document.getElementById('link-amount').value = link.amount || '';
+                        document.getElementById('link-invoice').value = link.invoice_number || '';
+                        document.getElementById('link-created').value = link.creation_date ? link.creation_date.split('T')[0] : '';
+                        
+                        // datetime-local input expects YYYY-MM-DDThh:mm
+                        let expiryStr = '';
+                        if (link.expiry_date) {
+                            const d = new Date(link.expiry_date);
+                            // Adjust for local timezone offset to display correctly in input
+                            const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+                            const localISOTime = (new Date(d - tzoffset)).toISOString().slice(0, 16);
+                            expiryStr = localISOTime;
+                        }
+                        document.getElementById('link-expiry').value = expiryStr;
+                        document.getElementById('link-url').value = link.invoice_link || '';
+                        document.getElementById('modal-link').classList.remove('hidden');
+                    }
+                });
+            });
+            
+            tbody.querySelectorAll('.delete-link-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    if (confirm("Are you sure you want to delete this link?")) {
+                        const id = e.currentTarget.getAttribute('data-id');
+                        const { error } = await supabase.from('payment_links').delete().eq('id', id);
+                        if (error) {
+                            Toast.show("Error deleting link: " + error.message, "error");
+                        } else {
+                            Toast.show("Link deleted", "success");
+                            this.loadPaymentLinks();
+                        }
+                    }
+                });
+            });
+
+            // Update Pagination
+            const totalPages = Math.ceil(count / this.pageSize) || 1;
+            document.getElementById('links-page-info').textContent = `Page ${this.paymentLinksPage} of ${totalPages}`;
+            document.getElementById('btn-links-prev').disabled = this.paymentLinksPage === 1;
+            document.getElementById('btn-links-next').disabled = this.paymentLinksPage === totalPages;
+
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="7" class="empty-state text-danger">Error: ${err.message}</td></tr>`;
+        }
+        
+        if (window.lucide) lucide.createIcons();
+    }
+
+
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
