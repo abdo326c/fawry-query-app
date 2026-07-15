@@ -2520,17 +2520,40 @@ class App {
                     const reader = new FileReader();
                     reader.onload = async (e) => {
                         const data = new Uint8Array(e.target.result);
-                        const workbook = XLSX.read(data, { type: 'array' });
+                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
                         const firstSheetName = workbook.SheetNames[0];
                         const worksheet = workbook.Sheets[firstSheetName];
                         const json = XLSX.utils.sheet_to_json(worksheet);
                         
+                        // Helper: convert Excel date (serial number or Date object or string) to ISO string
+                        const parseDate = (val) => {
+                            if (!val) return null;
+                            if (val instanceof Date) return val.toISOString().split('T')[0];
+                            if (typeof val === 'number') {
+                                // Excel serial date: days since 1899-12-30
+                                const excelEpoch = new Date(1899, 11, 30);
+                                const d = new Date(excelEpoch.getTime() + val * 86400000);
+                                return d.toISOString().split('T')[0];
+                            }
+                            return String(val);
+                        };
+                        const parseDateTime = (val) => {
+                            if (!val) return null;
+                            if (val instanceof Date) return val.toISOString();
+                            if (typeof val === 'number') {
+                                const excelEpoch = new Date(1899, 11, 30);
+                                const d = new Date(excelEpoch.getTime() + val * 86400000);
+                                return d.toISOString();
+                            }
+                            return new Date(val).toISOString();
+                        };
+
                         const upsertData = json.map(row => ({
                             name: row['Name'] || row['Item Name'] || row['name'] || 'Unknown',
                             amount: row['Amount'] || row['amount'] || null,
                             invoice_number: row['Invoice Number'] || row['invoice_number'] || null,
-                            creation_date: row['Creation Date'] || row['creation_date'] || null,
-                            expiry_date: row['Expiry Date'] || row['expiry_date'] || null,
+                            creation_date: parseDate(row['Creation Date'] || row['creation_date']),
+                            expiry_date: parseDateTime(row['Expiry Date'] || row['expiry_date']),
                             invoice_link: row['Invoice Link'] || row['Payment Link'] || row['invoice_link'] || row['PAYMENT LINK'] || null
                         })).filter(r => r.invoice_link);
                         
