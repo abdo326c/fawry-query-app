@@ -2401,9 +2401,7 @@ class App {
         }
     }
 
-}
 
-// Start app
 
     initPaymentLinks() {
         this.paymentLinksPage = 1;
@@ -2695,6 +2693,12 @@ class App {
     }
 
 
+}
+
+// Start app
+}
+
+// Start app
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
