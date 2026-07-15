@@ -750,7 +750,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=28"></script>
+    <script type="module" src="app.js?v=29"></script>
     <script>
         // Initialize icons
         lucide.createIcons();
@@ -794,7 +794,7 @@
 
     <!-- Add/Edit Link Modal -->
     <div id="modal-link" class="modal hidden">
-        <div class="modal-content glass-card" style="max-width: 500px;">
+        <div class="modal-content glass-card" style="max-width: 520px;">
             <div class="modal-header">
                 <h2 id="modal-link-title">Add Payment Link</h2>
                 <button class="btn-close" onclick="document.getElementById('modal-link').classList.add('hidden')"><i data-lucide="x"></i></button>
@@ -803,36 +803,36 @@
                 <input type="hidden" id="link-id">
                 <div class="form-group">
                     <label>Item Name</label>
-                    <input type="text" id="link-name" class="form-control" placeholder="e.g., Diploma Fees">
+                    <input type="text" id="link-name" class="input-text" placeholder="e.g., Diploma Fees - Fall 2025">
                 </div>
-                <div class="form-group" style="display: flex; gap: 1rem;">
-                    <div style="flex: 1;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
                         <label>Amount (EGP)</label>
-                        <input type="number" id="link-amount" class="form-control" placeholder="1000">
+                        <input type="number" id="link-amount" class="input-text" placeholder="1000">
                     </div>
-                    <div style="flex: 1;">
+                    <div class="form-group">
                         <label>Invoice Number</label>
-                        <input type="text" id="link-invoice" class="form-control" placeholder="1234ABC">
+                        <input type="text" id="link-invoice" class="input-text" placeholder="1234ABC">
                     </div>
                 </div>
-                <div class="form-group" style="display: flex; gap: 1rem;">
-                    <div style="flex: 1;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
                         <label>Creation Date</label>
-                        <input type="date" id="link-created" class="form-control">
+                        <input type="date" id="link-created" class="input-text">
                     </div>
-                    <div style="flex: 1;">
+                    <div class="form-group">
                         <label>Expiry Date</label>
-                        <input type="datetime-local" id="link-expiry" class="form-control">
+                        <input type="datetime-local" id="link-expiry" class="input-text">
                     </div>
                 </div>
                 <div class="form-group">
                     <label>Payment Link (URL)</label>
-                    <input type="url" id="link-url" class="form-control" placeholder="https://atfawry.com/...">
+                    <input type="url" id="link-url" class="input-text" placeholder="https://atfawry.com/...">
                 </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-outline" onclick="document.getElementById('modal-link').classList.add('hidden')">Cancel</button>
-                <button class="btn btn-primary" id="btn-save-link">Save Link</button>
+                <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+                    <button class="btn btn-outline" style="flex: 1;" onclick="document.getElementById('modal-link').classList.add('hidden')">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-link" style="flex: 2;">Save Link</button>
+                </div>
             </div>
         </div>
     </div>
