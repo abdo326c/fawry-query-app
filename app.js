@@ -2652,18 +2652,35 @@ class App {
                 return;
             }
             
+            // Sort data: expired at the bottom, otherwise keep DB sort (created_at DESC)
+            const now = new Date();
+            data.sort((a, b) => {
+                const isAExpired = a.expiry_date && new Date(a.expiry_date) < now;
+                const isBExpired = b.expiry_date && new Date(b.expiry_date) < now;
+                
+                if (isAExpired && !isBExpired) return 1;
+                if (!isAExpired && isBExpired) return -1;
+                return 0;
+            });
+
             tbody.innerHTML = '';
             
             data.forEach(link => {
+                const isExpired = link.expiry_date && new Date(link.expiry_date) < now;
+                const rowStyle = isExpired ? 'background-color: var(--danger-bg); opacity: 0.8;' : '';
+                const dateBadge = isExpired ? `<span class="badge error">${new Date(link.expiry_date).toLocaleDateString()}</span>` 
+                                          : (link.expiry_date ? new Date(link.expiry_date).toLocaleDateString() : '-');
+                                          
                 const tr = document.createElement('tr');
+                if (rowStyle) tr.setAttribute('style', rowStyle);
                 tr.innerHTML = `
                     <td><div class="truncate-text" title="${link.name || ''}">${link.name || '-'}</div></td>
                     <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
                     <td><span class="badge badge-gray">${link.invoice_number || '-'}</span></td>
                     <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
-                    <td>${link.expiry_date ? new Date(link.expiry_date).toLocaleDateString() : '-'}</td>
+                    <td>${dateBadge}</td>
                     <td>
-                        <button class="btn btn-sm btn-outline copy-link-btn" data-url="${link.invoice_link}">
+                        <button class="btn btn-sm btn-outline copy-link-btn" data-url="${link.invoice_link}" ${isExpired ? 'disabled title="Link Expired"' : ''}>
                             <i data-lucide="copy"></i> Copy
                         </button>
                     </td>
