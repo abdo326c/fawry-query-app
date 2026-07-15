@@ -597,19 +597,12 @@
         
         <!-- Payment Links View -->
         <section id="view-payment-links" class="view">
-            <header class="header">
-                <div class="header-content">
+            <div class="header">
+                <div>
                     <h1>Payment Links Catalog</h1>
-                    <p class="subtitle">Categorize and fetch payment links for any purpose</p>
+                    <p class="subtitle" style="margin-top: 0.25rem; font-size: 0.9rem; color: var(--text-muted);">Categorize and fetch payment links for any purpose</p>
                 </div>
-            </header>
-
-            <div class="controls-bar glass-card">
-                <div class="search-box">
-                    <i data-lucide="search"></i>
-                    <input type="text" id="links-search" placeholder="Search by name, invoice, amount...">
-                </div>
-                <div class="actions">
+                <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                     <button class="btn btn-outline" id="btn-template-links">
                         <i data-lucide="file-spreadsheet"></i> Download Template
                     </button>
@@ -622,6 +615,12 @@
                     <button class="btn btn-primary" id="btn-add-link">
                         <i data-lucide="plus"></i> Add Link
                     </button>
+                </div>
+            </div>
+
+            <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
+                <div style="flex: 2; min-width: 200px;">
+                    <input type="text" id="links-search" class="input-text" placeholder="Search by name, invoice, amount...">
                 </div>
             </div>
 
@@ -750,7 +749,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=30"></script>
+    <script type="module" src="app.js?v=31"></script>
     <script>
         // Initialize icons
         lucide.createIcons();
