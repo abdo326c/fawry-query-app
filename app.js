@@ -2640,7 +2640,8 @@ class App {
             const from = (this.paymentLinksPage - 1) * this.pageSize;
             const to = from + this.pageSize - 1;
             
-            const { data, count, error } = await query.order('created_at', { ascending: false }).range(from, to);
+            // Order by the actual creation date from the link, not the database insert time
+            const { data, count, error } = await query.order('creation_date', { ascending: false, nullsFirst: false }).range(from, to);
             
             if (error) throw error;
             
@@ -2652,7 +2653,7 @@ class App {
                 return;
             }
             
-            // Sort data: expired at the bottom, otherwise keep DB sort (created_at DESC)
+            // Sort data: expired at the bottom, otherwise keep DB sort
             const now = new Date();
             data.sort((a, b) => {
                 const isAExpired = a.expiry_date && new Date(a.expiry_date) < now;
@@ -2660,19 +2661,21 @@ class App {
                 
                 if (isAExpired && !isBExpired) return 1;
                 if (!isAExpired && isBExpired) return -1;
-                return 0;
+                
+                // If both have same expiration status, ensure they stay sorted by creation_date DESC
+                const dateA = a.creation_date ? new Date(a.creation_date).getTime() : 0;
+                const dateB = b.creation_date ? new Date(b.creation_date).getTime() : 0;
+                return dateB - dateA;
             });
 
             tbody.innerHTML = '';
             
             data.forEach(link => {
                 const isExpired = link.expiry_date && new Date(link.expiry_date) < now;
-                const rowStyle = isExpired ? 'background-color: var(--danger-bg); opacity: 0.8;' : '';
                 const dateBadge = isExpired ? `<span class="badge error">${new Date(link.expiry_date).toLocaleDateString()}</span>` 
                                           : (link.expiry_date ? new Date(link.expiry_date).toLocaleDateString() : '-');
                                           
                 const tr = document.createElement('tr');
-                if (rowStyle) tr.setAttribute('style', rowStyle);
                 tr.innerHTML = `
                     <td><div class="truncate-text" title="${link.name || ''}">${link.name || '-'}</div></td>
                     <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
