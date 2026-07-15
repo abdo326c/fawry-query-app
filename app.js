@@ -2683,14 +2683,10 @@ class App {
                     <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
                     <td>${dateBadge}</td>
                     <td>
-                        <button class="btn btn-sm btn-outline copy-link-btn" data-url="${link.invoice_link}" ${isExpired ? 'disabled title="Link Expired"' : ''}>
-                            <i data-lucide="copy"></i> Copy
-                        </button>
-                    </td>
-                    <td>
-                        <div class="action-buttons">
-                            <button class="btn-icon edit-link-btn" data-id="${link.id}" title="Edit"><i data-lucide="edit-2"></i></button>
-                            <button class="btn-icon delete-link-btn" data-id="${link.id}" title="Delete"><i data-lucide="trash-2"></i></button>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <button class="btn btn-outline btn-sm copy-link-btn" data-url="${link.invoice_link}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy</button>
+                            <button class="btn btn-outline btn-sm edit-link-btn" data-id="${link.id}">Edit</button>
+                            <button class="btn btn-outline btn-sm delete-link-btn" style="color: var(--danger);" data-id="${link.id}">Delete</button>
                         </div>
                     </td>
                 `;
