@@ -272,6 +272,11 @@ export class FawryProcessor {
                     let merchant = this.getVal(row, 'Merchant Name') || "";
                     let bank = merchant === "Nile University Edu" ? "NUADIB64" : "NUADCB136";
                     
+                    // For Nile University (NUADCB136), use Net Amount instead of Item Price as the transaction amount
+                    if (bank === "NUADCB136" && !isNaN(netAmount) && netAmount !== 0) {
+                        itemPrice = netAmount;
+                    }
+                    
                     // Payment Date split
                     let rawDate = this.getVal(row, 'Payment Date') || "";
                     
