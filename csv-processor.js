@@ -446,6 +446,17 @@ export class FawryProcessor {
         
         for (let i = 0; i < transactions.length; i += chunkSize) {
             const chunk = transactions.slice(i, i + chunkSize);
+            
+            for (const row of chunk) {
+                for (const [key, val] of Object.entries(row)) {
+                    if (typeof val === 'string' && val.length > 50) {
+                        if (!['item_name', 'check_column', 'merchant_name', 'file_name'].includes(key)) {
+                            this.log(`DEBUG: ${key} is ${val.length} chars long (exceeds 50)`);
+                        }
+                    }
+                }
+            }
+
             const { error } = await supabase.from('transactions').upsert(chunk, { 
                 onConflict: 'reference_number,item_price,check_column', 
                 ignoreDuplicates: false 
