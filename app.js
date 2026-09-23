@@ -2776,6 +2776,8 @@ class App {
         const dateFrom = document.getElementById('erp-filter-date-from');
         const dateTo = document.getElementById('erp-filter-date-to');
         const bankFilter = document.getElementById('erp-filter-bank');
+        const itemNameFilter = document.getElementById('erp-filter-item-name');
+        const mappingFilter = document.getElementById('erp-filter-mapping');
         const btnExport = document.getElementById('btn-export-erp-file');
         const btnRecord = document.getElementById('btn-record-erp');
 
@@ -2791,6 +2793,16 @@ class App {
 
         if (bankFilter) {
             bankFilter.addEventListener('change', () => this.loadErpExport());
+        }
+        
+        if (itemNameFilter) {
+            itemNameFilter.addEventListener('change', () => this.loadErpExport());
+            itemNameFilter.addEventListener('keyup', (e) => { if (e.key === 'Enter') this.loadErpExport() });
+        }
+
+        if (mappingFilter) {
+            mappingFilter.addEventListener('change', () => this.loadErpExport());
+            mappingFilter.addEventListener('keyup', (e) => { if (e.key === 'Enter') this.loadErpExport() });
         }
 
         if (btnExport) {
@@ -2808,11 +2820,15 @@ class App {
         const dateFrom = document.getElementById('erp-filter-date-from').value;
         const dateTo = document.getElementById('erp-filter-date-to').value;
         const bank = document.getElementById('erp-filter-bank').value;
+        const itemName = document.getElementById('erp-filter-item-name').value.trim();
+        const mapping = document.getElementById('erp-filter-mapping').value.trim();
 
         let query = supabase.from('transactions').select('*');
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
         if (bank) query = query.eq('bank', bank);
+        if (itemName) query = query.ilike('item_name', `%${itemName}%`);
+        if (mapping) query = query.ilike('mapping', `%${mapping}%`);
 
         const { data, error } = await query;
         if (error) {
