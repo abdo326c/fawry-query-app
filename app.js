@@ -2831,7 +2831,7 @@ class App {
         tbody.innerHTML = '';
         this.erpData.forEach((row, index) => {
             const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
-            const description = `${row.ref_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`;
+            const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>${row.payment_date || ''}</td>
@@ -2859,7 +2859,7 @@ class App {
                 'Company': 'NU',
                 'Account': paddedAccount,
                 'Name': '',
-                'Description': `${row.ref_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`,
+                'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`,
                 'Debit': 0,
                 'Credit': row.net_amount,
                 'Currency': 'EGP',
@@ -2867,7 +2867,7 @@ class App {
                 'Offset Non-ledger account': row.bank,
                 'Offset main account': '',
                 'Method of payment': '',
-                'Payment reference': '',
+                'Payment reference': row.reference_number || '',
                 'Line number': index + 1
             };
         });
