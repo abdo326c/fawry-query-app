@@ -2829,7 +2829,11 @@ class App {
         if (!tbody) return;
 
         tbody.innerHTML = '';
-        this.erpData.forEach((row, index) => {
+        
+        // Only preview the first 5 transactions so the page doesn't get cluttered
+        const previewData = this.erpData.slice(0, 5);
+        
+        previewData.forEach((row, index) => {
             const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
             const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
@@ -2843,6 +2847,17 @@ class App {
             `;
             tbody.appendChild(tr);
         });
+
+        // Add a message if there are more transactions
+        if (this.erpData.length > 5) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 1rem;">
+                    ... and ${this.erpData.length - 5} more transactions ready for export.
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
     }
 
     downloadErpExport() {
