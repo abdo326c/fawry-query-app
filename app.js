@@ -2877,7 +2877,7 @@ class App {
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
         
         const dateStr = new Date().toISOString().split('T')[0];
-        XLSX.writeFile(wb, \`Dynamics_365_Export_\${dateStr}.xlsx\`);
+        XLSX.writeFile(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
         Toast.show('ERP Template Exported', 'success');
     }
 
