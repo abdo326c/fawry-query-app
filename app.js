@@ -119,6 +119,7 @@ class App {
         this.initExport();
         this.initReapply();
         this.initPaymentLinks();
+        this.initErpExport();
         this.initDashboard();
         this.initStudentMaster();
         this.initHistory();
@@ -275,6 +276,7 @@ class App {
                 if (tabId === 'fixes') this.loadFixes();
                 if (tabId === 'history') this.loadHistory();
                 if (tabId === 'payment-links') this.loadPaymentLinks();
+                if (tabId === 'erp-export') this.loadErpExport();
                 // Students Details does not require initial data load
             });
         });
@@ -2769,11 +2771,169 @@ class App {
         if (window.lucide) lucide.createIcons();
     }
 
-}
 
+    initErpExport() {
+        const dateFrom = document.getElementById('erp-filter-date-from');
+        const dateTo = document.getElementById('erp-filter-date-to');
+        const bankFilter = document.getElementById('erp-filter-bank');
+        const btnExport = document.getElementById('btn-export-erp-file');
+        const btnRecord = document.getElementById('btn-record-erp');
+
+        if (dateFrom && dateTo) {
+            const now = new Date();
+            dateFrom.value = \\-\-01\;
+            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+            dateTo.value = \\-\-\\;
+
+            dateFrom.addEventListener('change', () => this.loadErpExport());
+            dateTo.addEventListener('change', () => this.loadErpExport());
+        }
+
+        if (bankFilter) {
+            bankFilter.addEventListener('change', () => this.loadErpExport());
+        }
+
+        if (btnExport) {
+            btnExport.addEventListener('click', () => this.downloadErpExport());
+        }
+
+        if (btnRecord) {
+            btnRecord.addEventListener('click', () => this.recordErpReferences());
+        }
+    }
+
+    async loadErpExport() {
+        if (!this.currentUser) return;
+        
+        const dateFrom = document.getElementById('erp-filter-date-from').value;
+        const dateTo = document.getElementById('erp-filter-date-to').value;
+        const bank = document.getElementById('erp-filter-bank').value;
+
+        let query = supabase.from('transactions').select('*');
+        if (dateFrom) query = query.gte('payment_date', dateFrom);
+        if (dateTo) query = query.lte('payment_date', dateTo);
+        if (bank) query = query.eq('bank', bank);
+
+        const { data, error } = await query;
+        if (error) {
+            Toast.show('Error loading ERP data', 'error');
+            return;
+        }
+
+        this.erpData = data || [];
+        this.renderErpPreview();
+    }
+
+    renderErpPreview() {
+        const tbody = document.getElementById('erp-preview-body');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+        this.erpData.forEach((row, index) => {
+            const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
+            const description = \\/\/\/\\;
+            const tr = document.createElement('tr');
+            tr.innerHTML = \
+                <td>\</td>
+                <td>\</td>
+                <td>\</td>
+                <td>\</td>
+                <td>\</td>
+                <td>\</td>
+            \;
+            tbody.appendChild(tr);
+        });
+    }
+
+    downloadErpExport() {
+        if (!this.erpData || this.erpData.length === 0) {
+            Toast.show('No data to export', 'warning');
+            return;
+        }
+
+        const exportData = this.erpData.map((row, index) => {
+            const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
+            return {
+                'Date': row.payment_date,
+                'Voucher': '',
+                'Company': 'NU',
+                'Account': paddedAccount,
+                'Name': '',
+                'Description': \\/\/\/\\,
+                'Debit': 0,
+                'Credit': row.net_amount,
+                'Currency': 'EGP',
+                'Offset account type': 'Bank',
+                'Offset Non-ledger account': row.bank,
+                'Offset main account': '',
+                'Method of payment': '',
+                'Payment reference': '',
+                'Line number': index + 1
+            };
+        });
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
+        
+        const dateStr = new Date().toISOString().split('T')[0];
+        XLSX.writeFile(wb, \Dynamics_365_Export_\.xlsx\);
+        Toast.show('ERP Template Exported', 'success');
+    }
+
+    async recordErpReferences() {
+        if (!this.erpData || this.erpData.length === 0) {
+            Toast.show('No data selected', 'warning');
+            return;
+        }
+
+        const batchNum = document.getElementById('erp-batch-number').value.trim();
+        const startVoucher = document.getElementById('erp-voucher').value.trim();
+
+        if (!batchNum) {
+            Toast.show('Please enter a Journal Batch Number', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById('btn-record-erp');
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Saving...';
+        btn.disabled = true;
+
+        try {
+            const transactionIds = this.erpData.map(r => r.id);
+            const batchSize = 100;
+            
+            for (let i = 0; i < transactionIds.length; i += batchSize) {
+                const chunk = transactionIds.slice(i, i + batchSize);
+                const { error } = await supabase.from('transactions')
+                    .update({ 
+                        erp_batch_number: batchNum,
+                        erp_voucher: startVoucher
+                    })
+                    .in('id', chunk);
+
+                if (error) throw error;
+            }
+
+            Toast.show('Successfully saved ERP references', 'success');
+            document.getElementById('erp-batch-number').value = '';
+            document.getElementById('erp-voucher').value = '';
+        } catch (err) {
+            Toast.show('Error saving: ' + err.message, 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            if (window.lucide) lucide.createIcons();
+        }
+    }
+
+}
 // Start app
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+
+
 
 
