@@ -2781,9 +2781,9 @@ class App {
 
         if (dateFrom && dateTo) {
             const now = new Date();
-            dateFrom.value = \\-\-01\;
+            dateFrom.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
             const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-            dateTo.value = \\-\-\\;
+            dateTo.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
             dateFrom.addEventListener('change', () => this.loadErpExport());
             dateTo.addEventListener('change', () => this.loadErpExport());
@@ -2831,16 +2831,16 @@ class App {
         tbody.innerHTML = '';
         this.erpData.forEach((row, index) => {
             const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
-            const description = \\/\/\/\\;
+            const description = `${row.ref_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
-            tr.innerHTML = \
-                <td>\</td>
-                <td>\</td>
-                <td>\</td>
-                <td>\</td>
-                <td>\</td>
-                <td>\</td>
-            \;
+            tr.innerHTML = `
+                <td>${row.payment_date || ''}</td>
+                <td>${paddedAccount}</td>
+                <td>${description}</td>
+                <td>${row.net_amount || ''}</td>
+                <td>${row.bank || ''}</td>
+                <td>${index + 1}</td>
+            `;
             tbody.appendChild(tr);
         });
     }
@@ -2859,7 +2859,7 @@ class App {
                 'Company': 'NU',
                 'Account': paddedAccount,
                 'Name': '',
-                'Description': \\/\/\/\\,
+                'Description': `${row.ref_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`,
                 'Debit': 0,
                 'Credit': row.net_amount,
                 'Currency': 'EGP',
@@ -2877,7 +2877,7 @@ class App {
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
         
         const dateStr = new Date().toISOString().split('T')[0];
-        XLSX.writeFile(wb, \Dynamics_365_Export_\.xlsx\);
+        XLSX.writeFile(wb, \`Dynamics_365_Export_\${dateStr}.xlsx\`);
         Toast.show('ERP Template Exported', 'success');
     }
 
