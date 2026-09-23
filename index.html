@@ -909,6 +909,40 @@
         </div>
     </div>
 
+    <!-- ERP Warning Modal -->
+    <div id="modal-erp-warning" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
+                <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                    <i data-lucide="alert-triangle" style="width: 30px; height: 30px;"></i>
+                </div>
+            </div>
+            <div class="modal-body" style="padding-top: 0; overflow-y: auto; flex: 1;">
+                <h2 style="margin-bottom: 1rem; text-align: center;">Transactions with Invalid IDs found!</h2>
+                <p style="color: var(--text-muted); margin-bottom: 1rem; text-align: center;">Some transactions in this batch have errors in their ID column (e.g., missing ID or contains a name instead of an ID). Exporting these to Dynamics 365 will cause errors. Do you want to fix them first or continue anyway?</p>
+                <div class="table-container" style="margin-bottom: 1rem;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Ref Number</th>
+                                <th>Account/ID</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="erp-warning-table-body">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: center; gap: 1rem;">
+                <button class="btn btn-primary" onclick="document.getElementById('modal-erp-warning').classList.add('hidden')">Cancel & Fix Errors</button>
+                <button class="btn btn-outline" id="btn-erp-continue-export" style="color: var(--danger); border-color: var(--danger);">Continue Export Anyway</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
+
 

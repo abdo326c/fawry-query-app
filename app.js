@@ -2882,6 +2882,32 @@ class App {
             return;
         }
 
+        const invalidTransactions = this.erpData.filter(row => row.id_status && row.id_status !== 'Valid');
+
+        if (invalidTransactions.length > 0) {
+            const tbody = document.getElementById('erp-warning-table-body');
+            tbody.innerHTML = invalidTransactions.map(t => `
+                <tr>
+                    <td>${escapeHTML(t.reference_number || '')}</td>
+                    <td style="color: var(--danger); font-weight: bold;">${escapeHTML(t.student_id || '')}</td>
+                    <td>${t.net_amount}</td>
+                    <td>${escapeHTML(t.id_status)}</td>
+                </tr>
+            `).join('');
+
+            document.getElementById('modal-erp-warning').classList.remove('hidden');
+
+            const btnContinue = document.getElementById('btn-erp-continue-export');
+            btnContinue.onclick = () => {
+                document.getElementById('modal-erp-warning').classList.add('hidden');
+                this.generateErpExcel();
+            };
+        } else {
+            this.generateErpExcel();
+        }
+    }
+
+    generateErpExcel() {
         const exportData = this.erpData.map((row, index) => {
             const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
             return {
