@@ -278,42 +278,52 @@ export class FawryProcessor {
                     }
                     
                     // Payment Date split
-                    let rawDate = this.getVal(row, 'Payment Date') || "";
-                    
-                    // Excel dates might be numeric serials or pre-formatted strings
-                    let paymentDate = "";
-                    if (typeof rawDate === 'number') {
-                        // Excel serial date to JS Date
+                let rawDate = this.getVal(row, 'Payment Date') || "";
+                
+                // Excel dates might be numeric serials or pre-formatted strings
+                let paymentDate = "";
+                if (typeof rawDate === 'number') {
+                    // Safely convert Excel serial date using SheetJS if available, else fallback
+                    if (typeof XLSX !== 'undefined' && XLSX.SSF) {
+                        const parsed = XLSX.SSF.parse_date_code(rawDate);
+                        paymentDate = `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+                    } else {
                         const dateObj = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
                         paymentDate = dateObj.toISOString().split('T')[0];
-                    } else if (rawDate) {
-                        paymentDate = String(rawDate).split(' ')[0]; // take the date part
-                        
-                        // Parse DD/MM/YYYY or MM/DD/YYYY securely
-                        const separator = paymentDate.includes('/') ? '/' : (paymentDate.includes('-') ? '-' : null);
-                        if (separator) {
-                             const parts = paymentDate.split(separator);
-                             if (parts.length === 3) {
-                                 if (parts[2].length === 4) {
-                                     // Format is XX-XX-YYYY. We must figure out if it's DD-MM or MM-DD.
-                                     // Fawry defaults to DD-MM-YYYY.
-                                     // If Excel mutated it, it might be MM-DD-YYYY.
-                                     // Let's assume DD-MM-YYYY first (parts[0] is day, parts[1] is month).
-                                     let day = parseInt(parts[0]);
-                                     let month = parseInt(parts[1]);
-                                     // If month > 12, then it must be MM-DD-YYYY (Excel mutated it!)
-                                     if (month > 12) {
-                                         day = parseInt(parts[1]);
-                                         month = parseInt(parts[0]);
-                                     }
-                                     paymentDate = `${parts[2]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                                 } else if (parts[0].length === 4) {
-                                     // It's already YYYY-MM-DD
-                                     paymentDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-                                 }
-                             }
-                        }
                     }
+                } else if (rawDate) {
+                    paymentDate = String(rawDate).split(' ')[0]; // take the date part
+                    
+                    // Parse DD/MM/YYYY or MM/DD/YYYY securely
+                    const separator = paymentDate.includes('/') ? '/' : (paymentDate.includes('-') ? '-' : null);
+                    if (separator) {
+                         const parts = paymentDate.split(separator);
+                         if (parts.length === 3) {
+                             if (parts[2].length === 4) {
+                                 // Fawry standard is DD/MM/YYYY. If Excel mutates it, we must be careful.
+                                 let first = parseInt(parts[0]);
+                                 let second = parseInt(parts[1]);
+                                 let day = first;
+                                 let month = second;
+                                 
+                                 // Strictly identify if Excel inverted the date to MM-DD
+                                 if (first > 12 && second <= 12) {
+                                     month = first;
+                                     day = second;
+                                 } else if (second > 12 && first <= 12) {
+                                     day = first;
+                                     month = second;
+                                 }
+                                 // If both <= 12, we safely stick to Fawry's default of DD-MM-YYYY
+                                 
+                                 paymentDate = `${parts[2]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                             } else if (parts[0].length === 4) {
+                                 // It's already YYYY-MM-DD
+                                 paymentDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+                             }
+                         }
+                    }
+                }
 
                     let mobileNum = this.getVal(row, 'Customer Mobile Number');
                     let pStatus = this.getVal(row, 'Payment Status') || 'PAID';

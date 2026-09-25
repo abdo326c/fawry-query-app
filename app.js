@@ -842,11 +842,8 @@ class App {
             try {
                 const mappings = await fetchAll('item_mappings');
                 const fixes = await fetchAll('manual_fixes');
-                const links = await fetchAll('links');
 
                 // Build hash maps for O(1) lookups instead of O(n) find()
-                const linksMap = new Map();
-                links.forEach(l => linksMap.set(String(l.payment_reference_number), l));
                 const fixesMap = new Map();
                 fixes.forEach(f => fixesMap.set(String(f.reference_number), f));
                 const mappingsMap = new Map();
@@ -862,6 +859,17 @@ class App {
                     const { data: txs, error } = await supabase.from('transactions').select('*').range(from, from + 999);
                     if (error) throw error;
                     if (!txs || txs.length === 0) break;
+
+                    // Fetch links only for this specific chunk of transactions to prevent memory crashes
+                    const chunkRefs = txs.map(t => String(t.reference_number));
+                    const { data: chunkLinks } = await supabase.from('links')
+                        .select('payment_reference_number, custom_input_value')
+                        .in('payment_reference_number', chunkRefs);
+                        
+                    const linksMap = new Map();
+                    if (chunkLinks) {
+                        chunkLinks.forEach(l => linksMap.set(String(l.payment_reference_number), l));
+                    }
 
                     for (const tx of txs) {
                         let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
