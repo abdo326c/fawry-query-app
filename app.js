@@ -2801,22 +2801,20 @@ class App {
             const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
             dateTo.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-            dateFrom.addEventListener('change', () => this.loadErpExport());
-            dateTo.addEventListener('change', () => this.loadErpExport());
+            dateFrom.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
+            dateTo.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
         }
 
         if (bankFilter) {
-            bankFilter.addEventListener('change', () => this.loadErpExport());
+            bankFilter.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
         }
         
         if (itemNameFilter) {
             itemNameFilter.addEventListener('change', () => this.loadErpExport());
-            itemNameFilter.addEventListener('keyup', (e) => { if (e.key === 'Enter') this.loadErpExport() });
         }
 
         if (mappingFilter) {
             mappingFilter.addEventListener('change', () => this.loadErpExport());
-            mappingFilter.addEventListener('keyup', (e) => { if (e.key === 'Enter') this.loadErpExport() });
         }
 
         if (btnExport) {
@@ -2826,6 +2824,54 @@ class App {
         if (btnRecord) {
             btnRecord.addEventListener('click', () => this.recordErpReferences());
         }
+        
+        // Initial setup
+        setTimeout(() => {
+            this.updateErpDropdowns().then(() => this.loadErpExport());
+        }, 100);
+    }
+
+    async updateErpDropdowns() {
+        const dateFrom = document.getElementById('erp-filter-date-from')?.value;
+        const dateTo = document.getElementById('erp-filter-date-to')?.value;
+        const bank = document.getElementById('erp-filter-bank')?.value;
+
+        if (!dateFrom || !dateTo) return;
+
+        let query = supabase.from('transactions').select('item_name, mapping');
+        if (dateFrom) query = query.gte('payment_date', dateFrom);
+        if (dateTo) query = query.lte('payment_date', dateTo);
+        if (bank) query = query.eq('bank', bank);
+
+        let allData = [];
+        let from = 0;
+        let fetchMore = true;
+        while (fetchMore) {
+            const { data, error } = await query.range(from, from + 999);
+            if (error) break;
+            if (!data || data.length === 0) break;
+            allData = allData.concat(data);
+            if (data.length < 1000) fetchMore = false;
+            else from += 1000;
+        }
+
+        const items = [...new Set(allData.map(d => d.item_name).filter(Boolean))].sort();
+        const mappings = [...new Set(allData.map(d => d.mapping).filter(Boolean))].sort();
+
+        const itemSelect = document.getElementById('erp-filter-item-name');
+        const mappingSelect = document.getElementById('erp-filter-mapping');
+
+        if (itemSelect) {
+            const currentItem = itemSelect.value;
+            itemSelect.innerHTML = '<option value="">All Items</option>' + items.map(i => `<option value="${escapeHTML(i)}">${escapeHTML(i)}</option>`).join('');
+            if (items.includes(currentItem)) itemSelect.value = currentItem;
+        }
+        
+        if (mappingSelect) {
+            const currentMapping = mappingSelect.value;
+            mappingSelect.innerHTML = '<option value="">All Mappings</option>' + mappings.map(m => `<option value="${escapeHTML(m)}">${escapeHTML(m)}</option>`).join('');
+            if (mappings.includes(currentMapping)) mappingSelect.value = currentMapping;
+        }
     }
 
     async loadErpExport() {
@@ -2834,23 +2880,34 @@ class App {
         const dateFrom = document.getElementById('erp-filter-date-from').value;
         const dateTo = document.getElementById('erp-filter-date-to').value;
         const bank = document.getElementById('erp-filter-bank').value;
-        const itemName = document.getElementById('erp-filter-item-name').value.trim();
-        const mapping = document.getElementById('erp-filter-mapping').value.trim();
+        const itemName = document.getElementById('erp-filter-item-name').value;
+        const mapping = document.getElementById('erp-filter-mapping').value;
 
         let query = supabase.from('transactions').select('*');
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
         if (bank) query = query.eq('bank', bank);
-        if (itemName) query = query.ilike('item_name', `%${itemName}%`);
-        if (mapping) query = query.ilike('mapping', `%${mapping}%`);
+        if (itemName) query = query.eq('item_name', itemName);
+        if (mapping) query = query.eq('mapping', mapping);
 
-        const { data, error } = await query;
-        if (error) {
-            Toast.show('Error loading ERP data', 'error');
-            return;
+        let allData = [];
+        let from = 0;
+        let fetchMore = true;
+        
+        while (fetchMore) {
+            const { data, error } = await query.range(from, from + 999);
+            if (error) {
+                Toast.show('Error loading ERP data', 'error');
+                fetchMore = false;
+                break;
+            }
+            if (!data || data.length === 0) break;
+            allData = allData.concat(data);
+            if (data.length < 1000) fetchMore = false;
+            else from += 1000;
         }
 
-        this.erpData = data || [];
+        this.erpData = allData || [];
         this.renderErpPreview();
     }
 
