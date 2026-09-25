@@ -332,6 +332,27 @@ class App {
             cb.addEventListener('change', () => this.loadDashboard());
         });
 
+        // Add event delegation for the expand/collapse month rows
+        const pivotBody = document.getElementById('dashboard-pivot-body');
+        if (pivotBody) {
+            pivotBody.addEventListener('click', (e) => {
+                const monthRow = e.target.closest('.month-row');
+                if (monthRow) {
+                    const monthKey = monthRow.getAttribute('data-month');
+                    const toggleContainer = monthRow.querySelector('.month-toggle');
+                    const dayRows = pivotBody.querySelectorAll(`.day-row.month-${monthKey}`);
+                    
+                    if (toggleContainer.classList.contains('expanded')) {
+                        toggleContainer.classList.remove('expanded');
+                        dayRows.forEach(r => r.style.display = 'none');
+                    } else {
+                        toggleContainer.classList.add('expanded');
+                        dayRows.forEach(r => r.style.display = 'table-row');
+                    }
+                }
+            });
+        }
+
         // Copy Table
         const btnCopy = document.getElementById('btn-copy-pivot');
         if (btnCopy) {
@@ -446,49 +467,92 @@ class App {
                 }
             }
 
-            const pivot = {};
             const formatMoney = (num) => num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
             let bankTotals = { Total: 0 };
             selectedBanks.forEach(b => bankTotals[b] = 0);
+
+            const monthlyPivot = {};
 
             allData.forEach(tx => {
                 if (!selectedBanks.includes(tx.bank)) return;
                 
                 const pDate = tx.payment_date;
-                if (!pivot[pDate]) {
-                    pivot[pDate] = { Total: 0 };
-                    selectedBanks.forEach(b => pivot[pDate][b] = 0);
+                if (!pDate) return;
+                const monthKey = pDate.substring(0, 7); // YYYY-MM
+                
+                if (!monthlyPivot[monthKey]) {
+                    monthlyPivot[monthKey] = { Total: 0, days: {} };
+                    selectedBanks.forEach(b => monthlyPivot[monthKey][b] = 0);
                 }
+                
+                if (!monthlyPivot[monthKey].days[pDate]) {
+                    monthlyPivot[monthKey].days[pDate] = { Total: 0 };
+                    selectedBanks.forEach(b => monthlyPivot[monthKey].days[pDate][b] = 0);
+                }
+                
                 const price = parseFloat(tx.item_price) || 0;
-                pivot[pDate][tx.bank] += price;
-                pivot[pDate].Total += price;
+                
+                monthlyPivot[monthKey].days[pDate][tx.bank] += price;
+                monthlyPivot[monthKey].days[pDate].Total += price;
+                
+                monthlyPivot[monthKey][tx.bank] += price;
+                monthlyPivot[monthKey].Total += price;
 
                 bankTotals[tx.bank] += price;
                 bankTotals.Total += price;
             });
 
-            const dates = Object.keys(pivot).sort();
+            const months = Object.keys(monthlyPivot).sort();
+            const multiMonth = months.length > 1;
 
-            tbody.innerHTML = dates.map(d => {
-                const row = pivot[d];
-                const dateParts = d.split('-');
-                const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-                const mName = monthNames[parseInt(dateParts[1]) - 1];
-                const dateLabel = `${parseInt(dateParts[2])}-${mName}-${dateParts[0]}`;
+            let htmlOutput = '';
 
-                let html = `<tr><td>${dateLabel}</td>`;
-                selectedBanks.forEach(b => {
-                    const isHighlight = b === 'NUADIB64';
-                    html += `<td class="${isHighlight ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
+            months.forEach(m => {
+                const monthData = monthlyPivot[m];
+                const days = Object.keys(monthData.days).sort();
+                
+                if (multiMonth) {
+                    const parts = m.split('-');
+                    const mName = monthNames[parseInt(parts[1]) - 1];
+                    const monthLabel = `${mName} ${parts[0]}`;
+                    
+                    htmlOutput += `<tr class="month-row" data-month="${m}">
+                        <td>
+                            <div class="month-toggle">
+                                <i data-lucide="chevron-right"></i>
+                                <span>${monthLabel}</span>
+                            </div>
+                        </td>`;
+                    selectedBanks.forEach(b => {
+                        const isHighlight = b === 'NUADIB64';
+                        htmlOutput += `<td class="${isHighlight ? 'highlight-cell' : ''}">${formatMoney(monthData[b])}</td>`;
+                    });
+                    htmlOutput += `<td>${formatMoney(monthData.Total)}</td></tr>`;
+                }
+
+                days.forEach(d => {
+                    const row = monthData.days[d];
+                    const dateParts = d.split('-');
+                    const mName = monthNames[parseInt(dateParts[1]) - 1];
+                    const dateLabel = `${parseInt(dateParts[2])}-${mName}-${dateParts[0]}`;
+
+                    htmlOutput += `<tr class="day-row month-${m}" style="${multiMonth ? 'display: none;' : ''}">
+                        <td>${dateLabel}</td>`;
+                    selectedBanks.forEach(b => {
+                        const isHighlight = b === 'NUADIB64';
+                        htmlOutput += `<td class="${isHighlight ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
+                    });
+                    htmlOutput += `<td>${formatMoney(row.Total)}</td></tr>`;
                 });
-                html += `<td>${formatMoney(row.Total)}</td></tr>`;
-                return html;
-            }).join('');
+            });
 
-            if (dates.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="${selectedBanks.length + 2}" style="text-align: center;">No data for selected period</td></tr>`;
+            if (months.length === 0) {
+                htmlOutput = `<tr><td colspan="${selectedBanks.length + 2}" style="text-align: center;">No data for selected period</td></tr>`;
             }
+
+            tbody.innerHTML = htmlOutput;
 
             let footHtml = `<tr><td>Grand Total</td>`;
             selectedBanks.forEach(b => {

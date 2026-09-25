@@ -909,8 +909,42 @@ select option {
 
 .pivot-table tbody tr:hover {
     background-color: rgba(255, 255, 255, 0.03);
-    transform: translateY(-1px);
-    box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.month-row {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.month-row:hover {
+    background-color: rgba(0, 229, 255, 0.08) !important;
+}
+
+.month-row td {
+    color: var(--primary) !important;
+}
+
+.month-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.month-toggle i, .month-toggle svg {
+    transition: transform 0.2s ease;
+    width: 16px;
+    height: 16px;
+}
+
+.month-toggle.expanded i, .month-toggle.expanded svg {
+    transform: rotate(90deg);
+}
+
+.day-row td:first-child {
+    padding-left: 2.5rem !important; /* Indent the days to show hierarchy */
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }
 
 .pivot-table tfoot td {
