@@ -182,6 +182,38 @@ class App {
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
         this.loadTransactions();
+        this.initRealtime();
+    }
+
+    initRealtime() {
+        if (this.realtimeChannel) return;
+        this.realtimeChannel = supabase.channel('table-db-changes')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'transactions' },
+                (payload) => {
+                    console.log('Realtime update received!', payload);
+                    
+                    // Throttle reloads to prevent spamming the database
+                    if (this.realtimeTimeout) clearTimeout(this.realtimeTimeout);
+                    this.realtimeTimeout = setTimeout(() => {
+                        // Refresh the active view dynamically
+                        const views = document.querySelectorAll('.view.active');
+                        if (views.length > 0) {
+                            const activeId = views[0].id;
+                            if (activeId === 'view-transactions') {
+                                Toast.show('New activity detected. Refreshing data...', 'info');
+                                this.loadTransactions();
+                            } else if (activeId === 'view-dashboard') {
+                                this.loadDashboard();
+                            } else if (activeId === 'view-erp-export') {
+                                this.loadErpExport();
+                            }
+                        }
+                    }, 2000); // Wait 2s after last event before refreshing
+                }
+            )
+            .subscribe();
     }
 
     initTheme() {
@@ -385,20 +417,33 @@ class App {
 
         try {
             let allData = [];
-            let fetchMore = true;
-            let from = 0;
-            while (fetchMore) {
-                const { data, error } = await supabase.from('transactions')
-                    .select('payment_date, bank, item_price')
-                    .gte('payment_date', dateFrom)
-                    .lte('payment_date', dateTo)
-                    .range(from, from + 999);
-                
-                if (error) throw error;
-                if (!data || data.length === 0) break;
-                allData = allData.concat(data);
-                if (data.length < 1000) fetchMore = false;
-                else from += 1000;
+            
+            // First, try the fast RPC method (requires the Supabase SQL function to be installed)
+            const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
+            
+            if (!rpcError && rpcData) {
+                allData = rpcData.map(row => ({
+                    payment_date: row.payment_date,
+                    bank: row.bank,
+                    item_price: row.daily_total
+                }));
+            } else {
+                // Fallback to the slow client-side loop if the RPC is not installed yet
+                let fetchMore = true;
+                let from = 0;
+                while (fetchMore) {
+                    const { data, error } = await supabase.from('transactions')
+                        .select('payment_date, bank, item_price')
+                        .gte('payment_date', dateFrom)
+                        .lte('payment_date', dateTo)
+                        .range(from, from + 999);
+                    
+                    if (error) throw error;
+                    if (!data || data.length === 0) break;
+                    allData = allData.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
             }
 
             const pivot = {};
