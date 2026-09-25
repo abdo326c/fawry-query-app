@@ -978,7 +978,8 @@ class App {
             const worksheet = XLSX.utils.json_to_sheet([{
                 "Item Name": "",
                 "Adjusted Item Name": "",
-                "Mapping": ""
+                "Mapping": "",
+                "2nd Mapping": ""
             }]);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
@@ -990,7 +991,8 @@ class App {
                 "Reference Number": "",
                 "Correct ID": "",
                 "Item Name": "",
-                "Mapping": ""
+                "Mapping": "",
+                "2nd Mapping": ""
             }]);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
@@ -1554,7 +1556,8 @@ class App {
                 const formattedData = allData.map(m => ({
                     "Item Name": m.item_name,
                     "Adjusted Item Name": m.adjusted_item_name || "",
-                    "Mapping": m.mapping || ""
+                    "Mapping": m.mapping || "",
+                    "2nd Mapping": m.second_mapping || ""
                 }));
 
                 const worksheet = XLSX.utils.json_to_sheet(formattedData);
@@ -1585,7 +1588,8 @@ class App {
                     "Reference Number": f.reference_number,
                     "Correct ID": f.correct_id || "",
                     "Item Name": f.item_name || "",
-                    "Mapping": f.mapping || ""
+                    "Mapping": f.mapping || "",
+                    "2nd Mapping": f.second_mapping || ""
                 }));
 
                 const worksheet = XLSX.utils.json_to_sheet(formattedData);
