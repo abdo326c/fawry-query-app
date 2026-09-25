@@ -79,7 +79,7 @@ class Toast {
         `;
         
         container.appendChild(toast);
-        lucide.createIcons({ root: toast });
+        if (window.lucide) lucide.createIcons({ root: toast });
         
         setTimeout(() => {
             toast.classList.add('toast-hiding');
@@ -2109,7 +2109,7 @@ class App {
         
         btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching...`;
         btn.disabled = true;
-        lucide.createIcons();
+        if (window.lucide) lucide.createIcons();
 
         try {
             const dateFrom = document.getElementById('automatcher-date-from')?.value;
@@ -2190,16 +2190,14 @@ class App {
                 else sFrom += 1000;
             }
             
-            // Fetch All Links (Paginated to get all)
+            // Fetch Links only for the current invalid transactions (not all links!)
+            const invalidRefs = filteredTx.map(t => String(t.reference_number));
             let links = [];
-            let fetchMoreLinks = true;
-            let lFrom = 0;
-            while(fetchMoreLinks) {
-                const { data, error } = await supabase.from('links').select('*').range(lFrom, lFrom + 999);
+            for (let i = 0; i < invalidRefs.length; i += 500) {
+                const refChunk = invalidRefs.slice(i, i + 500);
+                const { data, error } = await supabase.from('links').select('*').in('payment_reference_number', refChunk);
                 if (error) throw error;
-                links = links.concat(data || []);
-                if (!data || data.length < 1000) fetchMoreLinks = false;
-                else lFrom += 1000;
+                if (data) links = links.concat(data);
             }
 
             // Build lookups
@@ -2397,7 +2395,7 @@ class App {
         } finally {
             btn.innerHTML = `<i data-lucide="zap"></i> Run Auto-Match`;
             btn.disabled = false;
-            lucide.createIcons();
+            if (window.lucide) lucide.createIcons();
         }
     }
 
@@ -2722,7 +2720,8 @@ class App {
             let query = supabase.from('payment_links').select('*', { count: 'exact' });
             
             if (this.paymentLinksSearch) {
-                query = query.or(`name.ilike.%${this.paymentLinksSearch}%,invoice_number.ilike.%${this.paymentLinksSearch}%`);
+                const safe = sanitizeForFilter(this.paymentLinksSearch);
+                query = query.or(`name.ilike.%${safe}%,invoice_number.ilike.%${safe}%`);
             }
             
             const from = (this.paymentLinksPage - 1) * this.pageSize;
@@ -2765,7 +2764,7 @@ class App {
                                           
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td><div class="truncate-text" title="${link.name || ''}">${link.name || '-'}</div></td>
+                    <td><div class="truncate-text" title="${escapeHTML(link.name || '')}">${escapeHTML(link.name) || '-'}</div></td>
                     <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
                     <td>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -2997,11 +2996,11 @@ class App {
             const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${row.payment_date || ''}</td>
-                <td>${paddedAccount}</td>
-                <td>${description}</td>
-                <td>${row.net_amount || ''}</td>
-                <td>${row.bank || ''}</td>
+                <td>${escapeHTML(row.payment_date || '')}</td>
+                <td>${escapeHTML(paddedAccount)}</td>
+                <td>${escapeHTML(description)}</td>
+                <td>${escapeHTML(String(row.net_amount || ''))}</td>
+                <td>${escapeHTML(row.bank || '')}</td>
                 <td>${index + 1}</td>
             `;
             tbody.appendChild(tr);
@@ -3033,7 +3032,7 @@ class App {
                 <tr>
                     <td>${escapeHTML(t.reference_number || '')}</td>
                     <td style="color: var(--danger); font-weight: bold;">${escapeHTML(t.student_id || '')}</td>
-                    <td>${t.net_amount}</td>
+                    <td>${escapeHTML(String(t.net_amount || ''))}</td>
                     <td>${escapeHTML(t.id_status)}</td>
                 </tr>
             `).join('');
@@ -3102,7 +3101,7 @@ class App {
 
         try {
             const transactionIds = this.erpData.map(r => r.id);
-            const batchSize = 100;
+            const batchSize = 500;
             
             for (let i = 0; i < transactionIds.length; i += batchSize) {
                 const chunk = transactionIds.slice(i, i + batchSize);
