@@ -1536,6 +1536,7 @@ class App {
                         "Item Name": t.item_name,
                         "Item Price": t.item_price,
                         "Mapping": t.mapping,
+                        "2nd Mapping": t.second_mapping,
                         "Merchant Name": t.merchant_name,
                         "Bank": t.bank,
                         "Check Column": t.check_column,
@@ -1958,6 +1959,8 @@ class App {
                     "Item Name": tx.original_item,
                     "Amount": tx.original_amount,
                     "Current Status": tx.original_status,
+                    "Mapping": tx.original_mapping,
+                    "2nd Mapping": tx.original_second_mapping,
                     "Proposed Fix (Student ID)": tx.proposedStudent ? tx.proposedStudent.student_id : 'No Match Found',
                     "Proposed Fix (Student Name)": tx.proposedStudent ? tx.proposedStudent.full_name : '',
                     "Match Reason": tx.matchReason
@@ -2480,6 +2483,7 @@ class App {
                     original_date: tx.payment_date,
                     original_bank: tx.bank,
                     original_mapping: tx.mapping,
+                    original_second_mapping: tx.second_mapping,
                     original_item: tx.item_name,
                     original_amount: tx.item_price,
                     original_status: tx.id_status
@@ -2511,6 +2515,7 @@ class App {
                             <td>${escapeHTML(proposal.original_ref)}</td>
                             <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
+                            <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
                             <td>${escapeHTML(proposal.original_item)}</td>
                             <td>${formatMoney(proposal.original_amount)}</td>
                             <td>
@@ -2537,6 +2542,7 @@ class App {
                             <td>${escapeHTML(proposal.original_ref)}</td>
                             <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
+                            <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
                             <td>${escapeHTML(proposal.original_item)}</td>
                             <td>${formatMoney(proposal.original_amount)}</td>
                             <td><span class="status-badge invalid-id">No Match Found</span></td>
@@ -3071,7 +3077,7 @@ class App {
 
         if (!dateFrom || !dateTo) return;
 
-        let query = supabase.from('transactions').select('item_name, mapping');
+        let query = supabase.from('transactions').select('item_name, mapping, second_mapping');
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
         if (bank) query = query.eq('bank', bank);
@@ -3155,7 +3161,7 @@ class App {
         
         previewData.forEach((row, index) => {
             const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
-            const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`;
+            const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>${escapeHTML(row.payment_date || '')}</td>
@@ -3220,7 +3226,7 @@ class App {
                 'Company': 'NU',
                 'Account': paddedAccount,
                 'Name': '',
-                'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.student_id || ''}`,
+                'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`,
                 'Debit': 0,
                 'Credit': row.net_amount,
                 'Currency': 'EGP',
