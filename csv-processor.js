@@ -294,7 +294,7 @@ export class FawryProcessor {
                     let refNumber = this.getVal(row, 'Reference Number');
                     if (!refNumber) continue;
 
-                    let itemName = this.getVal(row, 'Item Name') || "";
+                    let itemName = String(this.getVal(row, 'Item Name') || '').trim();
                     
                     // TUI / SU Check
                     if (this.tuiList.includes(itemName)) {
@@ -466,7 +466,7 @@ export class FawryProcessor {
         this.fixes.forEach(f => fixesMap[f.reference_number] = f);
 
         const mappingMap = {};
-        this.mappings.forEach(m => mappingMap[m.item_name] = m);
+        this.mappings.forEach(m => mappingMap[String(m.item_name || '').trim()] = m);
 
         // Final application
         for (const t of transactions) {
@@ -489,7 +489,7 @@ export class FawryProcessor {
 
             // Apply Mappings if not overridden by fixes
             if (!fix || !fix.mapping) {
-                const mapDef = mappingMap[t.item_name];
+                const mapDef = mappingMap[String(t.item_name || '').trim()];
                 if (mapDef) {
                     if (mapDef.adjusted_item_name) t.item_name = mapDef.adjusted_item_name;
                     t.mapping = mapDef.mapping;

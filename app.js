@@ -746,7 +746,7 @@ class App {
 
         // Save Mapping
         document.getElementById('btn-save-mapping').addEventListener('click', async () => {
-            const original = document.getElementById('map-original').value;
+            const original = document.getElementById('map-original').value.trim();
             const adjusted = document.getElementById('map-adjusted').value;
             const category = document.getElementById('map-category').value;
             const secondCategory = document.getElementById('map-second-category').value;
@@ -1027,7 +1027,7 @@ class App {
                 const fixesMap = new Map();
                 fixes.forEach(f => fixesMap.set(String(f.reference_number), f));
                 const mappingsMap = new Map();
-                mappings.forEach(m => mappingsMap.set(m.item_name, m));
+                mappings.forEach(m => mappingsMap.set(String(m.item_name || '').trim(), m));
                 const linksMap = new Map();
                 links.forEach(l => linksMap.set(String(l.payment_reference_number), l));
 
@@ -1070,7 +1070,7 @@ class App {
                                     reasons.push("Student Link");
                                 }
 
-                                const mapDef = mappingsMap.get(newItemName);
+                                const mapDef = mappingsMap.get(String(newItemName || '').trim());
                                 if (mapDef) {
                                     if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
                                     if (mapDef.mapping) newMapping = mapDef.mapping;
