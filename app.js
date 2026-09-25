@@ -512,6 +512,27 @@ class App {
                 `;
             }
 
+            // Update Stat Cards
+            const totalCollections = bankTotals.Total || 0;
+            const totalTxCount = allData.length;
+            
+            document.getElementById('stat-total-collections').textContent = `EGP ${formatMoney(totalCollections)}`;
+            document.getElementById('stat-total-transactions').textContent = totalTxCount.toLocaleString();
+            
+            // Fetch valid/error counts for the date range
+            const { count: validCount } = await supabase.from('transactions').select('*', { count: 'exact', head: true })
+                .gte('payment_date', dateFrom).lte('payment_date', dateTo).eq('id_status', 'Valid');
+            const { count: totalCountAll } = await supabase.from('transactions').select('*', { count: 'exact', head: true })
+                .gte('payment_date', dateFrom).lte('payment_date', dateTo);
+            
+            const validPct = totalCountAll > 0 ? ((validCount / totalCountAll) * 100).toFixed(1) : 0;
+            const errorCount = (totalCountAll || 0) - (validCount || 0);
+            
+            document.getElementById('stat-valid-pct').textContent = `${validPct}%`;
+            document.getElementById('stat-errors').textContent = errorCount.toLocaleString();
+            
+            if (window.lucide) lucide.createIcons();
+
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
         }

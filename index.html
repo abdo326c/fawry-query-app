@@ -138,7 +138,38 @@
                         <i data-lucide="copy"></i> Copy for Email
                     </button>
                 </div>
-                
+                <!-- Summary Stat Cards -->
+                <div class="stat-cards-row" id="dashboard-stats-row">
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Total Collections</span>
+                            <i data-lucide="trending-up" class="stat-icon" style="color: var(--primary);"></i>
+                        </div>
+                        <div class="stat-value" id="stat-total-collections">EGP 0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Transactions</span>
+                            <i data-lucide="layers" class="stat-icon" style="color: var(--primary);"></i>
+                        </div>
+                        <div class="stat-value" id="stat-total-transactions">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Valid IDs</span>
+                            <i data-lucide="check-circle" class="stat-icon" style="color: var(--success);"></i>
+                        </div>
+                        <div class="stat-value" style="color: var(--success);" id="stat-valid-pct">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Errors</span>
+                            <i data-lucide="alert-triangle" class="stat-icon" style="color: var(--danger);"></i>
+                        </div>
+                        <div class="stat-value" style="color: var(--danger);" id="stat-errors">0</div>
+                    </div>
+                </div>
+
                 <div class="dashboard-layout">
                     <!-- Pivot Table Area -->
                     <div class="glass-card" style="flex: 1; width: 100%; overflow-x: auto;">

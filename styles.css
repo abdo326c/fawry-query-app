@@ -139,43 +139,32 @@ body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.5rem 0.75rem;
+    padding: 0.625rem 0.875rem;
     color: var(--text-muted);
     text-decoration: none;
     border-radius: 0.5rem;
     transition: all 0.2s ease;
     font-weight: 500;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     position: relative;
-    overflow: hidden;
-}
-
-.nav-link::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: linear-gradient(90deg, var(--primary-glow), transparent);
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    z-index: -1;
+    border-left: 3px solid transparent;
 }
 
 .nav-link:hover {
     color: var(--text-main);
-    transform: translateX(4px);
-}
-.nav-link:hover::before {
-    opacity: 0.5;
+    background: rgba(255, 255, 255, 0.02);
 }
 
 .nav-link.active {
-    color: var(--primary);
-    background: rgba(0, 229, 255, 0.05);
+    color: var(--text-main);
+    background: linear-gradient(90deg, rgba(0, 229, 255, 0.1), transparent);
     border-left: 3px solid var(--primary);
+    text-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
 }
 
-.nav-link.active::before {
-    opacity: 1;
+.nav-link.active i {
+    color: var(--primary);
+    filter: drop-shadow(0 0 4px var(--primary-glow));
 }
 
 .nav-link i {
@@ -276,9 +265,9 @@ body {
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
     border: 1px solid var(--border-color);
-    border-radius: 1.25rem;
-    padding: 1.5rem;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    border-radius: 1rem;
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
     transition: border-color 0.3s ease;
 }
 
@@ -419,11 +408,64 @@ select option {
     color: var(--text-main);
 }
 
-/* Tables */
+/* ==========================================
+   Stat Cards
+   ========================================== */
+.stat-cards-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 1rem;
+    padding: 1.25rem 1.5rem;
+    transition: border-color 0.3s ease, transform 0.2s ease;
+}
+
+.stat-card:hover {
+    border-color: var(--border-glow);
+    transform: translateY(-2px);
+}
+
+.stat-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.stat-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.stat-icon {
+    width: 20px;
+    height: 20px;
+    opacity: 0.8;
+}
+
+.stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-main);
+    letter-spacing: -0.025em;
+}
+
+/* ==========================================
+   Tables (Polished)
+   ========================================== */
 .table-container {
     overflow-x: auto;
     padding: 0;
-    border-radius: 1.25rem;
+    border-radius: 1rem;
     width: 100%;
     max-width: 100%;
 }
@@ -436,41 +478,42 @@ select option {
 }
 
 .data-table th {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border-color);
-    white-space: nowrap;
-}
-
-.data-table td {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.data-table th {
-    font-size: 0.75rem;
+    padding: 0.875rem 1.25rem;
+    font-size: 0.7rem;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
     font-weight: 600;
-    background-color: rgba(0, 0, 0, 0.3);
+    background-color: rgba(0, 229, 255, 0.03);
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
     position: sticky;
     top: 0;
     backdrop-filter: blur(10px);
     z-index: 10;
 }
 
+.data-table td {
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    font-size: 0.85rem;
+}
+
 .data-table tbody tr {
-    transition: all 0.2s ease;
+    transition: background-color 0.15s ease;
+}
+
+/* Subtle zebra striping */
+.data-table tbody tr:nth-child(even) {
+    background-color: rgba(255, 255, 255, 0.015);
 }
 
 .data-table tbody tr:hover {
-    background-color: rgba(255, 255, 255, 0.03);
-    transform: translateY(-1px);
-    box-shadow: inset 2px 0 0 var(--primary);
+    background-color: rgba(0, 229, 255, 0.04);
 }
 
 .data-table td {
-    font-size: 0.875rem;
+    font-size: 0.85rem;
 }
 
 .badge {
