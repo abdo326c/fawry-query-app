@@ -2229,6 +2229,16 @@ class App {
                 }
             });
 
+            // Initialize AI Fuzzy Matcher for Names
+            let nameFuse;
+            if (typeof Fuse !== 'undefined') {
+                nameFuse = new Fuse(students, {
+                    keys: ['full_name'],
+                    includeScore: true,
+                    threshold: 0.35 // Allows for typos, missing middle names, etc.
+                });
+            }
+
             this.automatchProposals = [];
             let html = '';
             
@@ -2279,15 +2289,32 @@ class App {
                 // Try 5: Name (Link & Transaction)
                 const enableNameMatch = document.getElementById('automatch-enable-name')?.checked;
                 if (enableNameMatch) {
+                    let searchStr = '';
                     if (!proposedStudent && link && link.customer_name) {
-                        proposedStudent = studentNameMap.get(String(link.customer_name).toLowerCase().trim());
+                        searchStr = String(link.customer_name).trim();
+                        proposedStudent = studentNameMap.get(searchStr.toLowerCase());
                         if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
                     }
-                    if (!proposedStudent && tx.student_id) {
-                        const searchStr = String(tx.student_id).trim().toLowerCase();
-                        if (/[a-zA-Z]/.test(searchStr) && searchStr.length > 3) {
-                            proposedStudent = studentNameMap.get(searchStr);
+                    if (!proposedStudent && !searchStr && tx.student_id) {
+                        const tempStr = String(tx.student_id).trim();
+                        if (/[a-zA-Z]/.test(tempStr) && tempStr.length > 3) {
+                            searchStr = tempStr;
+                            proposedStudent = studentNameMap.get(searchStr.toLowerCase());
                             if (proposedStudent) matchReason = 'Exact Name matched via Transaction data';
+                        }
+                    }
+
+                    // --- NEW FUZZY MATCH LOGIC ---
+                    if (!proposedStudent && searchStr && nameFuse) {
+                        const results = nameFuse.search(searchStr);
+                        if (results.length > 0) {
+                            const bestMatch = results[0];
+                            // 0.0 is perfect match, 0.35 is our threshold
+                            if (bestMatch.score < 0.35) {
+                                proposedStudent = bestMatch.item;
+                                const confidence = Math.round((1 - bestMatch.score) * 100);
+                                matchReason = `Fuzzy Name Match (Confidence: ${confidence}%): "${proposedStudent.full_name}"`;
+                            }
                         }
                     }
                 }
