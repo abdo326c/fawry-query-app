@@ -32,8 +32,28 @@ export class FawryProcessor {
         const consoleEl = document.getElementById('import-log');
         if (consoleEl) {
             const div = document.createElement('div');
-            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            
+            let type = 'info';
+            let icon = 'info';
+            if (msg.toLowerCase().includes('error') || msg.toLowerCase().includes('fail')) {
+                type = 'error';
+                icon = 'alert-circle';
+            } else if (msg.toLowerCase().includes('success') || msg.toLowerCase().includes('completed')) {
+                type = 'success';
+                icon = 'check-circle';
+            }
+
+            div.className = `log-entry log-${type}`;
+            div.innerHTML = `
+                <div class="log-time">${new Date().toLocaleTimeString()}</div>
+                <div class="log-content">
+                    <i data-lucide="${icon}" style="width: 16px; height: 16px;"></i>
+                    <span>${msg}</span>
+                </div>
+            `;
+            
             consoleEl.appendChild(div);
+            if (window.lucide) lucide.createIcons({ root: div });
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
         console.log(msg);
