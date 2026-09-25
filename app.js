@@ -1686,6 +1686,7 @@ class App {
                     <td>EGP ${formatMoney(t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 250px;">${escapeHTML(t.item_name)}</td>
                     <td>${escapeHTML(t.mapping) || '-'}</td>
+                    <td>${escapeHTML(t.second_mapping) || '-'}</td>
                     <td>${escapeHTML(t.bank)}</td>
                     <td><span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span></td>
                 </tr>
@@ -2510,6 +2511,7 @@ class App {
                     html += `
                         <tr>
                             <td></td>
+                    <td></td>
                     <td></td>
                     <td></td>
                     <td></td>
