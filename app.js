@@ -1697,7 +1697,7 @@ class App {
                 <tr>
                     <td style="white-space: nowrap;">${escapeHTML(t.reference_number)}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.payment_date)}</td>
-                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.student_id)}</strong></td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong></td>
                     <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 200px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.item_name)}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.mapping) || '-'}</td>
