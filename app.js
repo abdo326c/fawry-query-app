@@ -1700,6 +1700,7 @@ class App {
                     <td>${escapeHTML(m.item_name)}</td>
                     <td>${escapeHTML(m.adjusted_item_name) || '-'}</td>
                     <td>${escapeHTML(m.mapping) || '-'}</td>
+                    <td>${escapeHTML(m.second_mapping) || '-'}</td>
                     <td>
                         <button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>
                         <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>
@@ -1759,6 +1760,7 @@ class App {
                     <td>${escapeHTML(f.correct_id) || '-'}</td>
                     <td>${escapeHTML(f.item_name) || '-'}</td>
                     <td>${escapeHTML(f.mapping) || '-'}</td>
+                    <td>${escapeHTML(f.second_mapping) || '-'}</td>
                     <td>
                         <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
                         <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
