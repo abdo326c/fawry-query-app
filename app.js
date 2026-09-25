@@ -777,7 +777,8 @@ class App {
                     if (!existingTx || existingTx.length === 0) break;
                     for (const tx of existingTx) {
                         if (adjusted) tx.item_name = adjusted;
-                        if (category) tx.mapping = category;
+                        if (category !== undefined) tx.mapping = category || null;
+                        if (typeof secondCategory !== 'undefined') tx.second_mapping = secondCategory || null;
                     }
                     await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
                     if (existingTx.length < 1000) fetchMore = false;
@@ -831,7 +832,8 @@ class App {
                             tx.id_status = validateID(tx.student_id);
                         }
                         if (correctName) tx.item_name = correctName;
-                        if (correctMapping) tx.mapping = correctMapping;
+                        if (correctMapping !== undefined) tx.mapping = correctMapping || null;
+                        if (typeof correctSecondMapping !== 'undefined') tx.second_mapping = correctSecondMapping || null;
                     }
                     await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
                 }
@@ -903,7 +905,8 @@ class App {
                             const mapDef = mappings.find(m => m.item_name === tx.item_name);
                             if (mapDef) {
                                 if (mapDef.adjusted_item_name) tx.item_name = mapDef.adjusted_item_name;
-                                if (mapDef.mapping) tx.mapping = mapDef.mapping;
+                                if (mapDef.mapping !== undefined) tx.mapping = mapDef.mapping;
+                                if (mapDef.second_mapping !== undefined) tx.second_mapping = mapDef.second_mapping;
                             }
                         }
                         await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
@@ -956,7 +959,8 @@ class App {
                                     tx.id_status = validateID(tx.student_id);
                                 }
                                 if (fix.item_name) tx.item_name = fix.item_name;
-                                if (fix.mapping) tx.mapping = fix.mapping;
+                                if (fix.mapping !== undefined) tx.mapping = fix.mapping;
+                                if (fix.second_mapping !== undefined) tx.second_mapping = fix.second_mapping;
                             }
                         }
                         await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
@@ -1052,6 +1056,7 @@ class App {
                         let newStudentId = tx.student_id;
                         let newItemName = originalItemName;
                         let newMapping = null;
+                        let newSecondMapping = null;
                         
                         let reasons = [];
 
@@ -1065,6 +1070,7 @@ class App {
                         if (mapDef) {
                             if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
                             if (mapDef.mapping) newMapping = mapDef.mapping;
+                            if (mapDef.second_mapping) newSecondMapping = mapDef.second_mapping;
                             reasons.push("Mapping Rule");
                         }
 
@@ -1073,12 +1079,13 @@ class App {
                             if (fix.correct_id) newStudentId = fix.correct_id;
                             if (fix.item_name) newItemName = fix.item_name;
                             if (fix.mapping) newMapping = fix.mapping;
+                            if (fix.second_mapping) newSecondMapping = fix.second_mapping;
                             reasons.push("Manual Fix");
                         }
 
                         let newStatus = validateID(newStudentId);
 
-                        if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.id_status !== newStatus) {
+                        if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.second_mapping !== newSecondMapping || tx.id_status !== newStatus) {
                             
                             // Determine what exactly changed
                             let oldValues = [];
@@ -1093,6 +1100,11 @@ class App {
                                 changeType.push('Mapping');
                                 oldValues.push(tx.mapping || 'Empty');
                                 newValues.push(newMapping || 'Empty');
+                            }
+                            if (tx.second_mapping !== newSecondMapping) {
+                                changeType.push('2nd Mapping');
+                                oldValues.push(tx.second_mapping || 'Empty');
+                                newValues.push(newSecondMapping || 'Empty');
                             }
                             if (tx.id_status !== newStatus && tx.student_id === newStudentId) {
                                 changeType.push('Status');
