@@ -435,7 +435,7 @@ class App {
         const tfoot = document.getElementById('dashboard-pivot-foot');
         if (!tbody || !tfoot) return;
 
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Loading...</td></tr>';
         tfoot.innerHTML = '';
 
         try {
@@ -459,7 +459,7 @@ class App {
                 let from = 0;
                 while (fetchMore) {
                     const { data, error } = await supabase.from('transactions')
-                        .select('payment_date, bank, item_price, mapping, item_name')
+                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name')
                         .gte('payment_date', dateFrom)
                         .lte('payment_date', dateTo)
                         .range(from, from + 999);
@@ -551,6 +551,8 @@ class App {
                     let key = 'Unknown';
                     if (groupBy === 'mapping') {
                         key = tx.mapping || 'Unmapped';
+                    } else if (groupBy === 'second_mapping') {
+                        key = tx.second_mapping || 'Unmapped';
                     } else if (groupBy === 'item_name') {
                         key = tx.item_name || 'Unknown Item';
                     }
@@ -594,7 +596,7 @@ class App {
 
             const thead = document.querySelector('#dashboard-pivot-table thead');
             if (thead) {
-                const label = groupBy === 'date' ? 'Date' : (groupBy === 'mapping' ? 'Mapping' : 'Item Name');
+                const label = groupBy === 'date' ? 'Date' : (groupBy === 'mapping' ? 'Mapping' : (groupBy === 'second_mapping' ? '2nd Mapping' : 'Item Name'));
                 thead.innerHTML = `
                     <tr><th colspan="${selectedBanks.length + 2}" class="pivot-title">Total Fawry Collection</th></tr>
                     <tr>
@@ -1647,7 +1649,7 @@ class App {
         document.getElementById('btn-next').disabled = this.currentPage >= totalPages;
 
         if (error) {
-            tbody.innerHTML = `<tr><td colspan="9" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
             return;
         }
 
@@ -1714,6 +1716,7 @@ class App {
                         document.getElementById('map-original').value = mapping.item_name || '';
                         document.getElementById('map-adjusted').value = mapping.adjusted_item_name || '';
                         document.getElementById('map-category').value = mapping.mapping || '';
+                    document.getElementById('map-second-category').value = mapping.second_mapping || '';
                         document.getElementById('modal-mapping-title').innerText = 'Edit Mapping';
                         document.getElementById('modal-mapping').classList.remove('hidden');
                     }
@@ -1745,7 +1748,7 @@ class App {
             const allData = await fetchAll('manual_fixes');
 
             if (allData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
                 if (window.lucide) lucide.createIcons();
                 return;
             }
@@ -1773,6 +1776,7 @@ class App {
                         document.getElementById('fix-id').value = fix.correct_id || '';
                         document.getElementById('fix-name').value = fix.item_name || '';
                         document.getElementById('fix-mapping').value = fix.mapping || '';
+                    document.getElementById('fix-second-mapping').value = fix.second_mapping || '';
                         document.getElementById('modal-fix-title').innerText = 'Edit Fix';
                         document.getElementById('modal-fix').classList.remove('hidden');
                     }
@@ -2494,6 +2498,13 @@ class App {
                     html += `
                         <tr>
                             <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                                <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
                             <td>${escapeHTML(proposal.original_ref)}</td>
                             <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
