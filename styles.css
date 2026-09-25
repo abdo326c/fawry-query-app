@@ -1,17 +1,17 @@
 :root {
-    --bg-dark: #070B14;
-    --bg-card: rgba(13, 19, 38, 0.7);
-    --bg-card-hover: rgba(20, 28, 54, 0.9);
-    --primary: #00e5ff;
-    --primary-hover: #00b8d4;
-    --primary-glow: rgba(0, 229, 255, 0.3);
+    --bg-dark: #0f172a;
+    --bg-card: rgba(30, 41, 59, 0.7);
+    --bg-card-hover: rgba(51, 65, 85, 0.9);
+    --primary: #38bdf8;
+    --primary-hover: #7dd3fc;
+    --primary-glow: rgba(56, 189, 248, 0.2);
     
     --text-main: #f8fafc;
     --text-muted: #94a3b8;
-    --text-dark: #1e293b;
+    --text-dark: #0f172a;
     
     --border-color: rgba(255, 255, 255, 0.08);
-    --border-glow: rgba(0, 229, 255, 0.2);
+    --border-glow: rgba(56, 189, 248, 0.2);
     
     --success: #10b981;
     --success-bg: rgba(16, 185, 129, 0.15);
@@ -41,10 +41,10 @@ body {
     color: var(--text-main);
     min-height: 100vh;
     overflow-x: hidden;
-    /* Deep space gradient */
+    /* Midnight Slate subtle gradient */
     background-image: 
-        radial-gradient(circle at 10% 20%, rgba(0, 229, 255, 0.08), transparent 30%),
-        radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.08), transparent 30%);
+        radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.05), transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(99, 102, 241, 0.05), transparent 40%);
 }
 
 /* Custom Scrollbar */
@@ -96,7 +96,7 @@ body {
 /* Sidebar */
 .sidebar {
     width: var(--sidebar-width);
-    background-color: rgba(13, 19, 38, 0.6);
+    background-color: rgba(15, 23, 42, 0.6);
     backdrop-filter: blur(20px);
     border-right: 1px solid var(--border-color);
     display: flex;
@@ -157,9 +157,9 @@ body {
 
 .nav-link.active {
     color: var(--text-main);
-    background: linear-gradient(90deg, rgba(0, 229, 255, 0.1), transparent);
+    background: linear-gradient(90deg, rgba(56, 189, 248, 0.1), transparent);
     border-left: 3px solid var(--primary);
-    text-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+    text-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
 }
 
 .nav-link.active i {
@@ -188,7 +188,7 @@ body {
     width: 32px;
     height: 32px;
     border-radius: 0.5rem;
-    background: linear-gradient(135deg, var(--primary), #8b5cf6);
+    background: linear-gradient(135deg, var(--primary), #6366f1);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -351,7 +351,7 @@ body {
 
 .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(0, 229, 255, 0.5);
+    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.5);
     background: var(--primary-hover);
 }
 
@@ -360,24 +360,24 @@ body {
 }
 
 .btn-secondary {
-    background: rgba(0, 229, 255, 0.1);
+    background: rgba(56, 189, 248, 0.1);
     color: var(--primary);
-    border: 1px solid rgba(0, 229, 255, 0.2);
+    border: 1px solid rgba(56, 189, 248, 0.2);
 }
 
 .btn-secondary:hover {
-    background: rgba(0, 229, 255, 0.2);
+    background: rgba(56, 189, 248, 0.2);
     border-color: var(--primary);
 }
 
 .btn-outline {
     background-color: transparent;
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    border: 1px solid rgba(56, 189, 248, 0.3);
     color: var(--primary);
 }
 
 .btn-outline:hover:not(:disabled) {
-    background-color: rgba(0, 229, 255, 0.1);
+    background-color: rgba(56, 189, 248, 0.1);
     border-color: var(--primary);
     color: var(--primary);
 }
@@ -525,7 +525,7 @@ select option {
     letter-spacing: 0.06em;
     color: var(--text-muted);
     font-weight: 600;
-    background-color: rgba(0, 229, 255, 0.03);
+    background-color: rgba(56, 189, 248, 0.03);
     border-bottom: 1px solid var(--border-color);
     white-space: nowrap;
     position: sticky;
@@ -550,7 +550,7 @@ select option {
 }
 
 .data-table tbody tr:hover {
-    background-color: rgba(0, 229, 255, 0.04);
+    background-color: rgba(56, 189, 248, 0.04);
 }
 
 .data-table td {
@@ -762,7 +762,7 @@ select option {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
     background: var(--bg-dark);
-    background-image: radial-gradient(circle at 50% 50%, rgba(0, 229, 255, 0.1), transparent 50%);
+    background-image: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.1), transparent 50%);
     z-index: 20000;
     display: flex;
     justify-content: center;
@@ -861,7 +861,7 @@ select option {
         top: 0; bottom: 0; left: 0;
         transform: translateX(-100%);
         box-shadow: 10px 0 30px rgba(0,0,0,0.8);
-        background-color: rgba(13, 19, 38, 0.95);
+        background-color: rgba(15, 23, 42, 0.95);
     }
 
     .sidebar.open {
@@ -932,7 +932,7 @@ select option {
 }
 
 .pivot-title {
-    background: linear-gradient(90deg, var(--primary), #8b5cf6);
+    background: linear-gradient(90deg, var(--primary), #6366f1);
     color: var(--bg-dark) !important;
     font-size: 1rem !important;
     border-bottom: none !important;
@@ -959,7 +959,7 @@ select option {
 }
 
 .month-row:hover {
-    background-color: rgba(0, 229, 255, 0.08) !important;
+    background-color: rgba(56, 189, 248, 0.08) !important;
 }
 
 .month-row td {
@@ -990,7 +990,7 @@ select option {
 
 .pivot-table tfoot td {
     font-weight: 700;
-    background-color: rgba(0, 229, 255, 0.05);
+    background-color: rgba(56, 189, 248, 0.05);
     border-top: 2px solid var(--border-color);
     color: var(--text-main);
 }
@@ -1043,7 +1043,7 @@ select option {
 .student-tab-btn.active {
     color: var(--primary);
     border-bottom-color: var(--primary);
-    background: rgba(0, 229, 255, 0.05);
+    background: rgba(56, 189, 248, 0.05);
 }
 
 /* Sidebar Backdrop */
@@ -1171,9 +1171,9 @@ select option {
     padding: 0.25rem 0.6rem;
     border-radius: 9999px;
     font-size: 0.8rem;
-    background: rgba(0, 229, 255, 0.1);
+    background: rgba(56, 189, 248, 0.1);
     color: var(--primary);
-    border: 1px solid rgba(0, 229, 255, 0.2);
+    border: 1px solid rgba(56, 189, 248, 0.2);
 }
 
 .filter-chip button {
