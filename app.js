@@ -1323,8 +1323,16 @@ class App {
                 currentColumn = wrapper.dataset.column;
 
                 const rect = wrapper.getBoundingClientRect();
-                popover.style.top = `${rect.bottom + window.scrollY + 5}px`;
-                popover.style.left = `${rect.left + window.scrollX}px`;
+                const popoverWidth = 240; // width from css
+                
+                popover.style.top = `${rect.bottom + 5}px`;
+                
+                if (rect.left + popoverWidth > window.innerWidth) {
+                    // Prevent overflow on the right side by aligning to the wrapper's right edge
+                    popover.style.left = `${rect.right - popoverWidth}px`;
+                } else {
+                    popover.style.left = `${rect.left}px`;
+                }
                 
                 searchInput.value = '';
                 renderList();
