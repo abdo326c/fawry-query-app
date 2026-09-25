@@ -749,13 +749,15 @@ class App {
             const original = document.getElementById('map-original').value;
             const adjusted = document.getElementById('map-adjusted').value;
             const category = document.getElementById('map-category').value;
+            const secondCategory = document.getElementById('map-second-category').value;
             
             if (!original) return Toast.show('Original Item Name is required', 'warning');
 
             const { error } = await supabase.from('item_mappings').upsert([{
                 item_name: original,
                 adjusted_item_name: adjusted || null,
-                mapping: category || null
+                mapping: category || null,
+                second_mapping: secondCategory || null
             }], { onConflict: 'item_name', ignoreDuplicates: false });
 
             if (error) Toast.show('Error saving mapping: ' + error.message, 'error');
@@ -796,6 +798,7 @@ class App {
             const correctId = document.getElementById('fix-id').value;
             const correctName = document.getElementById('fix-name').value;
             const correctMapping = document.getElementById('fix-mapping').value;
+            const correctSecondMapping = document.getElementById('fix-second-mapping').value;
 
             if (!ref) return Toast.show('Reference Number is required', 'warning');
 
@@ -803,7 +806,8 @@ class App {
                 reference_number: ref,
                 correct_id: correctId || null,
                 item_name: correctName || null,
-                mapping: correctMapping || null
+                mapping: correctMapping || null,
+                second_mapping: correctSecondMapping || null
             }], { onConflict: 'reference_number', ignoreDuplicates: false });
 
             if (error) {
@@ -872,7 +876,8 @@ class App {
                 const mappings = data.map(row => ({
                     item_name: getVal(row, 'Item Name'),
                     adjusted_item_name: getVal(row, 'Adjusted Item Name') || null,
-                    mapping: getVal(row, 'Mapping') || null
+                    mapping: getVal(row, 'Mapping') || null,
+                    second_mapping: getVal(row, '2nd Mapping') || null
                 })).filter(m => m.item_name);
 
                 let inserted = 0;
@@ -923,7 +928,8 @@ class App {
                     reference_number: String(getVal(row, 'Reference Number')),
                     correct_id: getVal(row, 'Correct ID') || null,
                     item_name: getVal(row, 'Item Name') || null,
-                    mapping: getVal(row, 'Mapping') || null
+                    mapping: getVal(row, 'Mapping') || null,
+                    second_mapping: getVal(row, '2nd Mapping') || null
                 })).filter(f => f.reference_number && f.reference_number !== "null");
 
                 let inserted = 0;

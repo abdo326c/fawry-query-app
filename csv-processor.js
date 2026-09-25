@@ -461,6 +461,7 @@ export class FawryProcessor {
                 if (fix.correct_id) t.student_id = fix.correct_id;
                 if (fix.item_name) t.item_name = fix.item_name;
                 if (fix.mapping) t.mapping = fix.mapping;
+                if (fix.second_mapping) t.second_mapping = fix.second_mapping;
             }
 
             // Apply Validation Status (The Bulletproof rules)
@@ -472,6 +473,7 @@ export class FawryProcessor {
                 if (mapDef) {
                     if (mapDef.adjusted_item_name) t.item_name = mapDef.adjusted_item_name;
                     t.mapping = mapDef.mapping;
+                    if (mapDef.second_mapping) t.second_mapping = mapDef.second_mapping;
                 }
             }
         }
