@@ -228,10 +228,10 @@ export class FawryProcessor {
                 Papa.parse(item.data, {
                     header: true,
                     skipEmptyLines: true,
-                    error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(); },
+                    error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(false); },
                     complete: (results) => processData(results.data).catch(err => {
                         this.log(`Error processing link data: ${err.message}`);
-                        resolve();
+                        resolve(false);
                     })
                 });
             } else {
@@ -377,10 +377,10 @@ export class FawryProcessor {
                 Papa.parse(item.data, {
                     header: true,
                     skipEmptyLines: true,
-                    error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(); },
+                    error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(false); },
                     complete: (results) => processData(results.data).catch(err => {
                         this.log(`Error processing transaction data: ${err.message}`);
-                        resolve();
+                        resolve(false);
                     })
                 });
             } else {

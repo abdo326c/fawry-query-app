@@ -161,7 +161,7 @@ class App {
                 errDiv.style.display = 'block';
                 btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
                 btn.disabled = false;
-                lucide.createIcons();
+                if (window.lucide) lucide.createIcons();
             } else {
                 Toast.show('Successfully signed in', 'success');
                 btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
@@ -718,7 +718,10 @@ class App {
                 for (let i = 0; i < mappings.length; i += chunkSize) {
                     const chunk = mappings.slice(i, i + chunkSize);
                     const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
-                    if (error) return Toast.show('Error uploading mappings: ' + error.message, 'error');
+                    if (error) {
+                        Toast.show(`Partial upload error: Only ${inserted} mappings saved. Error: ` + error.message, 'error');
+                        return;
+                    }
                     inserted += chunk.length;
                 }
 
@@ -766,7 +769,10 @@ class App {
                 for (let i = 0; i < fixes.length; i += chunkSize) {
                     const chunk = fixes.slice(i, i + chunkSize);
                     const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
-                    if (error) return Toast.show('Error uploading fixes: ' + error.message, 'error');
+                    if (error) {
+                        Toast.show(`Partial upload error: Only ${inserted} fixes saved. Error: ` + error.message, 'error');
+                        return;
+                    }
                     inserted += chunk.length;
                 }
 
