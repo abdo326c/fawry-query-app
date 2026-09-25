@@ -48,6 +48,14 @@ export class FawryProcessor {
         return foundKey ? row[foundKey] : null;
     }
 
+    parseAmount(val) {
+        if (val === null || val === undefined || val === '') return 0;
+        // Strip out currencies (like EGP), commas, and spaces, keeping only numbers, decimal, and minus sign
+        const cleaned = String(val).replace(/[^\d.-]/g, '');
+        const parsed = parseFloat(cleaned);
+        return isNaN(parsed) ? 0 : parsed;
+    }
+
     async processFiles(files) {
         this.log(`Starting import for ${files.length} files...`);
         await this.loadConfig();
@@ -60,7 +68,11 @@ export class FawryProcessor {
             const fileName = file.name.toLowerCase();
             
             if (fileName.endsWith('.csv')) {
-                const text = await file.text();
+                let text = await file.text();
+                // Strip BOM (Byte Order Mark) if present (Excel often adds this)
+                if (text.charCodeAt(0) === 0xFEFF) {
+                    text = text.slice(1);
+                }
                 const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                 
                 const firstLine = normalizedText.split('\n')[0].toLowerCase().replace(/[^a-z0-9,]/g, '');
@@ -124,7 +136,7 @@ export class FawryProcessor {
                         customer_mobile: this.getVal(row, 'CUSTOMER MOBILE NUMBER'),
                         customer_email: this.getVal(row, 'CUSTOMER EMAIL'),
                         payment_status: this.getVal(row, 'PAYMENT STATUS'),
-                        paid_amount: parseFloat(this.getVal(row, 'PAID AMOUNT')) || 0,
+                        paid_amount: this.parseAmount(this.getVal(row, 'PAID AMOUNT')),
                         payment_reference_number: String(this.getVal(row, 'PAYMENT REFERENCE NUMBER') || this.getVal(row, 'REFERENCE NUMBER') || this.getVal(row, 'BANK TRANSACTION ID')),
                         customer_national_id: this.getVal(row, 'CUSTOMER NATIONAL ID'),
                         custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID') || this.getVal(row, 'CUSTOMER NATIONAL ID')
@@ -173,52 +185,63 @@ export class FawryProcessor {
                 // Re-enrich existing transactions with these new links
                 this.log(`Re-enriching existing transactions with new links...`);
                 const refs = uniqueLinks.map(l => String(l.payment_reference_number));
+                
+                const linkLookup = new Map();
+                uniqueLinks.forEach(l => linkLookup.set(String(l.payment_reference_number), l));
+                
+                const chunkPromises = [];
                 for (let i = 0; i < refs.length; i += 200) {
                     const chunkRefs = refs.slice(i, i + 200);
-                    const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
-                    if (existingTx && existingTx.length > 0) {
-                        const { data: existingFixes } = await supabase.from('manual_fixes').select('*').in('reference_number', chunkRefs);
-                        const fixesMap = new Map();
-                        if (existingFixes) {
-                            existingFixes.forEach(f => fixesMap.set(String(f.reference_number), f));
-                        }
-                        
-                        const linkLookup = new Map();
-                        uniqueLinks.forEach(l => linkLookup.set(String(l.payment_reference_number), l));
-
-                        const updates = [];
-                        for (const tx of existingTx) {
-                            const link = linkLookup.get(String(tx.reference_number));
-                            if (link && link.custom_input_value) {
-                                let newStudentId = tx.student_id;
-                                let newStatus = tx.id_status;
-                                if (!fixesMap.has(String(tx.reference_number))) {
-                                    newStudentId = link.custom_input_value;
-                                    newStatus = this.validateID(newStudentId);
-                                } else {
-                                    const fix = fixesMap.get(String(tx.reference_number));
-                                    if (fix.correct_id) {
-                                        newStudentId = fix.correct_id;
+                    
+                    chunkPromises.push((async () => {
+                        const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
+                        if (existingTx && existingTx.length > 0) {
+                            const { data: existingFixes } = await supabase.from('manual_fixes').select('*').in('reference_number', chunkRefs);
+                            const fixesMap = new Map();
+                            if (existingFixes) {
+                                existingFixes.forEach(f => fixesMap.set(String(f.reference_number), f));
+                            }
+                            
+                            const updates = [];
+                            for (const tx of existingTx) {
+                                const link = linkLookup.get(String(tx.reference_number));
+                                if (link && link.custom_input_value) {
+                                    let newStudentId = tx.student_id;
+                                    let newStatus = tx.id_status;
+                                    if (!fixesMap.has(String(tx.reference_number))) {
+                                        newStudentId = link.custom_input_value;
                                         newStatus = this.validateID(newStudentId);
+                                    } else {
+                                        const fix = fixesMap.get(String(tx.reference_number));
+                                        if (fix.correct_id) {
+                                            newStudentId = fix.correct_id;
+                                            newStatus = this.validateID(newStudentId);
+                                        }
+                                    }
+                                    
+                                    if (tx.student_id !== newStudentId || tx.id_status !== newStatus) {
+                                        updates.push({
+                                            id: tx.id,
+                                            reference_number: tx.reference_number,
+                                            item_price: tx.item_price,
+                                            check_column: tx.check_column,
+                                            student_id: newStudentId,
+                                            id_status: newStatus
+                                        });
                                     }
                                 }
-                                
-                                if (tx.student_id !== newStudentId || tx.id_status !== newStatus) {
-                                    updates.push({
-                                        id: tx.id, // Primary key
-                                        reference_number: tx.reference_number,
-                                        item_price: tx.item_price,
-                                        check_column: tx.check_column,
-                                        student_id: newStudentId,
-                                        id_status: newStatus
-                                    });
-                                }
+                            }
+                            if (updates.length > 0) {
+                                await supabase.from('transactions').upsert(updates, { onConflict: 'id', ignoreDuplicates: false });
                             }
                         }
-                        if (updates.length > 0) {
-                            await supabase.from('transactions').upsert(updates, { onConflict: 'id', ignoreDuplicates: false });
-                        }
-                    }
+                    })());
+                }
+                
+                // Execute in parallel batches of 5 to not overwhelm Supabase
+                const concurrencyLimit = 5;
+                for (let i = 0; i < chunkPromises.length; i += concurrencyLimit) {
+                    await Promise.all(chunkPromises.slice(i, i + concurrencyLimit));
                 }
                 
                 resolve();
@@ -265,10 +288,10 @@ export class FawryProcessor {
                     let studentId = custName ? String(custName).replace(/-/g, '').replace(/\D/g, '') : "";
                     if (!studentId && custName) studentId = custName;
 
-                    let totalAmount = parseFloat(this.getVal(row, 'Total Amount Plus Fees')) || 0;
-                    let netAmount = parseFloat(this.getVal(row, 'Net Amount')) || 0;
-                    let fawryFees = parseFloat(this.getVal(row, 'Fawry Fees')) || 0;
-                    let itemPrice = parseFloat(this.getVal(row, 'Item Price')) || 0;
+                    let totalAmount = this.parseAmount(this.getVal(row, 'Total Amount Plus Fees'));
+                    let netAmount = this.parseAmount(this.getVal(row, 'Net Amount'));
+                    let fawryFees = this.parseAmount(this.getVal(row, 'Fawry Fees'));
+                    let itemPrice = this.parseAmount(this.getVal(row, 'Item Price'));
                     let merchant = this.getVal(row, 'Merchant Name') || "";
                     let bank = merchant === "Nile University Edu" ? "NUADIB64" : "NUADCB136";
                     
@@ -393,22 +416,26 @@ export class FawryProcessor {
         // Collect references to fetch links
         const refs = transactions.map(t => t.reference_number);
         
-        // Fetch matching links in chunks to avoid URL length limits
+        // Fetch matching links in parallel
         const dbLinks = [];
         const fetchChunkSize = 200;
+        const fetchPromises = [];
         for (let i = 0; i < refs.length; i += fetchChunkSize) {
             const chunkRefs = refs.slice(i, i + fetchChunkSize);
-            const { data, error } = await supabase
+            fetchPromises.push(supabase
                 .from('links')
                 .select('payment_reference_number, custom_input_value')
-                .in('payment_reference_number', chunkRefs);
-                
+                .in('payment_reference_number', chunkRefs));
+        }
+        
+        const fetchResults = await Promise.all(fetchPromises);
+        fetchResults.forEach(({ data, error }) => {
             if (data) {
                 dbLinks.push(...data);
             } else if (error) {
                 this.log(`Warning: Failed to fetch some links: ${error.message}`);
             }
-        }
+        });
             
         const linkMap = {};
         dbLinks.forEach(l => {
@@ -449,25 +476,33 @@ export class FawryProcessor {
             }
         }
 
-        // Insert into Supabase
+        // Insert into Supabase in parallel batches
         this.log(`Inserting data into database...`);
         const chunkSize = 1000;
         let inserted = 0;
         
+        const upsertPromises = [];
         for (let i = 0; i < transactions.length; i += chunkSize) {
             const chunk = transactions.slice(i, i + chunkSize);
-            const { error } = await supabase.from('transactions').upsert(chunk, { 
-                onConflict: 'reference_number,item_price,check_column', 
-                ignoreDuplicates: false 
-            });
-            
-            if (error) {
-                this.log(`Database error: ${error.message}`);
-            } else {
-                inserted += chunk.length;
-                document.getElementById('progress-fill').style.width = `${(inserted / transactions.length) * 100}%`;
-                document.getElementById('progress-text').innerText = `${inserted} / ${transactions.length} rows processed`;
-            }
+            upsertPromises.push((async () => {
+                const { error } = await supabase.from('transactions').upsert(chunk, { 
+                    onConflict: 'reference_number,item_price,check_column', 
+                    ignoreDuplicates: false 
+                });
+                
+                if (error) {
+                    this.log(`Database error: ${error.message}`);
+                } else {
+                    inserted += chunk.length;
+                    document.getElementById('progress-fill').style.width = `${(inserted / transactions.length) * 100}%`;
+                    document.getElementById('progress-text').innerText = `${inserted} / ${transactions.length} rows processed`;
+                }
+            })());
+        }
+        
+        // Execute upserts in parallel (3 concurrent requests max to avoid overwhelming DB)
+        for (let i = 0; i < upsertPromises.length; i += 3) {
+            await Promise.all(upsertPromises.slice(i, i + 3));
         }
 
         const { error: batchError } = await supabase.from('import_batches').insert({
