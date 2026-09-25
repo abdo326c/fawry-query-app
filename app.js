@@ -1021,116 +1021,119 @@ class App {
             try {
                 const mappings = await fetchAll('item_mappings');
                 const fixes = await fetchAll('manual_fixes');
+                const links = await fetchAll('links', 'payment_reference_number, custom_input_value');
 
-                // Build hash maps for O(1) lookups instead of O(n) find()
+                // Build hash maps for O(1) lookups
                 const fixesMap = new Map();
                 fixes.forEach(f => fixesMap.set(String(f.reference_number), f));
                 const mappingsMap = new Map();
                 mappings.forEach(m => mappingsMap.set(m.item_name, m));
+                const linksMap = new Map();
+                links.forEach(l => linksMap.set(String(l.payment_reference_number), l));
 
-                let fetchMore = true;
-                let from = 0;
-                
-                // Store proposals globally for the modal
                 window.reapplyProposals = [];
 
-                while (fetchMore) {
-                    const { data: txs, error } = await supabase.from('transactions').select('*').range(from, from + 999);
-                    if (error) throw error;
-                    if (!txs || txs.length === 0) break;
+                // 1. Get exact count of transactions
+                const { count, error: countErr } = await supabase.from('transactions').select('*', { count: 'exact', head: true });
+                if (countErr) throw countErr;
 
-                    // Fetch links only for this specific chunk of transactions to prevent memory crashes
-                    const chunkRefs = txs.map(t => String(t.reference_number));
-                    const { data: chunkLinks } = await supabase.from('links')
-                        .select('payment_reference_number, custom_input_value')
-                        .in('payment_reference_number', chunkRefs);
-                        
-                    const linksMap = new Map();
-                    if (chunkLinks) {
-                        chunkLinks.forEach(l => linksMap.set(String(l.payment_reference_number), l));
+                if (count && count > 0) {
+                    // 2. Fetch in parallel (5 at a time)
+                    const chunkSize = 1000;
+                    const ranges = [];
+                    for (let i = 0; i < count; i += chunkSize) {
+                        ranges.push([i, i + chunkSize - 1]);
                     }
 
-                    for (const tx of txs) {
-                        let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
-                        
-                        let newStudentId = tx.student_id;
-                        let newItemName = originalItemName;
-                        let newMapping = null;
-                        let newSecondMapping = null;
-                        
-                        let reasons = [];
+                    for (let i = 0; i < ranges.length; i += 5) {
+                        const batch = ranges.slice(i, i + 5);
+                        const promises = batch.map(r => supabase.from('transactions').select('*').range(r[0], r[1]));
+                        const results = await Promise.all(promises);
 
-                        const link = linksMap.get(String(tx.reference_number));
-                        if (link && link.custom_input_value) {
-                            newStudentId = link.custom_input_value;
-                            reasons.push("Student Link");
-                        }
+                        results.forEach(({ data: txs, error }) => {
+                            if (error) return; // Skip errors in chunks
+                            if (!txs) return;
 
-                        const mapDef = mappingsMap.get(newItemName);
-                        if (mapDef) {
-                            if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
-                            if (mapDef.mapping) newMapping = mapDef.mapping;
-                            if (mapDef.second_mapping) newSecondMapping = mapDef.second_mapping;
-                            reasons.push("Mapping Rule");
-                        }
+                            for (const tx of txs) {
+                                let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
+                                
+                                let newStudentId = tx.student_id;
+                                let newItemName = originalItemName;
+                                let newMapping = null;
+                                let newSecondMapping = null;
+                                
+                                let reasons = [];
 
-                        const fix = fixesMap.get(String(tx.reference_number));
-                        if (fix) {
-                            if (fix.correct_id) newStudentId = fix.correct_id;
-                            if (fix.item_name) newItemName = fix.item_name;
-                            if (fix.mapping) newMapping = fix.mapping;
-                            if (fix.second_mapping) newSecondMapping = fix.second_mapping;
-                            reasons.push("Manual Fix");
-                        }
+                                const link = linksMap.get(String(tx.reference_number));
+                                if (link && link.custom_input_value) {
+                                    newStudentId = link.custom_input_value;
+                                    reasons.push("Student Link");
+                                }
 
-                        let newStatus = validateID(newStudentId);
+                                const mapDef = mappingsMap.get(newItemName);
+                                if (mapDef) {
+                                    if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
+                                    if (mapDef.mapping) newMapping = mapDef.mapping;
+                                    if (mapDef.second_mapping) newSecondMapping = mapDef.second_mapping;
+                                    reasons.push("Mapping Rule");
+                                }
 
-                        if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.second_mapping !== newSecondMapping || tx.id_status !== newStatus) {
-                            
-                            // Determine what exactly changed
-                            let oldValues = [];
-                            let newValues = [];
-                            let changeType = [];
-                            if (tx.student_id !== newStudentId) {
-                                changeType.push('ID');
-                                oldValues.push(tx.student_id || 'Empty');
-                                newValues.push(newStudentId || 'Empty');
+                                const fix = fixesMap.get(String(tx.reference_number));
+                                if (fix) {
+                                    if (fix.correct_id) newStudentId = fix.correct_id;
+                                    if (fix.item_name) newItemName = fix.item_name;
+                                    if (fix.mapping) newMapping = fix.mapping;
+                                    if (fix.second_mapping) newSecondMapping = fix.second_mapping;
+                                    reasons.push("Manual Fix");
+                                }
+
+                                let newStatus = validateID(newStudentId);
+
+                                if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.second_mapping !== newSecondMapping || tx.id_status !== newStatus) {
+                                    
+                                    let oldValues = [];
+                                    let newValues = [];
+                                    let changeType = [];
+                                    if (tx.student_id !== newStudentId) {
+                                        changeType.push('ID');
+                                        oldValues.push(tx.student_id || 'Empty');
+                                        newValues.push(newStudentId || 'Empty');
+                                    }
+                                    if (tx.mapping !== newMapping) {
+                                        changeType.push('Mapping');
+                                        oldValues.push(tx.mapping || 'Empty');
+                                        newValues.push(newMapping || 'Empty');
+                                    }
+                                    if (tx.second_mapping !== newSecondMapping) {
+                                        changeType.push('2nd Mapping');
+                                        oldValues.push(tx.second_mapping || 'Empty');
+                                        newValues.push(newSecondMapping || 'Empty');
+                                    }
+                                    if (tx.id_status !== newStatus && tx.student_id === newStudentId) {
+                                        changeType.push('Status');
+                                        oldValues.push(tx.id_status || 'Empty');
+                                        newValues.push(newStatus || 'Empty');
+                                    }
+
+                                    window.reapplyProposals.push({
+                                        originalTx: tx,
+                                        updatedTx: {
+                                            ...tx,
+                                            student_id: newStudentId,
+                                            item_name: newItemName,
+                                            mapping: newMapping,
+                                            second_mapping: newSecondMapping,
+                                            id_status: newStatus
+                                        },
+                                        changeType: changeType.join(', '),
+                                        oldStr: oldValues.join(', '),
+                                        newStr: newValues.join(', '),
+                                        reason: [...new Set(reasons)].join(' + ') || 'Status Re-validation'
+                                    });
+                                }
                             }
-                            if (tx.mapping !== newMapping) {
-                                changeType.push('Mapping');
-                                oldValues.push(tx.mapping || 'Empty');
-                                newValues.push(newMapping || 'Empty');
-                            }
-                            if (tx.second_mapping !== newSecondMapping) {
-                                changeType.push('2nd Mapping');
-                                oldValues.push(tx.second_mapping || 'Empty');
-                                newValues.push(newSecondMapping || 'Empty');
-                            }
-                            if (tx.id_status !== newStatus && tx.student_id === newStudentId) {
-                                changeType.push('Status');
-                                oldValues.push(tx.id_status || 'Empty');
-                                newValues.push(newStatus || 'Empty');
-                            }
-
-                            window.reapplyProposals.push({
-                                originalTx: tx,
-                                updatedTx: {
-                                    ...tx,
-                                    student_id: newStudentId,
-                                    item_name: newItemName,
-                                    mapping: newMapping,
-                                    id_status: newStatus
-                                },
-                                changeType: changeType.join(', '),
-                                oldStr: oldValues.join(', '),
-                                newStr: newValues.join(', '),
-                                reason: [...new Set(reasons)].join(' + ') || 'Status Re-validation'
-                            });
-                        }
+                        });
                     }
-
-                    if (txs.length < 1000) fetchMore = false;
-                    else from += 1000;
                 }
 
                 if (window.reapplyProposals.length === 0) {
