@@ -1841,3 +1841,64 @@ select option {
     background-color: rgba(0, 0, 0, 0.05) !important;
 }
 
+
+/* Fix TomSelect Wrapper */
+.ts-wrapper.input-select {
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+/* Adjust the input box */
+.ts-control {
+    min-height: 38px !important;
+    padding: 0.25rem 0.5rem !important;
+    font-size: 0.85rem !important;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Fix item tags */
+.ts-control .item {
+    margin: 0 !important;
+    padding: 2px 6px !important;
+    font-size: 0.75rem !important;
+    line-height: 1.2;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px !important;
+    white-space: normal !important;
+    word-break: break-word;
+}
+
+/* Fix placeholder color */
+.ts-control input::placeholder {
+    color: rgba(255, 255, 255, 0.4) !important;
+}
+:root.light .ts-control input::placeholder {
+    color: rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Ensure remove button in tags looks good */
+.ts-control .item .remove {
+    margin-left: 4px !important;
+    border-left: 1px solid rgba(255,255,255,0.2) !important;
+    padding-left: 4px !important;
+    cursor: pointer;
+}
+:root.light .ts-control .item .remove {
+    border-left: 1px solid rgba(0,0,0,0.2) !important;
+}
+
+
+.ts-dropdown {
+    z-index: 9999 !important;
+    font-size: 0.85rem !important;
+}
+.ts-dropdown .option {
+    padding: 0.4rem 0.8rem !important;
+}
+
