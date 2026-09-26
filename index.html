@@ -599,59 +599,57 @@
                         </div>
 
                         <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
-                            <div class="form-group" style="flex: 1; min-width: 250px;">
-                                <label>Targeted Import (Optional)</label>
-                                <div class="upload-zone" id="automatcher-import-zone" style="padding: 2rem;">
-                                    <i data-lucide="upload-cloud" class="upload-icon" style="margin-bottom: 0.5rem; width: 32px; height: 32px;"></i>
-                                    <p style="margin-top: 0.5rem; font-size: 0.9rem;">Upload specific transactions to match</p>
+                            <div class="form-group" style="flex: 1; margin: 0;">
+                                <div class="upload-zone" id="automatcher-import-zone" style="padding: 1rem; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 1rem; border-radius: 8px;">
+                                    <i data-lucide="upload-cloud" class="upload-icon" style="margin: 0; width: 24px; height: 24px;"></i>
+                                    <p style="margin: 0; font-size: 0.9rem;"><strong>Targeted Import:</strong> Upload specific transactions to match (Optional)</p>
                                     <input type="file" id="automatcher-file-input" accept=".xlsx,.csv" class="hidden-input">
                                 </div>
                                 <div id="automatcher-import-status" style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--primary);"></div>
                             </div>
-
                         </div>
                         
                         <div class="table-container">
                             <table class="data-table" id="automatcher-table">
                                 <thead>
                                     <tr>
-                                        <th><input type="checkbox" id="automatcher-select-all"></th>
-                                        <th>
+                                        <th style="width: 40px;"><input type="checkbox" id="automatcher-select-all"></th>
+                                        <th style="min-width: 120px;">
                                             <div class="th-filter-wrapper" data-column="reference_number" data-table="automatch">
                                                 Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>
+                                        <th style="min-width: 120px;">
                                             <div class="th-filter-wrapper" data-column="payment_date" data-table="automatch">
-                                                Payment Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                                Date <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>
+                                        <th style="min-width: 100px;">
                                             <div class="th-filter-wrapper" data-column="mapping" data-table="automatch">
                                                 Mapping <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>
+                                        <th style="min-width: 110px;">
                                             <div class="th-filter-wrapper" data-column="second_mapping" data-table="automatch">
                                                 2nd Mapping <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>
+                                        <th style="min-width: 150px;">
                                             <div class="th-filter-wrapper" data-column="item_name" data-table="automatch">
                                                 Item Name <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>
+                                        <th style="min-width: 100px;">
                                             <div class="th-filter-wrapper" data-column="item_price" data-table="automatch">
                                                 Amount <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>
+                                        <th style="min-width: 200px;">
                                             <div class="th-filter-wrapper" data-column="proposed_fix" data-table="automatch">
                                                 Proposed Fix <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th>Match Reason</th>
+                                        <th style="min-width: 250px;">Match Reason</th>
                                     </tr>
                                 </thead>
                                 <tbody id="automatcher-table-body">
