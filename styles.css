@@ -1902,3 +1902,9 @@ select option {
     padding: 0.4rem 0.8rem !important;
 }
 
+
+.filters-bar {
+    position: relative;
+    z-index: 50;
+}
+
