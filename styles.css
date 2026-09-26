@@ -1797,3 +1797,47 @@ select option {
 }
 
 
+
+/* TomSelect Dark Theme Overrides */
+.ts-control {
+    background-color: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: var(--text-main) !important;
+    border-radius: 0.5rem !important;
+    padding: 0.5rem 1rem !important;
+}
+.ts-control input { color: var(--text-main) !important; }
+.ts-dropdown {
+    background-color: #1e1e1e !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: var(--text-main) !important;
+}
+.ts-dropdown .option {
+    color: var(--text-main) !important;
+}
+.ts-dropdown .option:hover, .ts-dropdown .option.active {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    color: var(--text-main) !important;
+}
+.ts-control .item {
+    background: rgba(56, 189, 248, 0.2) !important;
+    color: #38bdf8 !important;
+    border: 1px solid rgba(56, 189, 248, 0.3) !important;
+    border-radius: 4px !important;
+}
+:root.light .ts-control {
+    background-color: #ffffff !important;
+    border: 1px solid rgba(0, 0, 0, 0.15) !important;
+    color: var(--text-main) !important;
+}
+:root.light .ts-dropdown {
+    background-color: #ffffff !important;
+    color: var(--text-main) !important;
+}
+:root.light .ts-dropdown .option {
+    color: var(--text-main) !important;
+}
+:root.light .ts-dropdown .option:hover, :root.light .ts-dropdown .option.active {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+}
+

@@ -18,6 +18,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
 </head>
 <body>
     <!-- Toast Container -->
@@ -739,11 +741,11 @@
                     </div>
                     <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                         <label style="font-size: 0.75rem">Item Name</label>
-                        <select id="erp-filter-item-name" class="input-select" style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Items</option></select>
+                        <select id="erp-filter-item-name" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Items</option></select>
                     </div>
                     <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                         <label style="font-size: 0.75rem">Mapping</label>
-                        <select id="erp-filter-mapping" class="input-select" style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
+                        <select id="erp-filter-mapping" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
                     </div>
                 </div>
 

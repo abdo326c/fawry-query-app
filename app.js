@@ -3048,11 +3048,23 @@ class App {
             bankFilter.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
         }
         
-        if (itemNameFilter) {
+        if (itemNameFilter && window.TomSelect) {
+            this.erpItemNameSelect = new TomSelect(itemNameFilter, {
+                plugins: ['remove_button'],
+                placeholder: "All Items",
+                onChange: () => this.loadErpExport()
+            });
+        } else if (itemNameFilter) {
             itemNameFilter.addEventListener('change', () => this.loadErpExport());
         }
 
-        if (mappingFilter) {
+        if (mappingFilter && window.TomSelect) {
+            this.erpMappingSelect = new TomSelect(mappingFilter, {
+                plugins: ['remove_button'],
+                placeholder: "All Mappings",
+                onChange: () => this.loadErpExport()
+            });
+        } else if (mappingFilter) {
             mappingFilter.addEventListener('change', () => this.loadErpExport());
         }
 
@@ -3100,15 +3112,25 @@ class App {
         const itemSelect = document.getElementById('erp-filter-item-name');
         const mappingSelect = document.getElementById('erp-filter-mapping');
 
-        if (itemSelect) {
+        if (this.erpItemNameSelect) {
+            const currentItems = this.erpItemNameSelect.getValue();
+            this.erpItemNameSelect.clearOptions();
+            items.forEach(i => this.erpItemNameSelect.addOption({value: i, text: i}));
+            this.erpItemNameSelect.setValue(currentItems);
+        } else if (itemSelect) {
             const currentItem = itemSelect.value;
-            itemSelect.innerHTML = '<option value="">All Items</option>' + items.map(i => `<option value="${escapeHTML(i)}">${escapeHTML(i)}</option>`).join('');
+            itemSelect.innerHTML = items.map(i => `<option value="${escapeHTML(i)}">${escapeHTML(i)}</option>`).join('');
             if (items.includes(currentItem)) itemSelect.value = currentItem;
         }
         
-        if (mappingSelect) {
+        if (this.erpMappingSelect) {
+            const currentMappings = this.erpMappingSelect.getValue();
+            this.erpMappingSelect.clearOptions();
+            mappings.forEach(m => this.erpMappingSelect.addOption({value: m, text: m}));
+            this.erpMappingSelect.setValue(currentMappings);
+        } else if (mappingSelect) {
             const currentMapping = mappingSelect.value;
-            mappingSelect.innerHTML = '<option value="">All Mappings</option>' + mappings.map(m => `<option value="${escapeHTML(m)}">${escapeHTML(m)}</option>`).join('');
+            mappingSelect.innerHTML = mappings.map(m => `<option value="${escapeHTML(m)}">${escapeHTML(m)}</option>`).join('');
             if (mappings.includes(currentMapping)) mappingSelect.value = currentMapping;
         }
     }
@@ -3119,15 +3141,27 @@ class App {
         const dateFrom = document.getElementById('erp-filter-date-from').value;
         const dateTo = document.getElementById('erp-filter-date-to').value;
         const bank = document.getElementById('erp-filter-bank').value;
-        const itemName = document.getElementById('erp-filter-item-name').value;
-        const mapping = document.getElementById('erp-filter-mapping').value;
+        const itemNameSelect = document.getElementById('erp-filter-item-name');
+        const mappingSelect = document.getElementById('erp-filter-mapping');
+        
+        let itemNames = [];
+        if (this.erpItemNameSelect) itemNames = [].concat(this.erpItemNameSelect.getValue()).filter(Boolean);
+        else if (itemNameSelect && itemNameSelect.selectedOptions) {
+            itemNames = Array.from(itemNameSelect.selectedOptions).map(o => o.value).filter(Boolean);
+        }
+
+        let mappings = [];
+        if (this.erpMappingSelect) mappings = [].concat(this.erpMappingSelect.getValue()).filter(Boolean);
+        else if (mappingSelect && mappingSelect.selectedOptions) {
+            mappings = Array.from(mappingSelect.selectedOptions).map(o => o.value).filter(Boolean);
+        }
 
         let query = supabase.from('transactions').select('*');
         if (dateFrom) query = query.gte('payment_date', dateFrom);
         if (dateTo) query = query.lte('payment_date', dateTo);
         if (bank) query = query.eq('bank', bank);
-        if (itemName) query = query.eq('item_name', itemName);
-        if (mapping) query = query.eq('mapping', mapping);
+        if (itemNames && itemNames.length > 0) query = query.in('item_name', itemNames);
+        if (mappings && mappings.length > 0) query = query.in('mapping', mappings);
 
         let allData = [];
         let from = 0;
