@@ -108,6 +108,7 @@ class App {
         
         this.isImporting = false;
         this.initTheme();
+        this.initDatePickers();
         this.fetchUniqueFilters();
 
         this.initNavigation();
@@ -223,6 +224,7 @@ class App {
         const htmlEl = document.documentElement;
         const iconEl = document.getElementById('theme-icon');
         const textEl = document.getElementById('theme-text');
+        const fpThemeEl = document.getElementById('flatpickr-theme');
 
         // Check local storage or system preference
         const savedTheme = localStorage.getItem('fawry-theme');
@@ -233,6 +235,9 @@ class App {
             htmlEl.classList.add('light');
             if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
             if(textEl) textEl.innerText = 'Dark Mode';
+            if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/light.css";
+        } else {
+            if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/dark.css";
         }
 
         btnToggle.addEventListener('click', () => {
@@ -243,15 +248,26 @@ class App {
                 localStorage.setItem('fawry-theme', 'dark');
                 if(iconEl) iconEl.setAttribute('data-lucide', 'sun');
                 if(textEl) textEl.innerText = 'Light Mode';
+                if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/dark.css";
             } else {
                 htmlEl.classList.remove('dark');
                 htmlEl.classList.add('light');
                 localStorage.setItem('fawry-theme', 'light');
                 if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
                 if(textEl) textEl.innerText = 'Dark Mode';
+                if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/light.css";
             }
             if (window.lucide) lucide.createIcons();
         });
+    }
+
+    initDatePickers() {
+        if (window.flatpickr) {
+            flatpickr('input[type="date"]', {
+                dateFormat: "Y-m-d",
+                allowInput: true
+            });
+        }
     }
 
     async fetchUniqueFilters() {
