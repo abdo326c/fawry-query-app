@@ -2127,7 +2127,10 @@ class App {
                         <td>${date}</td>
                         <td>${escapeHTML(b.user_email || 'System')}</td>
                         <td>${b.records_processed || 0}</td>
-                        <td style="color: ${statusColor}; text-transform: capitalize;">${escapeHTML(b.status)}</td>
+                        <td style="color: ${statusColor};">
+                            <div style="text-transform: capitalize; font-weight: 500;">${escapeHTML(b.status)}</div>
+                            ${b.status === 'failed' && b.details && b.details.error_message ? `<div style="font-size: 0.75rem; margin-top: 0.25rem; word-break: break-word; max-width: 250px;">${escapeHTML(b.details.error_message)}</div>` : ''}
+                        </td>
                         <td>
                             ${canRevert ? `<button class="btn btn-outline btn-revert-batch" data-batch-id="${b.id}" data-file-name="${escapeHTML(b.file_name)}" data-type="${escapeHTML(type)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;"><i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i> Revert</button>` : ''}
                         </td>

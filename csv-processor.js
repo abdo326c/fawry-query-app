@@ -321,10 +321,12 @@ export class FawryProcessor {
                 // Upsert links
                 const chunkSize = 500;
                 let insertedCount = 0;
+                let lastError = null;
                 for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
                     const chunk = uniqueLinks.slice(i, i + chunkSize);
                     const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
                     if (error) {
+                        lastError = error.message;
                         this.log(`Error saving links: ${error.message}`);
                     } else {
                         insertedCount += chunk.length;
@@ -337,7 +339,7 @@ export class FawryProcessor {
                     status: insertedCount === uniqueLinks.length ? 'success' : (insertedCount > 0 ? 'partial' : 'failed'),
                     records_processed: uniqueLinks.length,
                     records_inserted: insertedCount,
-                    details: { type: 'links' }
+                    details: { type: 'links', error_message: lastError }
                 });
                 
                 if (batchError) {
@@ -608,6 +610,7 @@ export class FawryProcessor {
         const chunkSize = 1000;
         let inserted = 0;
         let hasError = false;
+        let lastError = null;
         
         const upsertPromises = [];
         for (let i = 0; i < transactions.length; i += chunkSize) {
@@ -621,6 +624,7 @@ export class FawryProcessor {
                 if (error) {
                     hasError = true;
                     this.hasErrors = true;
+                    lastError = error.message;
                     this.log(`Database error: ${error.message}`);
                 } else {
                     inserted += chunk.length;
@@ -641,7 +645,7 @@ export class FawryProcessor {
             status: inserted === transactions.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
             records_processed: transactions.length,
             records_inserted: inserted,
-            details: { type: 'transactions' }
+            details: { type: 'transactions', error_message: lastError }
         });
         
         if (batchError) {
