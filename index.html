@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fawry Payments Database</title>
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            alert("JS Error: " + msg + " at line " + line);
+        };
+        window.addEventListener("unhandledrejection", function(event) {
+            alert("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
+        });
+    </script>
+    <link rel="stylesheet" href="styles.css?v=3">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/dark.css" id="flatpickr-theme">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+</head>
+<body>
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Auth Overlay -->
+    <div id="auth-overlay" class="auth-overlay">
+        <div class="auth-card">
+            <div class="logo-container" style="justify-content: center; margin-bottom: 2rem; gap: 0.75rem;">
+                <i data-lucide="database" style="width: 32px; height: 32px; color: var(--primary);"></i>
+                <span class="logo-text" style="font-size: 1.75rem; text-align: center; font-weight: 700; tracking: -0.05em;">Fawry Payments Database</span>
+            </div>
+            <form id="auth-form">
+                <div class="form-group" style="margin-bottom: 1rem;">
+                    <label>Email Address</label>
+                    <input type="email" id="auth-email" class="input-text" placeholder="admin@example.com" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label>Password</label>
+                    <input type="password" id="auth-password" class="input-text" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;" id="btn-login">
+                    <i data-lucide="log-in"></i> Sign In
+                </button>
+            </form>
+            <div id="auth-error" style="color: #ef4444; font-size: 0.9rem; margin-top: 1rem; text-align: center; display: none;"></div>
+        </div>
+    </div>
+
+    <div class="app-layout">
+        <!-- Mobile Header -->
+        <div class="mobile-header">
+            <div class="logo-container" style="margin-bottom: 0; gap: 0.5rem;">
+                <i data-lucide="database" style="width: 24px; height: 24px; color: var(--primary);"></i>
+                <span class="logo-text" style="font-weight: 700;">Fawry Payments Database</span>
+            </div>
+            <button id="btn-mobile-menu" class="btn-icon">
+                <i data-lucide="menu" style="width: 24px; height: 24px;"></i>
+            </button>
+        </div>
+
+        <aside class="sidebar">
+            <button id="btn-close-sidebar" class="btn-icon" style="display: none; position: absolute; right: 10px; top: 10px;">
+                <i data-lucide="x" style="width: 24px; height: 24px;"></i>
+            </button>
+            <div class="logo-container" style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 2.5rem; padding-left: 0.5rem; white-space: normal; word-wrap: break-word; overflow: hidden;">
+                <div style="display: flex; align-items: center; justify-content: center; background: rgba(56, 189, 248, 0.1); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.2); flex-shrink: 0;">
+                    <i data-lucide="database" style="width: 24px; height: 24px; color: var(--primary);"></i>
+                </div>
+                <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; line-height: 1.2;">Fawry Payments Database</span>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="#dashboard" class="nav-link" data-tab="dashboard">
+                    <i data-lucide="bar-chart-2"></i> Dashboard
+                </a>
+                <a href="#transactions" class="nav-link active" data-tab="transactions">
+                    <i data-lucide="table"></i> Transactions
+                </a>
+                <a href="#import" class="nav-link" data-tab="import">
+                    <i data-lucide="upload-cloud"></i> Import CSV
+                </a>
+                <a href="#history" class="nav-link" data-tab="history">
+                    <i data-lucide="history"></i> Import History
+                </a>
+                <a href="#mappings" class="nav-link" data-tab="mappings">
+                    <i data-lucide="git-merge"></i> Item Mappings
+                </a>
+                <a href="#fixes" class="nav-link" data-tab="fixes">
+                    <i data-lucide="wrench"></i> Manual Fixes
+                </a>
+                <a href="#automatcher" class="nav-link" data-tab="automatcher">
+                    <i data-lucide="zap"></i> Auto-Matcher
+                </a>
+                <a href="#student-master" class="nav-link" data-tab="student-master">
+                    <i data-lucide="users"></i> Students Details
+                </a>
+            
+                <a href="#payment-links" class="nav-link" data-tab="payment-links">
+                    <i data-lucide="link"></i> Payment Links
+                </a>
+                <a href="#erp-export" class="nav-link" data-tab="erp-export">
+                    <i data-lucide="download-cloud"></i> ERP Export
+                </a>
+            </nav>
+
+            <!-- User Profile & Logout -->
+            <div class="user-profile-compact" id="user-profile-section" style="display: none;">
+                <div class="user-avatar-mini">
+                    <i data-lucide="user"></i>
+                </div>
+                <div class="user-details-mini">
+                    <div class="user-email-text" id="user-email-display" title="user@example.com">user@example.com</div>
+                    <div class="user-actions-mini">
+                        <button id="btn-theme-toggle" class="action-icon-btn" title="Toggle Theme">
+                            <i data-lucide="sun" id="theme-icon"></i>
+                        </button>
+                        <button id="btn-logout" class="action-icon-btn text-danger" title="Sign Out">
+                            <i data-lucide="log-out"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Signature Footer -->
+            <div style="margin-top: 1rem; text-align: center; font-size: 0.75rem; color: var(--text-muted); opacity: 0.7;">
+                Finance Team | Abdelrahman Mohamed
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            
+            <!-- Dashboard View -->
+            <section id="view-dashboard" class="view">
+                <div class="header">
+                    <h1>Pivot Dashboard</h1>
+                    <button class="btn btn-primary" id="btn-copy-pivot">
+                        <i data-lucide="copy"></i> Copy for Email
+                    </button>
+                </div>
+                <!-- Summary Stat Cards -->
+                <div class="stat-cards-row" id="dashboard-stats-row">
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Total Collections</span>
+                            <i data-lucide="trending-up" class="stat-icon" style="color: var(--primary);"></i>
+                        </div>
+                        <div class="stat-value" id="stat-total-collections">EGP 0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Transactions</span>
+                            <i data-lucide="layers" class="stat-icon" style="color: var(--primary);"></i>
+                        </div>
+                        <div class="stat-value" id="stat-total-transactions">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Valid IDs</span>
+                            <i data-lucide="check-circle" class="stat-icon" style="color: var(--success);"></i>
+                        </div>
+                        <div class="stat-value" style="color: var(--success);" id="stat-valid-pct">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Errors</span>
+                            <i data-lucide="alert-triangle" class="stat-icon" style="color: var(--danger);"></i>
+                        </div>
+                        <div class="stat-value" style="color: var(--danger);" id="stat-errors">0</div>
+                    </div>
+                </div>
+
+                <div class="dashboard-layout">
+                    <!-- Pivot Table Area -->
+                    <div class="glass-card" style="flex: 1; width: 100%; overflow-x: auto;">
+                        <table class="pivot-table" id="dashboard-pivot-table">
+                            <thead>
+                                <tr>
+                                    <th colspan="4" class="pivot-title">Total Fawry Collection</th>
+                                </tr>
+                                <tr>
+                                    <th class="pivot-row-label">Date</th>
+                                    <th class="pivot-col-label">NUADCB136</th>
+                                    <th class="pivot-col-label highlight-col">NUADIB64</th>
+                                    <th class="pivot-col-label">Grand Total</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dashboard-pivot-body">
+                                <!-- Generated by JS -->
+                            </tbody>
+                            <tfoot id="dashboard-pivot-foot">
+                                <!-- Generated by JS -->
+                            </tfoot>
+                        </table>
+                    </div>
+
+                    <!-- Filters Area -->
+                    <div style="width: 300px; display: flex; flex-direction: column; gap: 1rem;">
+                        <!-- View Settings -->
+                        <div class="glass-card filter-box">
+                            <div class="filter-header">
+                                <h3>View By</h3>
+                            </div>
+                            <div class="filter-body">
+                                <label style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">Group Rows By</label>
+                                <select id="dashboard-group-by" class="input-select" style="width: 100%;">
+                                    <option value="date">Date</option>
+                                    <option value="mapping">Mapping</option>
+                                    <option value="second_mapping">2nd Mapping</option>
+                                    <option value="item_name">Item Name</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Payment Date Filter -->
+                        <div class="glass-card filter-box">
+                            <div class="filter-header">
+                                <h3>Payment Date</h3>
+                            </div>
+                            <div class="filter-body">
+                                <label style="font-size: 0.85rem; color: #a1a1aa; margin-bottom: 0.25rem; display: block;">Date From</label>
+                                <input type="date" id="dashboard-date-from" class="input-text" style="width: 100%; margin-bottom: 0.75rem;">
+                                <label style="font-size: 0.85rem; color: #a1a1aa; margin-bottom: 0.25rem; display: block;">Date To</label>
+                                <input type="date" id="dashboard-date-to" class="input-text" style="width: 100%;">
+                            </div>
+                        </div>
+
+                        <!-- Bank Filter -->
+                        <div class="glass-card filter-box">
+                            <div class="filter-header">
+                                <h3>Bank</h3>
+                            </div>
+                            <div class="filter-body" id="dashboard-bank-filters">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="NUADCB136" checked>
+                                    NUADCB136
+                                </label>
+                                <label class="checkbox-label mt-2">
+                                    <input type="checkbox" value="NUADIB64" checked>
+                                    NUADIB64
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Transactions View -->
+            <section id="view-transactions" class="view active">
+                <div class="header">
+                    <h1>Transactions</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-outline" id="btn-reapply-rules">
+                            <i data-lucide="refresh-cw"></i> Re-apply Rules
+                        </button>
+                        <button class="btn btn-outline" id="btn-export">
+                            <i data-lucide="download"></i> Export Excel
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Filters Bar -->
+                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem;">
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Date From</label>
+                        <input type="date" id="filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Date To</label>
+                        <input type="date" id="filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+
+                    <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
+                        <button class="btn btn-primary" id="btn-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
+                        <button class="btn btn-outline" id="btn-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div style="flex: 2; min-width: 200px;">
+                        <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref...">
+                    </div>
+                </div>
+                
+                <div class="table-container glass-card">
+                    <table class="data-table" id="transactions-table">
+                        <thead>
+                            <tr>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="reference_number" data-table="transactions">
+                                        Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="payment_date" data-table="transactions">
+                                        Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="student_id" data-table="transactions">
+                                        Student ID <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="item_price" data-table="transactions">
+                                        Item Price <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="item_name" data-table="transactions">
+                                        Item Name <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="mapping" data-table="transactions">
+                                        Mapping <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="second_mapping" data-table="transactions">
+                                        2nd Mapping <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="bank" data-table="transactions">
+                                        Bank <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                                <th>
+                                    <div class="th-filter-wrapper" data-column="id_status" data-table="transactions">
+                                        ID Status <i data-lucide="filter" class="header-filter-icon"></i>
+                                    </div>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactions-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                    <div id="pagination-controls" class="pagination" style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <label for="page-size" style="font-size: 0.85rem; color: var(--text-muted);">Rows per page:</label>
+                            <select id="page-size" class="input-text" style="padding: 0.3rem 1.5rem 0.3rem 0.5rem; font-size: 0.85rem;">
+                                <option value="10">10</option>
+                                <option value="50">50</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 1rem; align-items: center;">
+                            <button id="btn-prev" class="btn btn-outline" disabled><i data-lucide="chevron-left"></i> Prev</button>
+                            <span id="page-info">Page 1</span>
+                            <button id="btn-next" class="btn btn-outline" disabled>Next <i data-lucide="chevron-right"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Import View -->
+            <section id="view-import" class="view">
+                <div class="header">
+                    <h1>Data Import Processor</h1>
+                </div>
+                
+                <div class="glass-card upload-container">
+                    <div class="upload-zone" id="drop-zone">
+                        <i data-lucide="upload" class="upload-icon"></i>
+                        <h3>Drag & Drop CSV or Excel Files</h3>
+                        <p>Support Fawry daily/monthly exports and Links Excel files</p>
+                        <input type="file" id="file-input" multiple accept=".csv, .xlsx, .xls" class="hidden-input">
+                        <button class="btn btn-primary mt-4" onclick="document.getElementById('file-input').click()">Browse Files</button>
+                    </div>
+                    
+                    <div id="import-progress" class="hidden mt-6">
+                        <h3>Processing...</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <p id="progress-text">0 / 0 rows processed</p>
+                        <div id="import-log" class="log-console mt-4"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Import History View -->
+            <section id="view-history" class="view">
+                <div class="header">
+                    <h1>Import History</h1>
+                    <button class="btn btn-outline" id="btn-refresh-history">
+                        <i data-lucide="refresh-cw"></i> Refresh
+                    </button>
+                </div>
+                <div class="table-container glass-card">
+                    <table class="data-table" id="history-table">
+                        <thead>
+                            <tr>
+                                <th>File Name</th>
+                                <th>Processed At</th>
+                                <th>Processed By</th>
+                                <th>Records</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Mappings View -->
+            <section id="view-mappings" class="view">
+                <div class="header">
+                    <h1>Item Mappings</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-outline" id="btn-template-mappings" >
+                            <i data-lucide="download"></i> Template
+                        </button>
+                        <button class="btn btn-outline" id="btn-export-mappings" >
+                            <i data-lucide="download"></i> Export
+                        </button>
+                        <input type="file" id="file-upload-mappings" accept=".xlsx, .xls, .csv" style="display: none;">
+                        <button class="btn btn-outline" onclick="document.getElementById('file-upload-mappings').click()">
+                            <i data-lucide="upload"></i> Upload Excel
+                        </button>
+                        <button class="btn btn-primary" id="btn-add-mapping">
+                            <i data-lucide="plus"></i> Add Mapping
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container glass-card">
+                    <table class="data-table" id="mappings-table">
+                        <thead>
+                            <tr>
+                                <th>Original Item Name</th>
+                                <th>Adjusted Item Name</th>
+                                <th>Mapping Category</th>
+                                <th>2nd Mapping</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappings-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Fixes View -->
+            <section id="view-fixes" class="view">
+                <div class="header">
+                    <h1>Manual Fixes</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-outline" id="btn-template-fixes" >
+                            <i data-lucide="download"></i> Template
+                        </button>
+                        <button class="btn btn-outline" id="btn-export-fixes" >
+                            <i data-lucide="download"></i> Export
+                        </button>
+                        <input type="file" id="file-upload-fixes" accept=".xlsx, .xls, .csv" style="display: none;">
+                        <button class="btn btn-outline" onclick="document.getElementById('file-upload-fixes').click()">
+                            <i data-lucide="upload"></i> Upload Excel
+                        </button>
+                        <button class="btn btn-primary" id="btn-add-fix">
+                            <i data-lucide="plus"></i> Add Fix
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container glass-card">
+                    <table class="data-table" id="fixes-table">
+                        <thead>
+                            <tr>
+                                <th>Reference Number</th>
+                                <th>Correct ID</th>
+                                <th>Item Name</th>
+                                <th>Mapping</th>
+                                <th>2nd Mapping</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fixes-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            
+            <!-- Students Details View -->
+            <section id="view-student-master" class="view">
+                <div class="header">
+                    <h1>Students Details</h1>
+                    <div class="header-actions">
+                        <button class="btn" id="btn-export-students"><i data-lucide="download"></i> Export Master List</button>
+                    </div>
+                </div>
+
+                <!-- 3 Tabs Navigation -->
+                <div class="glass-card" style="margin-bottom: 1.5rem; padding: 0;">
+                    <div class="student-tabs" style="display: flex; border-bottom: 1px solid var(--border-color);">
+                        <button class="student-tab-btn active" data-target="student-lookup">Lookup Student</button>
+                        <button class="student-tab-btn" data-target="student-import">Import Data</button>
+                        </div>
+                </div>
+
+                <!-- Tab 1: Lookup -->
+                <div id="student-lookup" class="student-tab-content active">
+                    <div class="glass-card" style="margin-bottom: 1.5rem;">
+                        <h2>Search Students</h2>
+                        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem;">
+                            <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 250px;">
+                                <label>Search Term</label>
+                                <input type="text" id="student-search-input" class="input-text" placeholder="Name, Phone, Email, ID...">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <button class="btn btn-primary" id="btn-search-students"><i data-lucide="search"></i> Search</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="glass-card table-container" style="padding: 0;">
+                        <table class="data-table" id="students-table">
+                            <thead>
+                                <tr>
+                                    <th>Student ID</th>
+                                    <th>Full Name</th>
+                                    <th>Email</th>
+                                    <th>Mobile</th>
+                                    <th>College</th>
+                                    <th>Program</th>
+                                </tr>
+                            </thead>
+                            <tbody id="students-table-body">
+                                <!-- Data will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Import -->
+                <div id="student-import" class="student-tab-content" style="display: none;">
+                    <div class="glass-card" style="margin-bottom: 1.5rem;">
+                        <h2>Import Student Excel Files</h2>
+                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Upload ApplicantReport or StudentDetails .xlsx files. The system will automatically parse and merge them.</p>
+                        
+                        <div class="upload-zone" id="student-upload-zone">
+                            <i data-lucide="file-spreadsheet" class="upload-icon"></i>
+                            <h3>Drop Excel file here or click to upload</h3>
+                            <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports .xlsx files only</p>
+                            <input type="file" id="student-file-input" accept=".xlsx" class="hidden-input">
+                        </div>
+                        <div id="student-upload-status" class="alert" style="display: none; margin-top: 1rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Auto-Matcher -->
+                </section>
+
+        <section id="view-automatcher" class="view">
+
+                    <div class="glass-card" style="margin-bottom: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h2>Auto-Matcher (Invalid IDs)</h2>
+                            <div class="header-actions">
+                                <button class="btn" id="btn-export-automatch"><i data-lucide="download"></i> Export Results</button>
+                                <button class="btn btn-primary" id="btn-run-automatcher"><i data-lucide="zap"></i> Run Auto-Match</button>
+                            </div>
+                        </div>
+                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Select the Invalid ID transactions you want the system to try and fix using the Students Details list and Links data.</p>
+                        
+                        <div style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; background: rgba(234, 179, 8, 0.1); border: 1px solid rgba(234, 179, 8, 0.3); padding: 0.8rem; border-radius: 8px;">
+                            <input type="checkbox" id="automatch-enable-name" style="width: 1.2rem; height: 1.2rem; cursor: pointer;">
+                            <label for="automatch-enable-name" style="cursor: pointer; color: #b45309; font-weight: 500; font-size: 0.9rem;">Enable Fallback Name Matching (Warning: Can produce false positive matches)</label>
+                        </div>
+
+                        <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem; align-items: flex-end;">
+                            <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                                <label style="font-size: 0.75rem">Date From</label>
+                                <input type="date" id="automatcher-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                            </div>
+                            <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                                <label style="font-size: 0.75rem">Date To</label>
+                                <input type="date" id="automatcher-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                            </div>
+                            <div class="form-group" style="margin: 0; flex: 2; min-width: 200px;">
+                                <input type="text" id="automatcher-search" class="input-text" placeholder="Search by Student ID, Ref..." style="padding: 0.4rem; font-size: 0.85rem">
+                            </div>
+                            <div class="form-group" style="margin: 0; display: flex;">
+                                <button class="btn btn-outline" id="btn-clear-automatcher" style="padding: 0.4rem 1rem;">Clear</button>
+                            </div>
+                        </div>
+                          
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3 style="margin: 0; color: var(--text-main);">Suggested Matches</h3>
+                            <button class="btn btn-primary" id="btn-apply-automatch-fixes" style="display: none; padding: 0.8rem 2rem; font-size: 1rem; font-weight: bold; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);"><i data-lucide="check-circle" style="width: 20px; height: 20px; margin-right: 0.5rem; vertical-align: middle;"></i> Apply Selected Fixes</button>
+                        </div>
+
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
+                            <div class="form-group" style="flex: 1; margin: 0;">
+                                <div class="upload-zone" id="automatcher-import-zone" style="padding: 1rem; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 1rem; border-radius: 8px;">
+                                    <i data-lucide="upload-cloud" class="upload-icon" style="margin: 0; width: 24px; height: 24px;"></i>
+                                    <p style="margin: 0; font-size: 0.9rem;"><strong>Targeted Import:</strong> Upload specific transactions to match (Optional)</p>
+                                    <input type="file" id="automatcher-file-input" accept=".xlsx,.csv" class="hidden-input">
+                                </div>
+                                <div id="automatcher-import-status" style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--primary);"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="table-container">
+                            <table class="data-table" id="automatcher-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px;"><input type="checkbox" id="automatcher-select-all"></th>
+                                        <th style="min-width: 120px;">
+                                            <div class="th-filter-wrapper" data-column="reference_number" data-table="automatch">
+                                                Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 120px;">
+                                            <div class="th-filter-wrapper" data-column="payment_date" data-table="automatch">
+                                                Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 100px;">
+                                            <div class="th-filter-wrapper" data-column="mapping" data-table="automatch">
+                                                Mapping <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 110px;">
+                                            <div class="th-filter-wrapper" data-column="second_mapping" data-table="automatch">
+                                                2nd Mapping <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 150px;">
+                                            <div class="th-filter-wrapper" data-column="item_name" data-table="automatch">
+                                                Item Name <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 100px;">
+                                            <div class="th-filter-wrapper" data-column="item_price" data-table="automatch">
+                                                Amount <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 200px;">
+                                            <div class="th-filter-wrapper" data-column="proposed_fix" data-table="automatch">
+                                                Proposed Fix <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 250px;">Match Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="automatcher-table-body">
+                                    <!-- Invalid IDs will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            
+        
+        <!-- Payment Links View -->
+        <section id="view-payment-links" class="view">
+            <div class="header">
+                <div>
+                    <h1>Payment Links Catalog</h1>
+                </div>
+                <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn btn-outline" id="btn-template-links">
+                        <i data-lucide="file-spreadsheet"></i> Download Template
+                    </button>
+                    <button class="btn btn-outline" id="btn-import-links">
+                        <i data-lucide="upload"></i> Import Excel
+                    </button>
+                    <button class="btn btn-outline" id="btn-export-links">
+                        <i data-lucide="download"></i> Export
+                    </button>
+                    <button class="btn btn-primary" id="btn-add-link">
+                        <i data-lucide="plus"></i> Add Link
+                    </button>
+                </div>
+            </div>
+
+            <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
+                <div style="flex: 2; min-width: 200px;">
+                    <input type="text" id="links-search" class="input-text" placeholder="Search by name, invoice, amount...">
+                </div>
+            </div>
+
+            <div class="table-container glass-card">
+                <table class="data-table" id="links-table">
+                    <thead>
+                        <tr>
+                            <th>Item Name</th>
+                            <th>Amount</th>
+                            <th>Invoice Number</th>
+                            <th>Creation Date</th>
+                            <th>Expiry Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="links-table-body">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="pagination">
+                <button class="btn btn-outline" id="btn-links-prev" disabled>Previous</button>
+                <span id="links-page-info">Page 1</span>
+                <button class="btn btn-outline" id="btn-links-next">Next</button>
+            </div>
+        </section>
+
+                <!-- ERP Export View -->
+            <section id="view-erp-export" class="view">
+                <div class="header">
+                    <h1>ERP Export (Dynamics 365)</h1>
+                    <button class="btn btn-primary" id="btn-export-erp-file">
+                        <i data-lucide="download"></i> Download ERP Template
+                    </button>
+                </div>
+                
+                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem;">
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Date From</label>
+                        <input type="date" id="erp-filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Date To</label>
+                        <input type="date" id="erp-filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Bank</label>
+                        <select id="erp-filter-bank" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                            <option value="">All Banks</option>
+                            <option value="NUADIB64">NUADIB64</option>
+                            <option value="NUADCB136">NUADCB136</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Item Name</label>
+                        <select id="erp-filter-item-name" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Items</option></select>
+                    </div>
+                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                        <label style="font-size: 0.75rem">Mapping</label>
+                        <select id="erp-filter-mapping" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
+                    </div>
+                </div>
+
+                <div class="glass-card table-container">
+                    <table class="data-table" id="erp-preview-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Account</th>
+                                <th>Description</th>
+                                <th>Credit</th>
+                                <th>Offset Non-ledger account</th>
+                                <th>Line number</th>
+                            </tr>
+                        </thead>
+                        <tbody id="erp-preview-body">
+                            <!-- Data populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="glass-card mt-4" style="margin-top: 1.5rem; padding: 1.5rem;">
+                    <h3 style="margin-bottom: 0.5rem;">Record ERP Posting Details</h3>
+                    <p style="color: var(--text-muted); font-size: 0.9rem;">After importing the template into Dynamics 365, record the generated Batch Number and Voucher numbers for these transactions.</p>
+                    <div style="display: flex; gap: 1rem; align-items: flex-end; margin-top: 1rem;">
+                        <div class="form-group" style="margin: 0; flex: 1;">
+                            <label>Journal Batch Number</label>
+                            <input type="text" id="erp-batch-number" class="input-text" placeholder="e.g. BATCH-2026-09">
+                        </div>
+                        <div class="form-group" style="margin: 0; flex: 1;">
+                            <label>Starting Voucher (Optional)</label>
+                            <input type="text" id="erp-voucher" class="input-text" placeholder="e.g. VCH-0001">
+                        </div>
+                        <button class="btn btn-success" id="btn-record-erp" style="padding: 0.5rem 1.5rem;">
+                            <i data-lucide="check-circle"></i> Save References
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Mappings Modal -->
+    <div id="modal-mapping" class="modal hidden">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h2 id="modal-mapping-title">Add Mapping</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-mapping').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Original Item Name</label>
+                    <input type="text" id="map-original" class="input-text">
+                    <div id="mapping-suggestion" style="font-size: 0.85rem; color: var(--primary); margin-top: 0.5rem; cursor: pointer; display: none;"></div>
+                </div>
+                <div class="form-group">
+                    <label>Adjusted Item Name (Optional)</label>
+                    <input type="text" id="map-adjusted" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Mapping Category</label>
+                    <input type="text" id="map-category" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>2nd Mapping Category</label>
+                    <input type="text" id="map-second-category" class="input-text">
+                </div>
+                <button class="btn btn-primary" id="btn-save-mapping" style="width: 100%; margin-top: 1rem;">Save Mapping</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fixes Modal -->
+    <div id="modal-fix" class="modal hidden">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h2 id="modal-fix-title">Add Fix</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-fix').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Reference Number</label>
+                    <input type="text" id="fix-ref" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct Student ID (Optional)</label>
+                    <input type="text" id="fix-id" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct Item Name (Optional)</label>
+                    <input type="text" id="fix-name" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct Mapping (Optional)</label>
+                    <input type="text" id="fix-mapping" class="input-text">
+                </div>
+                <div class="form-group">
+                    <label>Correct 2nd Mapping (Optional)</label>
+                    <input type="text" id="fix-second-mapping" class="input-text">
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1rem;">
+                    <button class="btn btn-outline" onclick="document.getElementById('modal-fix').classList.add('hidden')">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-fix">Save Fix</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-Matcher Confirm Modal -->
+    <div id="modal-automatch-confirm" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
+            <div class="modal-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
+                <div style="background: rgba(59, 130, 246, 0.1); color: var(--primary); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                    <i data-lucide="alert-circle" style="width: 30px; height: 30px;"></i>
+                </div>
+            </div>
+            <div class="modal-body" style="padding-top: 0;">
+                <h2 style="margin-bottom: 1rem;">Apply Fixes?</h2>
+                <p style="color: var(--text-muted); margin-bottom: 2rem;" id="automatch-confirm-msg">Are you sure you want to apply the selected auto-matcher fixes?</p>
+                <div style="display: flex; gap: 1rem; justify-content: center;">
+                    <button class="btn btn-outline" onclick="document.getElementById('modal-automatch-confirm').classList.add('hidden')" style="flex: 1;">Cancel</button>
+                    <button class="btn btn-primary" id="btn-confirm-automatch" style="flex: 1;">Yes, Apply</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Name Matching Warn Modal -->
+    <div id="modal-name-match-warn" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
+            <div class="modal-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
+                <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                    <i data-lucide="alert-triangle" style="width: 30px; height: 30px;"></i>
+                </div>
+            </div>
+            <div class="modal-body" style="padding-top: 0;">
+                <h2 style="margin-bottom: 1rem;">Enable Name Matching?</h2>
+                <p style="color: var(--text-muted); margin-bottom: 2rem;">Matching purely by name can be highly inaccurate and lead to misleading data if multiple students share similar names. Are you sure you want to enable this fallback method?</p>
+                <div style="display: flex; gap: 1rem; justify-content: center;">
+                    <button class="btn btn-outline" onclick="document.getElementById('modal-name-match-warn').classList.add('hidden')" style="flex: 1;">Cancel</button>
+                    <button class="btn btn-primary" id="btn-confirm-name-match" style="flex: 1; background-color: #eab308; color: black; border: none;">Yes, Enable</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="app.js?v=38"></script>
+    <script>
+        // Initialize icons
+        lucide.createIcons();
+    </script>
+
+    <!-- Re-apply Rules Preview Modal -->
+    <div id="modal-reapply-preview" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 id="modal-reapply-title">Review Proposed Changes</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-reapply-preview').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 0;">
+                <p style="margin-bottom: 1rem; padding: 0 1.5rem; color: var(--text-muted);">
+                    The following transactions will be updated based on the latest mappings, links, and manual fixes. Please review and select the changes you want to apply.
+                </p>
+                <div class="table-container" style="margin: 0 1.5rem;">
+                    <table class="data-table" id="reapply-preview-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;"><input type="checkbox" id="reapply-select-all" checked></th>
+                                <th>Ref Number</th>
+                                <th>Change Type</th>
+                                <th>Old Value <i data-lucide="arrow-right" style="width: 14px; height: 14px; margin-left: 4px; vertical-align: middle;"></i> New Value</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reapply-preview-table-body">
+                            <!-- Proposals will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 1rem;">
+                <button class="btn btn-outline" onclick="document.getElementById('modal-reapply-preview').classList.add('hidden')">Cancel</button>
+                <button class="btn btn-primary" id="btn-apply-reapply-fixes"><i data-lucide="check-circle" style="width: 18px; height: 18px; margin-right: 8px;"></i> Apply Selected Changes</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Add/Edit Link Modal -->
+    <div id="modal-link" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 520px;">
+            <div class="modal-header">
+                <h2 id="modal-link-title">Add Payment Link</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-link').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="link-id">
+                <div class="form-group">
+                    <label>Item Name</label>
+                    <input type="text" id="link-name" class="input-text" placeholder="e.g., Diploma Fees - Fall 2025">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
+                        <label>Amount (EGP)</label>
+                        <input type="number" id="link-amount" class="input-text" placeholder="1000">
+                    </div>
+                    <div class="form-group">
+                        <label>Invoice Number</label>
+                        <input type="text" id="link-invoice" class="input-text" placeholder="1234ABC">
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
+                        <label>Creation Date</label>
+                        <input type="date" id="link-created" class="input-text">
+                    </div>
+                    <div class="form-group">
+                        <label>Expiry Date</label>
+                        <input type="datetime-local" id="link-expiry" class="input-text">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Payment Link (URL)</label>
+                    <input type="url" id="link-url" class="input-text" placeholder="https://atfawry.com/...">
+                </div>
+                <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+                    <button class="btn btn-outline" style="flex: 1;" onclick="document.getElementById('modal-link').classList.add('hidden')">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-link" style="flex: 2;">Save Link</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ERP Warning Modal -->
+    <div id="modal-erp-warning" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
+                <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                    <i data-lucide="alert-triangle" style="width: 30px; height: 30px;"></i>
+                </div>
+            </div>
+            <div class="modal-body" style="padding-top: 0; overflow-y: auto; flex: 1;">
+                <h2 style="margin-bottom: 1rem; text-align: center;">Transactions with Invalid IDs found!</h2>
+                <p style="color: var(--text-muted); margin-bottom: 1rem; text-align: center;">Some transactions in this batch have errors in their ID column (e.g., missing ID or contains a name instead of an ID). Exporting these to Dynamics 365 will cause errors. Do you want to fix them first or continue anyway?</p>
+                <div class="table-container" style="margin-bottom: 1rem;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Ref Number</th>
+                                <th>Account/ID</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="erp-warning-table-body">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: center; gap: 1rem;">
+                <button class="btn btn-primary" onclick="document.getElementById('modal-erp-warning').classList.add('hidden')">Cancel & Fix Errors</button>
+                <button class="btn btn-outline" id="btn-erp-continue-export" style="color: var(--danger); border-color: var(--danger);">Continue Export Anyway</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
+
