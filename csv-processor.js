@@ -182,6 +182,21 @@ export class FawryProcessor {
             }
         }
 
+        // 4. Catch string numeric Excel dates before native fallback parses them as year 40000+
+        if (/^\d{4,5}(\.\d+)?$/.test(str)) {
+            const numericDate = parseFloat(str);
+            if (typeof XLSX !== 'undefined' && XLSX.SSF) {
+                const parsed = XLSX.SSF.parse_date_code(numericDate);
+                if (parsed && parsed.y && parsed.m && parsed.d) {
+                    return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+                }
+            }
+            const dateObj = new Date(Math.round((numericDate - 25569) * 86400 * 1000));
+            if (!isNaN(dateObj.getTime())) {
+                return dateObj.toISOString().split('T')[0];
+            }
+        }
+
         // Fallback: try native Date parsing
         const parsed = new Date(str);
         if (!isNaN(parsed.getTime())) {
@@ -406,7 +421,10 @@ export class FawryProcessor {
                     })
                 });
             } else {
-                processData(item.data);
+                processData(item.data).catch(err => {
+                    this.log(`Error processing data: ${err.message}`);
+                    resolve(false);
+                });
             }
         });
     }
@@ -511,7 +529,10 @@ export class FawryProcessor {
                     })
                 });
             } else {
-                processData(item.data);
+                processData(item.data).catch(err => {
+                    this.log(`Error processing data: ${err.message}`);
+                    resolve(false);
+                });
             }
         });
     }
