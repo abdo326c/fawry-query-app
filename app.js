@@ -943,6 +943,16 @@ class App {
                         details: { count: inserted }
                     });
                 }
+
+                await supabase.from('import_batches').insert({
+                    user_email: this.currentUser ? this.currentUser.email : 'System',
+                    file_name: file.name,
+                    status: inserted === mappings.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
+                    records_processed: mappings.length,
+                    records_inserted: inserted,
+                    details: { type: 'mappings' }
+                });
+
                 Toast.show(`Successfully uploaded ${inserted} item mappings and updated existing transactions!`, 'success');
                 this.loadMappings();
 
@@ -995,6 +1005,16 @@ class App {
                         details: { count: inserted }
                     });
                 }
+
+                await supabase.from('import_batches').insert({
+                    user_email: this.currentUser ? this.currentUser.email : 'System',
+                    file_name: file.name,
+                    status: inserted === fixes.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
+                    records_processed: fixes.length,
+                    records_inserted: inserted,
+                    details: { type: 'fixes' }
+                });
+
                 Toast.show(`Successfully uploaded ${inserted} manual fixes and updated existing transactions!`, 'success');
                 this.loadFixes();
             }
