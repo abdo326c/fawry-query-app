@@ -1012,7 +1012,7 @@ class App {
 
                 let fixesToProcess = fixes;
                 if (existingRefs.size > 0) {
-                    if (await window.customConfirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to UPDATE them?`, 'Update Existing', 'Ignore & Add New')) {
+                    if (await window.customConfirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to overwrite them with the new values?`, 'Overwrite Existing', 'Skip Existing')) {
                         // Keep all fixes
                     } else {
                         // Filter out existing ones
