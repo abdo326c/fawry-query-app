@@ -2,6 +2,36 @@ import { supabase } from './supabase.js';
 import { FawryProcessor } from './csv-processor.js';
 
 // Shared utility: escape HTML to prevent XSS
+
+window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modal-custom-confirm');
+        const msgEl = document.getElementById('custom-confirm-message');
+        const btnOk = document.getElementById('btn-custom-confirm-ok');
+        const btnCancel = document.getElementById('btn-custom-confirm-cancel');
+        
+        msgEl.innerText = message;
+        btnOk.innerText = okText;
+        btnCancel.innerText = cancelText;
+        
+        if (window.lucide) window.lucide.createIcons();
+        
+        const cleanup = () => {
+            modal.classList.add('hidden');
+            btnOk.removeEventListener('click', onOk);
+            btnCancel.removeEventListener('click', onCancel);
+        };
+        
+        const onOk = () => { cleanup(); resolve(true); };
+        const onCancel = () => { cleanup(); resolve(false); };
+        
+        btnOk.addEventListener('click', onOk);
+        btnCancel.addEventListener('click', onCancel);
+        
+        modal.classList.remove('hidden');
+    });
+};
+
 function escapeHTML(str) {
     if (str == null) return '';
     return String(str)
@@ -825,7 +855,7 @@ class App {
             
             const { data: existing } = await supabase.from('manual_fixes').select('reference_number').eq('reference_number', ref).maybeSingle();
             if (existing) {
-                if (!confirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`)) {
+                if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`, 'Update', 'Cancel')) {
                     return; // Ignore
                 }
             }
@@ -984,7 +1014,7 @@ class App {
 
                 let fixesToProcess = fixes;
                 if (existingRefs.size > 0) {
-                    if (confirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to UPDATE them? (Click Cancel to IGNORE existing and only add new ones)`)) {
+                    if (await window.customConfirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to UPDATE them?`, 'Update Existing', 'Ignore & Add New')) {
                         // Keep all fixes
                     } else {
                         // Filter out existing ones
@@ -1829,7 +1859,7 @@ class App {
             tbody.querySelectorAll('[data-delete-mapping]').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const itemName = btn.getAttribute('data-delete-mapping');
-                    if (!confirm(`Delete mapping for "${itemName}"?`)) return;
+                    if (!await window.customConfirm(`Delete mapping for "${itemName}"?`, 'Delete', 'Cancel')) return;
                     const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
                     if (error) Toast.show('Error deleting mapping: ' + error.message, 'error');
                     else {
@@ -1890,7 +1920,7 @@ class App {
             tbody.querySelectorAll('[data-delete-fix]').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const ref = btn.getAttribute('data-delete-fix');
-                    if (!confirm(`Delete fix for reference "${ref}"?`)) return;
+                    if (!await window.customConfirm(`Delete fix for reference "${ref}"?`, 'Delete', 'Cancel')) return;
                     const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
                     if (error) Toast.show('Error deleting fix: ' + error.message, 'error');
                     else {
@@ -2158,7 +2188,7 @@ class App {
                     return;
                 }
 
-                if (!confirm(`Are you sure you want to revert the import for "${fileName}"? This will delete all its transactions.`)) return;
+                if (!await window.customConfirm(`Are you sure you want to revert the import for "${fileName}"? This will delete all its transactions.`, 'Revert', 'Cancel')) return;
                 
                 btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Reverting...';
                 btn.disabled = true;
@@ -3205,7 +3235,7 @@ class App {
             
             tbody.querySelectorAll('.delete-link-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
-                    if (confirm("Are you sure you want to delete this link?")) {
+                    if (await window.customConfirm("Are you sure you want to delete this link?", 'Delete', 'Cancel')) {
                         const id = e.currentTarget.getAttribute('data-id');
                         const { error } = await supabase.from('payment_links').delete().eq('id', id);
                         if (error) {
