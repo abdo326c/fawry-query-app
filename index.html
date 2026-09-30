@@ -390,9 +390,14 @@
             <section id="view-history" class="view">
                 <div class="header">
                     <h1>Import History</h1>
-                    <button class="btn btn-outline" id="btn-refresh-history">
-                        <i data-lucide="refresh-cw"></i> Refresh
-                    </button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-outline" style="color: var(--danger); border-color: var(--danger);" id="btn-detect-duplicates">
+                            <i data-lucide="search"></i> Detect DB Duplicates
+                        </button>
+                        <button class="btn btn-outline" id="btn-refresh-history">
+                            <i data-lucide="refresh-cw"></i> Refresh
+                        </button>
+                    </div>
                 </div>
                 <div class="table-container glass-card">
                     <table class="data-table" id="history-table">
@@ -893,7 +898,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=38"></script>
+    <script type="module" src="app.js?v=1790815052.5076"></script>
     <script>
         // Initialize icons
         lucide.createIcons();
@@ -1010,6 +1015,68 @@
             <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: center; gap: 1rem;">
                 <button class="btn btn-primary" onclick="document.getElementById('modal-erp-warning').classList.add('hidden')">Cancel & Fix Errors</button>
                 <button class="btn btn-outline" id="btn-erp-continue-export" style="color: var(--danger); border-color: var(--danger);">Continue Export Anyway</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detect Duplicates Modal -->
+    <div id="modal-detect-duplicates" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 900px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 id="modal-detect-duplicates-title">Duplicate Transactions Found</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-detect-duplicates').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 0;">
+                <p id="duplicates-summary" style="padding: 0 1.5rem; margin-bottom: 1rem; color: var(--text-secondary);"></p>
+                <div class="table-container">
+                    <table class="data-table" style="margin: 0;">
+                        <thead>
+                            <tr>
+                                <th>Ref Number</th>
+                                <th>Item Name</th>
+                                <th>Price</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="duplicates-body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 1rem;">
+                <button class="btn btn-outline" onclick="document.getElementById('modal-detect-duplicates').classList.add('hidden')">Cancel</button>
+                <button class="btn btn-primary" id="btn-cleanup-duplicates" style="background-color: var(--danger); border-color: var(--danger);">Clean Up Duplicates</button>
+            </div>
+        </div>
+    </div>
+    <!-- Detect Duplicates Modal -->
+    <div id="modal-detect-duplicates" class="modal hidden">
+        <div class="modal-content glass-card" style="max-width: 900px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 id="modal-detect-duplicates-title">Duplicate Transactions Found</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-detect-duplicates').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 0;">
+                <p id="duplicates-summary" style="padding: 0 1.5rem; margin-bottom: 1rem; color: var(--text-secondary);"></p>
+                <div class="table-container">
+                    <table class="data-table" style="margin: 0;">
+                        <thead>
+                            <tr>
+                                <th>Ref Number</th>
+                                <th>Item Name</th>
+                                <th>Price</th>
+                                <th>Trimmed</th>
+                                <th>Untrimmed</th>
+                            </tr>
+                        </thead>
+                        <tbody id="duplicates-body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 1rem;">
+                <button class="btn btn-outline" onclick="document.getElementById('modal-detect-duplicates').classList.add('hidden')">Cancel</button>
+                <button class="btn btn-primary" id="btn-cleanup-duplicates" style="background-color: var(--danger); border-color: var(--danger);">Clean Up Duplicates</button>
             </div>
         </div>
     </div>

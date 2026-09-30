@@ -1517,6 +1517,7 @@ class App {
 
                     const { data, error } = await query
                         .order('payment_date', { ascending: true })
+                        .order('id', { ascending: true })
                         .range(from, from + pageSize - 1);
 
                     if (error) throw error;
@@ -1683,6 +1684,7 @@ class App {
 
         const { data, count: totalCount, error } = await query
             .order('payment_date', { ascending: false })
+            .order('id', { ascending: false })
             .range(fromRange, toRange);
 
         const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
@@ -2049,6 +2051,45 @@ class App {
             btnRefresh.addEventListener('click', () => this.loadHistory());
         }
         
+        const btnDetect = document.getElementById('btn-detect-duplicates');
+        if (btnDetect) {
+            btnDetect.addEventListener('click', () => this.detectDuplicates());
+        }
+
+        const btnCleanup = document.getElementById('btn-cleanup-duplicates');
+        if (btnCleanup) {
+            btnCleanup.addEventListener('click', async () => {
+                const ids = window.duplicateIdsToDelete || [];
+                if (ids.length === 0) return;
+                
+                const btn = document.getElementById('btn-cleanup-duplicates');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Deleting...';
+                btn.disabled = true;
+                if (window.lucide) lucide.createIcons();
+                
+                try {
+                    let deleted = 0;
+                    for (let i = 0; i < ids.length; i += 200) {
+                        const chunk = ids.slice(i, i + 200);
+                        const { error } = await supabase.from('transactions').delete().in('id', chunk);
+                        if (error) throw error;
+                        deleted += chunk.length;
+                    }
+                    Toast.show(`Successfully deleted ${deleted} duplicate transactions.`, 'success');
+                    document.getElementById('modal-detect-duplicates').classList.add('hidden');
+                    window.duplicateIdsToDelete = [];
+                    if (this.loadTransactions) this.loadTransactions();
+                } catch(err) {
+                    Toast.show('Error deleting: ' + err.message, 'error');
+                } finally {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                    if (window.lucide) lucide.createIcons();
+                }
+            });
+        }
+
         // Setup revert buttons delegation
         const historyBody = document.getElementById('history-body');
         if (historyBody) {
@@ -2141,6 +2182,96 @@ class App {
             if (window.lucide) lucide.createIcons();
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger); text-align: center;">Error loading history: ${escapeHTML(err.message)}</td></tr>`;
+        }
+    }
+    
+    async detectDuplicates() {
+        const btn = document.getElementById('btn-detect-duplicates');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Detecting...';
+        btn.disabled = true;
+        if (window.lucide) lucide.createIcons();
+        
+        try {
+            let allData = [];
+            let from = 0;
+            let fetchMore = true;
+            while(fetchMore) {
+                const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column').range(from, from + 999);
+                if (error) throw error;
+                allData = allData.concat(data);
+                if (data.length < 1000) fetchMore = false;
+                else from += 1000;
+            }
+            
+            const grouped = {};
+            for (const tx of allData) {
+                if (!tx.reference_number) continue;
+                const trimmedName = String(tx.item_name || '').trim();
+                const key = `${tx.reference_number}-${tx.item_price}-${trimmedName}`;
+                if (!grouped[key]) grouped[key] = [];
+                grouped[key].push(tx);
+            }
+            
+            const duplicates = [];
+            const toDeleteIds = [];
+            
+            for (const [key, txs] of Object.entries(grouped)) {
+                if (txs.length > 1) {
+                    const hasUntrimmed = txs.some(t => String(t.item_name) !== String(t.item_name).trim());
+                    const hasTrimmed = txs.some(t => String(t.item_name) === String(t.item_name).trim());
+                    
+                    if (hasUntrimmed && hasTrimmed) {
+                        const untrimmed = txs.find(t => String(t.item_name) !== String(t.item_name).trim());
+                        const trimmed = txs.find(t => String(t.item_name) === String(t.item_name).trim());
+                        toDeleteIds.push(untrimmed.id);
+                        
+                        duplicates.push({
+                            ref: txs[0].reference_number,
+                            name: txs[0].item_name,
+                            price: txs[0].item_price,
+                            trimmedCheck: trimmed.check_column,
+                            untrimmedCheck: untrimmed.check_column
+                        });
+                    } else {
+                        // Mark all but one for deletion
+                        for (let i = 1; i < txs.length; i++) {
+                            toDeleteIds.push(txs[i].id);
+                        }
+                        duplicates.push({
+                            ref: txs[0].reference_number,
+                            name: txs[0].item_name,
+                            price: txs[0].item_price,
+                            trimmedCheck: txs[0].check_column,
+                            untrimmedCheck: txs[1].check_column
+                        });
+                    }
+                }
+            }
+            
+            window.duplicateIdsToDelete = toDeleteIds;
+            
+            document.getElementById('duplicates-summary').innerText = `Found ${duplicates.length} duplicate pairs due to trailing spaces in previous uploads.`;
+            const tbody = document.getElementById('duplicates-body');
+            tbody.innerHTML = duplicates.map(d => `
+                <tr>
+                    <td>${escapeHTML(d.ref)}</td>
+                    <td>${escapeHTML(d.name)}</td>
+                    <td>${d.price}</td>
+                    <td><pre style="margin:0; font-size:0.8rem;">'${escapeHTML(d.trimmedCheck)}'</pre></td>
+                    <td><pre style="margin:0; font-size:0.8rem;">'${escapeHTML(d.untrimmedCheck)}'</pre></td>
+                </tr>
+            `).join('');
+            
+            document.getElementById('btn-cleanup-duplicates').style.display = toDeleteIds.length > 0 ? 'inline-flex' : 'none';
+            document.getElementById('modal-detect-duplicates').classList.remove('hidden');
+            
+        } catch(err) {
+            Toast.show('Error: ' + err.message, 'error');
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            if (window.lucide) lucide.createIcons();
         }
     }
     
@@ -2919,7 +3050,7 @@ class App {
             const to = from + this.pageSize - 1;
             
             // Order by the actual creation date from the link, not the database insert time
-            const { data, count, error } = await query.order('creation_date', { ascending: false, nullsFirst: false }).range(from, to);
+            const { data, count, error } = await query.order('creation_date', { ascending: false, nullsFirst: false }).order('id', { ascending: false }).range(from, to);
             
             if (error) throw error;
             
