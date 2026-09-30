@@ -822,6 +822,13 @@ class App {
             const correctSecondMapping = document.getElementById('fix-second-mapping').value;
 
             if (!ref) return Toast.show('Reference Number is required', 'warning');
+            
+            const { data: existing } = await supabase.from('manual_fixes').select('reference_number').eq('reference_number', ref).maybeSingle();
+            if (existing) {
+                if (!confirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`)) {
+                    return; // Ignore
+                }
+            }
 
             const { error } = await supabase.from('manual_fixes').upsert([{
                 reference_number: ref,
@@ -965,9 +972,34 @@ class App {
                     second_mapping: getVal(row, '2nd Mapping') || null
                 })).filter(f => f.reference_number && f.reference_number !== "null");
 
+                const refsToCheck = fixes.map(f => f.reference_number);
+                const existingRefs = new Set();
+                for (let i = 0; i < refsToCheck.length; i += 500) {
+                    const chunkRefs = refsToCheck.slice(i, i + 500);
+                    const { data: existingData } = await supabase.from('manual_fixes').select('reference_number').in('reference_number', chunkRefs);
+                    if (existingData) {
+                        existingData.forEach(r => existingRefs.add(r.reference_number));
+                    }
+                }
+
+                let fixesToProcess = fixes;
+                if (existingRefs.size > 0) {
+                    if (confirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to UPDATE them? (Click Cancel to IGNORE existing and only add new ones)`)) {
+                        // Keep all fixes
+                    } else {
+                        // Filter out existing ones
+                        fixesToProcess = fixes.filter(f => !existingRefs.has(f.reference_number));
+                    }
+                }
+
+                if (fixesToProcess.length === 0) {
+                    Toast.show('No new fixes to process.', 'info');
+                    return;
+                }
+
                 let inserted = 0;
-                for (let i = 0; i < fixes.length; i += chunkSize) {
-                    const chunk = fixes.slice(i, i + chunkSize);
+                for (let i = 0; i < fixesToProcess.length; i += chunkSize) {
+                    const chunk = fixesToProcess.slice(i, i + chunkSize);
                     const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
                     if (error) {
                         Toast.show(`Partial upload error: Only ${inserted} fixes saved. Error: ` + error.message, 'error');
@@ -976,13 +1008,13 @@ class App {
                     inserted += chunk.length;
                 }
 
-                const refs = fixes.map(f => f.reference_number);
+                const refs = fixesToProcess.map(f => f.reference_number);
                 for (let i = 0; i < refs.length; i += 200) {
                     const chunkRefs = refs.slice(i, i + 200);
                     const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
                     if (existingTx && existingTx.length > 0) {
                         for (const tx of existingTx) {
-                            const fix = fixes.find(f => String(f.reference_number) === String(tx.reference_number));
+                            const fix = fixesToProcess.find(f => String(f.reference_number) === String(tx.reference_number));
                             if (fix) {
                                 if (fix.correct_id) {
                                     tx.student_id = fix.correct_id;
@@ -1009,8 +1041,8 @@ class App {
                 await supabase.from('import_batches').insert({
                     user_email: this.currentUser ? this.currentUser.email : 'System',
                     file_name: file.name,
-                    status: inserted === fixes.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
-                    records_processed: fixes.length,
+                    status: inserted === fixesToProcess.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
+                    records_processed: fixesToProcess.length,
                     records_inserted: inserted,
                     details: { type: 'fixes' }
                 });
