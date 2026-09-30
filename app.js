@@ -14,8 +14,6 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
         btnOk.innerText = okText;
         btnCancel.innerText = cancelText;
         
-        if (window.lucide) window.lucide.createIcons();
-        
         const cleanup = () => {
             modal.classList.add('hidden');
             btnOk.removeEventListener('click', onOk);
