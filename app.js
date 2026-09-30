@@ -1108,6 +1108,15 @@ class App {
             XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
             XLSX.writeFile(workbook, "Manual_Fixes_Template.xlsx");
         });
+
+        const fixesSearch = document.getElementById('fixes-search');
+        let fixesSearchTimeout;
+        fixesSearch?.addEventListener('input', () => {
+            clearTimeout(fixesSearchTimeout);
+            fixesSearchTimeout = setTimeout(() => {
+                this.loadFixes();
+            }, 500);
+        });
     }
 
     initReapply() {
@@ -1875,7 +1884,9 @@ class App {
         const tbody = document.getElementById('fixes-body');
         tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
         try {
-            const allData = await fetchAll('manual_fixes');
+            const searchVal = document.getElementById('fixes-search')?.value.trim();
+            const queryFn = searchVal ? (q) => q.ilike('reference_number', `%${searchVal}%`) : null;
+            const allData = await fetchAll('manual_fixes', '*', queryFn);
 
             if (allData.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
