@@ -1794,7 +1794,7 @@ class App {
         }
 
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
             if (window.lucide) lucide.createIcons();
             return;
         }
@@ -1819,6 +1819,7 @@ class App {
                     <td style="white-space: nowrap;">${escapeHTML(t.second_mapping) || '-'}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.bank)}</td>
                     <td><span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span></td>
+                    <td>${t.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;padding:0.2rem 0.4rem;font-size:0.7rem;">Yes</span>' : '<span style="color:var(--text-muted);font-size:0.8rem;">No</span>'}</td>
                 </tr>
             `;
         }).join('');
@@ -3582,6 +3583,7 @@ class App {
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+
 
 
 
