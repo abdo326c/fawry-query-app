@@ -4,7 +4,7 @@ class SettlementProcessor {
         this.settlementData = [];
         this.reconciliationResults = [];
         this.systemTransactions = [];
-        this.merchant = 'NUADCB136'; // Default
+        // Auto-detect bank
         
         this.initUI();
     }
@@ -12,7 +12,7 @@ class SettlementProcessor {
     initUI() {
         this.dropZone = document.getElementById('settlement-drop-zone');
         this.fileInput = document.getElementById('settlement-file-input');
-        this.merchantSelect = document.getElementById('settlement-merchant');
+        
         this.statusDiv = document.getElementById('settlement-status');
         this.resultsTable = document.getElementById('settlement-results-body');
         
@@ -22,9 +22,7 @@ class SettlementProcessor {
 
         if (!this.dropZone) return;
 
-        this.merchantSelect.addEventListener('change', (e) => {
-            this.merchant = e.target.value;
-        });
+        
 
         this.dropZone.addEventListener('click', () => this.fileInput.click());
         this.dropZone.addEventListener('dragover', (e) => {
@@ -225,13 +223,37 @@ class SettlementProcessor {
         
         let allDbTx = [];
         const txMap = new Map(); // to deduplicate
+        const detectedBanks = new Set();
 
-        // 1. Fetch by precise payment date range to find "Missing in Settlement"
-        if (minTrxDateStr !== '2099-12-31') {
+        // 1. Fetch all references in the settlement explicitly to guarantee we don't miss them, and to DETECT the bank
+        const chunkSize = 150;
+        for (let i = 0; i < settlementRefs.length; i += chunkSize) {
+            const chunk = settlementRefs.slice(i, i + chunkSize);
+            const { data: refTx, error: refErr } = await this.supabase
+                .from('transactions')
+                .select('*')
+                .in('reference_number', chunk);
+                
+            if (refErr) {
+                this.setStatus('Error fetching DB transactions by reference: ' + refErr.message, true);
+                return;
+            }
+            if (refTx) {
+                refTx.forEach(tx => {
+                    txMap.set(tx.id, tx);
+                    if (tx.bank) detectedBanks.add(tx.bank);
+                });
+            }
+        }
+
+        const bankArray = Array.from(detectedBanks);
+
+        // 2. Fetch by precise payment date range AND detected banks to find "Missing in Settlement"
+        if (minTrxDateStr !== '2099-12-31' && bankArray.length > 0) {
             const { data: dateTx, error: dateErr } = await this.supabase
                 .from('transactions')
                 .select('*')
-                .eq('bank', this.merchant)
+                .in('bank', bankArray)
                 .gte('payment_date', minTrxDateStr)
                 .lte('payment_date', maxTrxDateStr);
                 
@@ -241,25 +263,6 @@ class SettlementProcessor {
             }
             if (dateTx) {
                 dateTx.forEach(tx => txMap.set(tx.id, tx));
-            }
-        }
-
-        // 2. Fetch all references in the settlement explicitly to guarantee we don't miss them
-        const chunkSize = 150;
-        for (let i = 0; i < settlementRefs.length; i += chunkSize) {
-            const chunk = settlementRefs.slice(i, i + chunkSize);
-            const { data: refTx, error: refErr } = await this.supabase
-                .from('transactions')
-                .select('*')
-                .eq('bank', this.merchant)
-                .in('reference_number', chunk);
-                
-            if (refErr) {
-                this.setStatus('Error fetching DB transactions by reference: ' + refErr.message, true);
-                return;
-            }
-            if (refTx) {
-                refTx.forEach(tx => txMap.set(tx.id, tx));
             }
         }
 
