@@ -85,14 +85,10 @@
                     <i data-lucide="check-circle"></i> Settlement Recon
                 </a>
                 <a href="#transactions" class="nav-link active" data-tab="transactions">
-                    <i data-lucide="table"></i> Transactions
+                    <i data-lucide="table"></i> Orders Transactions
                 </a>
-                <a href="#import" class="nav-link" data-tab="import">
-                    <i data-lucide="upload-cloud"></i> Import CSV
-                </a>
-                <a href="#history" class="nav-link" data-tab="history">
-                    <i data-lucide="history"></i> Import History
-                </a>
+                
+                
                 <a href="#mappings" class="nav-link" data-tab="mappings">
                     <i data-lucide="git-merge"></i> Item Mappings
                 </a>
@@ -259,8 +255,15 @@
             <!-- Transactions View -->
             <section id="view-transactions" class="view active">
                 <div class="header">
-                    <h1>Transactions</h1>
+                    <h1>Orders Transactions</h1>
                     <div class="header-actions">
+                        <button class="btn btn-outline" id="btn-show-import">
+                            <i data-lucide="upload"></i> Import orders or Invoice exports
+                        </button>
+                        <button class="btn btn-outline" id="btn-show-history">
+                            <i data-lucide="history"></i> Import History
+                        </button>
+        
                         <button class="btn btn-outline" id="btn-reapply-rules">
                             <i data-lucide="refresh-cw"></i> Re-apply Rules
                         </button>
@@ -370,10 +373,16 @@
             </section>
 
             <!-- Import View -->
-            <section id="view-import" class="view">
-                <div class="header">
-                    <h1>Data Import Processor</h1>
-                </div>
+            
+    <!-- Import Modal -->
+    <div id="modal-import" class="modal hidden" style="z-index: 1000;">
+        <div class="modal-content glass-card" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2>Data Import Processor</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-import').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1.5rem;">
+                
                 
                 <div class="glass-card upload-container">
                     <div class="upload-zone" id="drop-zone">
@@ -393,21 +402,31 @@
                         <div id="import-log" class="log-console mt-4"></div>
                     </div>
                 </div>
-            </section>
+            
+            </div>
+        </div>
+    </div>
+        
 
             <!-- Import History View -->
-            <section id="view-history" class="view">
-                <div class="header">
-                    <h1>Import History</h1>
-                    <div style="display: flex; gap: 10px;">
-                        <button class="btn btn-outline" style="color: var(--danger); border-color: var(--danger);" id="btn-detect-duplicates">
+            
+    <!-- History Modal -->
+    <div id="modal-history" class="modal hidden" style="z-index: 1000;">
+        <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="justify-content: space-between; align-items: center; width: 100%; display: flex;">
+                <h2 style="margin:0;">Import History</h2>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button class="btn btn-outline" style="color: var(--danger); border-color: var(--danger);" id="btn-detect-duplicates">
                             <i data-lucide="search"></i> Detect DB Duplicates
                         </button>
                         <button class="btn btn-outline" id="btn-refresh-history">
                             <i data-lucide="refresh-cw"></i> Refresh
                         </button>
-                    </div>
+                    <button class="btn-close" style="position:static; margin-left: 10px;" onclick="document.getElementById('modal-history').classList.add('hidden')"><i data-lucide="x"></i></button>
                 </div>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1.5rem;">
+                
                 <div class="table-container glass-card">
                     <table class="data-table" id="history-table">
                         <thead>
@@ -425,7 +444,11 @@
                         </tbody>
                     </table>
                 </div>
-            </section>
+            
+            </div>
+        </div>
+    </div>
+        
 
             <!-- Mappings View -->
             <section id="view-mappings" class="view">

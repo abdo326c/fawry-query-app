@@ -327,6 +327,22 @@ class App {
             });
         }
 
+        
+        const btnShowImport = document.getElementById('btn-show-import');
+        if (btnShowImport) {
+            btnShowImport.addEventListener('click', () => {
+                document.getElementById('modal-import').classList.remove('hidden');
+            });
+        }
+        
+        const btnShowHistory = document.getElementById('btn-show-history');
+        if (btnShowHistory) {
+            btnShowHistory.addEventListener('click', () => {
+                document.getElementById('modal-history').classList.remove('hidden');
+                this.loadHistory();
+            });
+        }
+        
         const links = document.querySelectorAll('.nav-link');
         links.forEach(link => {
             link.addEventListener('click', (e) => {
