@@ -17,12 +17,14 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/dark.css" id="flatpickr-theme">
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="settlement.js"></script>
 </head>
 <body>
     <!-- Toast Container -->
@@ -78,6 +80,9 @@
             <nav class="nav-menu">
                 <a href="#dashboard" class="nav-link" data-tab="dashboard">
                     <i data-lucide="bar-chart-2"></i> Dashboard
+                </a>
+                <a href="#settlement" class="nav-link" data-tab="settlement">
+                    <i data-lucide="check-circle"></i> Settlement Recon
                 </a>
                 <a href="#transactions" class="nav-link active" data-tab="transactions">
                     <i data-lucide="table"></i> Transactions
@@ -797,6 +802,54 @@
                     </div>
                 </div>
             </section>
+                    <!-- Settlement Recon View -->
+            <section id="view-settlement" class="view">
+                <div class="header">
+                    <h1>Fawry Settlement Reconciliation</h1>
+                </div>
+                <div class="glass-card" style="margin-bottom: 2rem;">
+                    <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem;">
+                        <label for="settlement-merchant" style="font-weight: 500;">Select Merchant/Bank:</label>
+                        <select id="settlement-merchant" class="input-text" style="width: 200px;">
+                            <option value="NUADCB136">NUADCB136</option>
+                            <option value="NUADIB64">NUADIB64</option>
+                        </select>
+                    </div>
+                    <div id="settlement-drop-zone" class="drop-zone" style="border: 2px dashed var(--border-color); padding: 2rem; text-align: center; border-radius: 8px; cursor: pointer;">
+                        <i data-lucide="upload-cloud" style="width: 48px; height: 48px; color: var(--primary-color); margin-bottom: 1rem;"></i>
+                        <p>Drag & Drop Settlement ZIP or Excel files here, or click to browse.</p>
+                        <input type="file" id="settlement-file-input" accept=".zip,.xlsx,.xls,.xlsm" multiple style="display: none;">
+                    </div>
+                    <div id="settlement-status" style="margin-top: 1rem; text-align: center; font-weight: 500;"></div>
+                </div>
+
+                <div id="recon-actions" class="hidden" style="margin-bottom: 1rem; display: flex; gap: 1rem;">
+                    <button class="btn btn-primary" id="btn-export-consolidated"><i data-lucide="download"></i> Export Consolidated Data</button>
+                    <button class="btn btn-secondary" id="btn-export-recon"><i data-lucide="file-spreadsheet"></i> Export Reconciliation Report</button>
+                    <button class="btn btn-outline" id="btn-mark-settled" style="background-color: var(--success); color: white; border: none; margin-left: auto;"><i data-lucide="check-square"></i> Mark Matched as Settled in DB</button>
+                </div>
+
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Ref Number</th>
+                                <th>Status</th>
+                                <th>System Amount</th>
+                                <th>Settlement Amount</th>
+                                <th>Settlement No</th>
+                                <th>Payment Date</th>
+                                <th>DB Settled?</th>
+                            </tr>
+                        </thead>
+                        <tbody id="settlement-results-body">
+                            <tr>
+                                <td colspan="7" class="text-center" style="color: var(--text-muted);">Upload files to see reconciliation results.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
         </main>
     </div>
 
@@ -1074,4 +1127,6 @@
         lucide.createIcons();
     </script>
 </body>
-</html>
+</html> ad57761 (feat: Add Fawry Settlement Reconciliation logic and views)
+
+

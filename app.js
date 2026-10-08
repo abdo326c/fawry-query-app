@@ -346,6 +346,7 @@ class App {
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
+                if (tabId === 'settlement' && !window.settlementApp) { window.settlementApp = new SettlementProcessor(); }
                 if (tabId === 'dashboard') this.loadDashboard();
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
@@ -1646,7 +1647,9 @@ class App {
                         "Item Name": t.item_name,
                         "Item Price": t.item_price,
                         "Mapping": t.mapping,
-                        "2nd Mapping": t.second_mapping,
+"2nd Mapping": t.second_mapping,
+                        "Is Settled": t.is_settled ? 'Yes' : 'No',
+                        "Settlement Batch": t.settlement_batch || '',
                         "Merchant Name": t.merchant_name,
                         "Bank": t.bank,
                         "Check Column": t.check_column,
@@ -3579,6 +3582,9 @@ class App {
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+
+
+
 
 
 
