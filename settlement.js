@@ -315,14 +315,27 @@ class SettlementProcessor {
             }
         }
 
-        // Check for Missing in Settlement (in DB but not in Settlement)
-        // Since we fetched by date range, we might fetch unrelated transactions.
-        // We will only flag "Missing in Settlement" if the transaction is NOT settled yet,
-        // and its payment_date is before our max settlement date.
+                // Calculate the exact min and max TRXDATE (payment_date) found in the settlement files
+        let minTrxDateStr = '2099-12-31';
+        let maxTrxDateStr = '1970-01-01';
+        for (const ref of settlementRefs) {
+            const trxRaw = stlGrouped[ref].TRXDATE;
+            if (trxRaw) {
+                const ms = new Date(trxRaw).getTime();
+                if (!isNaN(ms)) {
+                    const d = new Date(ms);
+                    const dStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+                    if (dStr < minTrxDateStr) minTrxDateStr = dStr;
+                    if (dStr > maxTrxDateStr) maxTrxDateStr = dStr;
+                }
+            }
+        }
+
+        // Check for Missing in Settlement
         for (const ref in dbGrouped) {
             if (!processedRefs.has(ref)) {
                 const dData = dbGrouped[ref];
-                if (!dData.is_settled) {
+                if (!dData.is_settled && dData.payment_date >= minTrxDateStr && dData.payment_date <= maxTrxDateStr) {
                     this.reconciliationResults.push({
                         reference: ref,
                         status: 'Missing in Settlement',
@@ -454,5 +467,7 @@ class SettlementProcessor {
 
 // Make it available globally so app.js can initialize it
 window.SettlementProcessor = SettlementProcessor;
+
+
 
 
