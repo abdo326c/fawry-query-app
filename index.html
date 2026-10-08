@@ -12,7 +12,7 @@
             alert("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
-    <link rel="stylesheet" href="styles.css?v=3">
+    <link rel="stylesheet" href="styles.css?v=4">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -257,7 +257,7 @@
                 <div class="header">
                     <h1>Orders Transactions</h1>
                     <div class="header-actions">
-                        <button class="btn btn-outline" id="btn-show-import">
+                        <button class="btn btn-primary" id="btn-show-import">
                             <i data-lucide="upload"></i> Import orders or Invoice exports
                         </button>
                         <button class="btn btn-outline" id="btn-show-history">
@@ -538,7 +538,7 @@
                 <div class="header">
                     <h1>Students Details</h1>
                     <div class="header-actions">
-                        <button class="btn" id="btn-export-students"><i data-lucide="download"></i> Export Master List</button>
+                        <button class="btn btn-outline" id="btn-export-students"><i data-lucide="download"></i> Export Master List</button>
                     </div>
                 </div>
 
@@ -608,7 +608,7 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                             <h2>Auto-Matcher (Invalid IDs)</h2>
                             <div class="header-actions">
-                                <button class="btn" id="btn-export-automatch"><i data-lucide="download"></i> Export Results</button>
+                                <button class="btn btn-outline" id="btn-export-automatch"><i data-lucide="download"></i> Export Results</button>
                                 <button class="btn btn-primary" id="btn-run-automatcher"><i data-lucide="zap"></i> Run Auto-Match</button>
                             </div>
                         </div>
