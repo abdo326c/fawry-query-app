@@ -205,44 +205,65 @@ class SettlementProcessor {
 
         const settlementRefs = Object.keys(stlGrouped);
 
-        // Fetch System Transactions that match these refs, OR that match the date range
-        // Since we want to find missing ones on BOTH sides, we need to fetch a date range
-        // Let's find min and max settlement dates
-        let minDate = new Date('2099-01-01').getTime();
-        let maxDate = new Date('1970-01-01').getTime();
-        
+        // Calculate the exact min and max TRXDATE (payment_date) found in the settlement files
+        let minTrxDateStr = '2099-12-31';
+        let maxTrxDateStr = '1970-01-01';
         for (const ref of settlementRefs) {
-            const dStr = stlGrouped[ref].SETTLEMENT_DATE;
-            if (dStr) {
-                const ms = new Date(dStr).getTime();
+            const trxRaw = stlGrouped[ref].TRXDATE;
+            if (trxRaw) {
+                const ms = new Date(trxRaw).getTime();
                 if (!isNaN(ms)) {
-                    if (ms < minDate) minDate = ms;
-                    if (ms > maxDate) maxDate = ms;
+                    const d = new Date(ms);
+                    const dStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+                    if (dStr < minTrxDateStr) minTrxDateStr = dStr;
+                    if (dStr > maxTrxDateStr) maxTrxDateStr = dStr;
                 }
             }
         }
 
-        let queryMinDate = new Date(minDate);
-        queryMinDate.setDate(queryMinDate.getDate() - 5); // buffer
-        let queryMaxDate = new Date(maxDate);
-        queryMaxDate.setDate(queryMaxDate.getDate() + 5);
-
         this.setStatus('<i data-lucide="loader" class="spin"></i> Fetching system transactions for reconciliation...');
         
-        // Fetch transactions from DB for the specified merchant
-        const { data: dbTx, error } = await this.supabase
-            .from('transactions')
-            .select('*')
-            .eq('bank', this.merchant) // Assuming bank column holds the merchant code like NUADCB136
-            .gte('payment_date', queryMinDate.toISOString().split('T')[0])
-            .lte('payment_date', queryMaxDate.toISOString().split('T')[0]);
+        let allDbTx = [];
+        const txMap = new Map(); // to deduplicate
 
-        if (error) {
-            this.setStatus('Error fetching DB transactions: ' + error.message, true);
-            return;
+        // 1. Fetch by precise payment date range to find "Missing in Settlement"
+        if (minTrxDateStr !== '2099-12-31') {
+            const { data: dateTx, error: dateErr } = await this.supabase
+                .from('transactions')
+                .select('*')
+                .eq('bank', this.merchant)
+                .gte('payment_date', minTrxDateStr)
+                .lte('payment_date', maxTrxDateStr);
+                
+            if (dateErr) {
+                this.setStatus('Error fetching DB transactions by date: ' + dateErr.message, true);
+                return;
+            }
+            if (dateTx) {
+                dateTx.forEach(tx => txMap.set(tx.id, tx));
+            }
         }
 
-        this.systemTransactions = dbTx || [];
+        // 2. Fetch all references in the settlement explicitly to guarantee we don't miss them
+        const chunkSize = 150;
+        for (let i = 0; i < settlementRefs.length; i += chunkSize) {
+            const chunk = settlementRefs.slice(i, i + chunkSize);
+            const { data: refTx, error: refErr } = await this.supabase
+                .from('transactions')
+                .select('*')
+                .eq('bank', this.merchant)
+                .in('reference_number', chunk);
+                
+            if (refErr) {
+                this.setStatus('Error fetching DB transactions by reference: ' + refErr.message, true);
+                return;
+            }
+            if (refTx) {
+                refTx.forEach(tx => txMap.set(tx.id, tx));
+            }
+        }
+
+        this.systemTransactions = Array.from(txMap.values());
 
         // Group DB transactions by reference_number (essential for NUADIB64)
         const dbGrouped = {};
@@ -315,23 +336,7 @@ class SettlementProcessor {
             }
         }
 
-                // Calculate the exact min and max TRXDATE (payment_date) found in the settlement files
-        let minTrxDateStr = '2099-12-31';
-        let maxTrxDateStr = '1970-01-01';
-        for (const ref of settlementRefs) {
-            const trxRaw = stlGrouped[ref].TRXDATE;
-            if (trxRaw) {
-                const ms = new Date(trxRaw).getTime();
-                if (!isNaN(ms)) {
-                    const d = new Date(ms);
-                    const dStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-                    if (dStr < minTrxDateStr) minTrxDateStr = dStr;
-                    if (dStr > maxTrxDateStr) maxTrxDateStr = dStr;
-                }
-            }
-        }
-
-        // Check for Missing in Settlement
+                // Check for Missing in Settlement
         for (const ref in dbGrouped) {
             if (!processedRefs.has(ref)) {
                 const dData = dbGrouped[ref];
@@ -467,6 +472,7 @@ class SettlementProcessor {
 
 // Make it available globally so app.js can initialize it
 window.SettlementProcessor = SettlementProcessor;
+
 
 
 
