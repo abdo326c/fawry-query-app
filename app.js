@@ -346,7 +346,7 @@ class App {
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
-                if (tabId === 'settlement' && !window.settlementApp) { window.settlementApp = new SettlementProcessor(); }
+                if (tabId === 'settlement' && !window.settlementApp) { window.settlementApp = new SettlementProcessor(supabase); }
                 if (tabId === 'dashboard') this.loadDashboard();
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
@@ -3582,6 +3582,7 @@ class App {
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+
 
 
 

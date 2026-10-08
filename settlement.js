@@ -1,5 +1,6 @@
 class SettlementProcessor {
-    constructor() {
+    constructor(supabaseClient) {
+        this.supabase = supabaseClient;
         this.settlementData = [];
         this.reconciliationResults = [];
         this.systemTransactions = [];
@@ -229,7 +230,7 @@ class SettlementProcessor {
         this.setStatus('<i data-lucide="loader" class="spin"></i> Fetching system transactions for reconciliation...');
         
         // Fetch transactions from DB for the specified merchant
-        const { data: dbTx, error } = await supabase
+        const { data: dbTx, error } = await this.supabase
             .from('transactions')
             .select('*')
             .eq('bank', this.merchant) // Assuming bank column holds the merchant code like NUADCB136
@@ -423,7 +424,7 @@ class SettlementProcessor {
                 const chunkSize = 200;
                 for (let i = 0; i < refs.length; i += chunkSize) {
                     const chunk = refs.slice(i, i + chunkSize);
-                    const { error } = await supabase
+                    const { error } = await this.supabase
                         .from('transactions')
                         .update({
                             is_settled: true,
@@ -453,3 +454,5 @@ class SettlementProcessor {
 
 // Make it available globally so app.js can initialize it
 window.SettlementProcessor = SettlementProcessor;
+
+
