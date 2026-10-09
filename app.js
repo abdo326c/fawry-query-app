@@ -77,7 +77,7 @@ async function fetchAll(table, selectCols = '*', queryFn = null) {
     while (fetchMore) {
         let query = supabase.from(table).select(selectCols);
         if (queryFn) query = queryFn(query);
-        query = query.range(from, from + 999);
+        query = query.order('id').range(from, from + 999);
         const { data, error } = await query;
         if (error) throw error;
         if (!data || data.length === 0) break;
@@ -163,12 +163,22 @@ class App {
         }
 
         supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_IN' && session) {
-                this.setupUser(session.user);
+            if (session) {
+                if (!this.currentUser || this.currentUser.id !== session.user.id) {
+                    this.setupUser(session.user);
+                }
             } else if (event === 'SIGNED_OUT') {
                 this.currentUser = null;
                 document.getElementById('auth-overlay').classList.remove('hidden');
                 document.getElementById('user-profile-section').style.display = 'none';
+                if (this.realtimeChannel) {
+                    supabase.removeChannel(this.realtimeChannel);
+                    this.realtimeChannel = null;
+                }
+                this.allTransactions = [];
+                this.allMappings = [];
+                this.allManualFixes = [];
+                this.allStudents = [];
             }
         });
 
@@ -211,6 +221,7 @@ class App {
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
         this.loadTransactions();
+        this.updateErpDropdowns().then(() => this.loadErpExport());
         this.initRealtime();
     }
 
@@ -523,6 +534,7 @@ class App {
                         .select('payment_date, bank, item_price, mapping, second_mapping, item_name')
                         .gte('payment_date', dateFrom)
                         .lte('payment_date', dateTo)
+                        .order('id')
                         .range(from, from + 999);
                     
                     if (error) throw error;
@@ -634,7 +646,7 @@ class App {
                 
                 keys.forEach(k => {
                     const row = groupedData[k];
-                    htmlOutput += `<tr><td>${k}</td>`;
+                    htmlOutput += `<tr><td>${escapeHTML(k)}</td>`;
                     selectedBanks.forEach(b => {
                         htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
                     });
@@ -838,7 +850,7 @@ class App {
                 let fetchMore = true;
                 let from = 0;
                 while (fetchMore) {
-                    const { data: existingTx } = await supabase.from('transactions').select('*').eq('item_name', original).range(from, from + 999);
+                    const { data: existingTx } = await supabase.from('transactions').select('*').eq('item_name', original).order('id').range(from, from + 999);
                     if (!existingTx || existingTx.length === 0) break;
                     for (const tx of existingTx) {
                         if (adjusted) tx.item_name = adjusted;
@@ -971,7 +983,7 @@ class App {
                     let fetchMore = true;
                     let from = 0;
                     while (fetchMore) {
-                        const { data: existingTx } = await supabase.from('transactions').select('*').in('item_name', chunkItems).range(from, from + 999);
+                        const { data: existingTx } = await supabase.from('transactions').select('*').in('item_name', chunkItems).order('id').range(from, from + 999);
                         if (!existingTx || existingTx.length === 0) break;
                         for (const tx of existingTx) {
                             const mapDef = mappings.find(m => m.item_name === tx.item_name);
@@ -1173,7 +1185,7 @@ class App {
 
                     for (let i = 0; i < ranges.length; i += 5) {
                         const batch = ranges.slice(i, i + 5);
-                        const promises = batch.map(r => supabase.from('transactions').select('*').range(r[0], r[1]));
+                        const promises = batch.map(r => supabase.from('transactions').select('*').order('id').range(r[0], r[1]));
                         const results = await Promise.all(promises);
 
                         results.forEach(({ data: txs, error }) => {
@@ -1270,11 +1282,11 @@ class App {
                     tbody.innerHTML = window.reapplyProposals.map((prop, idx) => `
                         <tr>
                             <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" checked></td>
-                            <td>${prop.originalTx.reference_number}</td>
-                            <td><span class="badge" style="background: rgba(0, 229, 255, 0.1); color: var(--primary-color);">${prop.changeType}</span></td>
-                            <td style="color: var(--text-muted); text-decoration: line-through;">${prop.oldStr}</td>
-                            <td style="color: var(--success-color); font-weight: 500;">${prop.newStr}</td>
-                            <td style="font-size: 0.85rem; color: var(--text-muted);">${prop.reason}</td>
+                            <td>${escapeHTML(prop.originalTx.reference_number || '')}</td>
+                            <td><span class="badge" style="background: rgba(0, 229, 255, 0.1); color: var(--primary-color);">${escapeHTML(prop.changeType || '')}</span></td>
+                            <td style="color: var(--text-muted); text-decoration: line-through;">${escapeHTML(prop.oldStr || '')}</td>
+                            <td style="color: var(--success-color); font-weight: 500;">${escapeHTML(prop.newStr || '')}</td>
+                            <td style="font-size: 0.85rem; color: var(--text-muted);">${escapeHTML(prop.reason || '')}</td>
                         </tr>
                     `).join('');
                     
@@ -1695,7 +1707,7 @@ class App {
                 let from = 0;
                 let fetchMore = true;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('item_mappings').select('*').range(from, from + 999);
+                    const { data, error } = await supabase.from('item_mappings').select('*').order('id').range(from, from + 999);
                     if (error) throw error;
                     allData = allData.concat(data);
                     if (data.length < 1000) fetchMore = false;
@@ -1726,7 +1738,7 @@ class App {
                 let from = 0;
                 let fetchMore = true;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('manual_fixes').select('*').range(from, from + 999);
+                    const { data, error } = await supabase.from('manual_fixes').select('*').order('id').range(from, from + 999);
                     if (error) throw error;
                     allData = allData.concat(data);
                     if (data.length < 1000) fetchMore = false;
@@ -2225,7 +2237,7 @@ class App {
 
                 try {
                     // Delete transactions
-                    const { error: txError } = await supabase.from('transactions').delete().eq('file_name', fileName);
+                    const { error: txError } = await supabase.from('transactions').delete().eq('batch_id', batchId);
                     if (txError) throw txError;
                     
                     // Update batch status
@@ -2308,7 +2320,7 @@ class App {
             let from = 0;
             let fetchMore = true;
             while(fetchMore) {
-                const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column').range(from, from + 999);
+                const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column').order('id').range(from, from + 999);
                 if (error) throw error;
                 allData = allData.concat(data);
                 if (data.length < 1000) fetchMore = false;
@@ -2605,7 +2617,7 @@ class App {
             let fetchMoreStudents = true;
             let sFrom = 0;
             while(fetchMoreStudents) {
-                const { data, error } = await supabase.from('student_master').select('*').range(sFrom, sFrom + 999);
+                const { data, error } = await supabase.from('student_master').select('*').order('id').range(sFrom, sFrom + 999);
                 if (error) throw error;
                 students = students.concat(data || []);
                 if (!data || data.length < 1000) fetchMoreStudents = false;
@@ -2789,7 +2801,7 @@ class App {
                                 </span>
                                 <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
                             </td>
-                            <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${proposal.matchReason}</span></td>
+                            <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${escapeHTML(proposal.matchReason)}</span></td>
                         </tr>
                     `;
                 } else {
@@ -3111,7 +3123,7 @@ class App {
                 let fetchMore = true;
                 let from = 0;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('payment_links').select('*').range(from, from + 999);
+                    const { data, error } = await supabase.from('payment_links').select('*').order('id').range(from, from + 999);
                     if (error) throw error;
                     if (!data || data.length === 0) break;
                     allData = allData.concat(data);
@@ -3201,15 +3213,15 @@ class App {
                     <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
                     <td>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span class="badge badge-gray">${link.invoice_number || '-'}</span>
-                            ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${link.invoice_number}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 14px; height: 14px;"></i></button>` : ''}
+                            <span class="badge badge-gray">${escapeHTML(link.invoice_number || '-')}</span>
+                            ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${escapeHTML(link.invoice_number)}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 14px; height: 14px;"></i></button>` : ''}
                         </div>
                     </td>
                     <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
                     <td>${dateBadge}</td>
                     <td>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button class="btn btn-outline copy-link-btn" data-url="${link.invoice_link}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy Link</button>
+                            <button class="btn btn-outline copy-link-btn" data-url="${escapeHTML(link.invoice_link || '')}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy Link</button>
                             <button class="btn btn-outline edit-link-btn" data-id="${link.id}">Edit</button>
                             <button class="btn btn-outline delete-link-btn" style="color: var(--danger);" data-id="${link.id}">Delete</button>
                         </div>
@@ -3340,11 +3352,6 @@ class App {
         if (btnRecord) {
             btnRecord.addEventListener('click', () => this.recordErpReferences());
         }
-        
-        // Initial setup
-        setTimeout(() => {
-            this.updateErpDropdowns().then(() => this.loadErpExport());
-        }, 100);
     }
 
     async updateErpDropdowns() {
@@ -3363,7 +3370,7 @@ class App {
         let from = 0;
         let fetchMore = true;
         while (fetchMore) {
-            const { data, error } = await query.range(from, from + 999);
+            const { data, error } = await query.order('id').range(from, from + 999);
             if (error) break;
             if (!data || data.length === 0) break;
             allData = allData.concat(data);
@@ -3433,7 +3440,7 @@ class App {
         let fetchMore = true;
         
         while (fetchMore) {
-            const { data, error } = await query.range(from, from + 999);
+            const { data, error } = await query.order('id').range(from, from + 999);
             if (error) {
                 Toast.show('Error loading ERP data', 'error');
                 fetchMore = false;
@@ -3567,7 +3574,20 @@ class App {
         btn.disabled = true;
 
         try {
-            const transactionIds = this.erpData.map(r => r.id);
+            const unexportedRows = this.erpData.filter(r => r.erp_batch_number == null);
+            const alreadyExported = this.erpData.length - unexportedRows.length;
+            
+            if (unexportedRows.length === 0) {
+                Toast.show('All selected rows already have ERP references saved.', 'warning');
+                return;
+            }
+            if (alreadyExported > 0) {
+                if (!await window.customConfirm(`Warning: ${alreadyExported} rows already have ERP references. Only ${unexportedRows.length} new rows will be updated. Continue?`, 'Continue', 'Cancel')) {
+                    return;
+                }
+            }
+
+            const transactionIds = unexportedRows.map(r => r.id);
             const batchSize = 500;
             
             for (let i = 0; i < transactionIds.length; i += batchSize) {

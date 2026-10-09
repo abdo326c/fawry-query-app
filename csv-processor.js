@@ -48,7 +48,7 @@ export class FawryProcessor {
                 <div class="log-time">${new Date().toLocaleTimeString()}</div>
                 <div class="log-content">
                     <i data-lucide="${icon}" style="width: 16px; height: 16px;"></i>
-                    <span>${msg}</span>
+                    <span>${window.escapeHTML ? window.escapeHTML(msg) : msg.replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c] || c))}</span>
                 </div>
             `;
             
@@ -605,17 +605,40 @@ export class FawryProcessor {
             }
         }
 
-        // Insert into Supabase in parallel batches
+        // 1. Create the import batch first to get its ID
+        this.log(`Registering import batch...`);
+        const { data: batchData, error: batchInitError } = await supabase.from('import_batches').insert({
+            user_email: this.userEmail,
+            file_name: fileName,
+            status: 'processing',
+            records_processed: transactions.length,
+            records_inserted: 0,
+            details: { type: 'transactions' }
+        }).select('id').single();
+
+        if (batchInitError) {
+            this.log(`Database error: Could not register import batch. ${batchInitError.message}`);
+            return false;
+        }
+
+        const batchId = batchData.id;
+
+        // 2. Attach batch_id to all transactions
+        for (let t of transactions) {
+            t.batch_id = batchId;
+        }
+
+        // 3. Insert into Supabase in parallel batches
         this.log(`Inserting data into database...`);
         const chunkSize = 1000;
         let inserted = 0;
         let hasError = false;
         let lastError = null;
         
-        const upsertPromises = [];
+        const upsertThunks = [];
         for (let i = 0; i < transactions.length; i += chunkSize) {
             const chunk = transactions.slice(i, i + chunkSize);
-            upsertPromises.push((async () => {
+            upsertThunks.push(async () => {
                 const { error } = await supabase.from('transactions').upsert(chunk, { 
                     onConflict: 'reference_number,item_price,check_column', 
                     ignoreDuplicates: false 
@@ -631,26 +654,25 @@ export class FawryProcessor {
                     document.getElementById('progress-fill').style.width = `${(inserted / transactions.length) * 100}%`;
                     document.getElementById('progress-text').innerText = `${inserted} / ${transactions.length} rows processed`;
                 }
-            })());
+            });
         }
         
         // Execute upserts in parallel (3 concurrent requests max to avoid overwhelming DB)
-        for (let i = 0; i < upsertPromises.length; i += 3) {
-            await Promise.all(upsertPromises.slice(i, i + 3));
+        for (let i = 0; i < upsertThunks.length; i += 3) {
+            const batchPromises = upsertThunks.slice(i, i + 3).map(thunk => thunk());
+            await Promise.all(batchPromises);
         }
 
-        const { error: batchError } = await supabase.from('import_batches').insert({
-            user_email: this.userEmail,
-            file_name: fileName,
+        // 4. Update batch status
+        const { error: batchUpdateError } = await supabase.from('import_batches').update({
             status: inserted === transactions.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
-            records_processed: transactions.length,
             records_inserted: inserted,
             details: { type: 'transactions', error_message: lastError }
-        });
+        }).eq('id', batchId);
         
-        if (batchError) {
-            this.log(`History Warning: Could not record transaction import history. Error: ${batchError.message}`);
-            console.error("Tx History Error:", batchError);
+        if (batchUpdateError) {
+            this.log(`History Warning: Could not update import history. Error: ${batchUpdateError.message}`);
+            console.error("Tx History Error:", batchUpdateError);
         }
 
         return !hasError && inserted > 0;

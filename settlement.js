@@ -382,14 +382,17 @@ class SettlementProcessor {
 
             let dbSettledBadge = r.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;font-size:0.7rem;">Yes</span>' : '';
 
+            // Using window.escapeHTML if available
+            const esc = window.escapeHTML || (s => s);
+
             return `
                 <tr>
-                    <td>${r.reference}</td>
-                    <td><span class="badge ${statusBadge}" style="padding:0.25rem 0.5rem; border-radius:4px;">${r.status}</span></td>
+                    <td>${esc(r.reference)}</td>
+                    <td><span class="badge ${statusBadge}" style="padding:0.25rem 0.5rem; border-radius:4px;">${esc(r.status)}</span></td>
                     <td>${r.sys_amount.toFixed(2)}</td>
                     <td>${r.stl_amount.toFixed(2)}</td>
-                    <td>${r.settlement_no || '-'}</td>
-                    <td>${r.payment_date || '-'}</td>
+                    <td>${esc(r.settlement_no || '-')}</td>
+                    <td>${esc(r.payment_date || '-')}</td>
                     <td>${dbSettledBadge}</td>
                 </tr>
             `;
