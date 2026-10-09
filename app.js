@@ -105,6 +105,7 @@ class App {
         this.fetchUniqueFilters();
 
         this.initNavigation();
+        this.setupPrintButton();
         this.initImport();
         this.initModals();
         this.initBulkUploads();
@@ -3759,7 +3760,79 @@ class App {
         }
     }
 
+    setupPrintButton() {
+        const btnPrint = document.getElementById('btn-print-profile');
+        if (btnPrint) {
+            btnPrint.addEventListener('click', () => {
+                if (!this.currentProfileSid) return;
+                
+                const profileContent = document.getElementById('inline-student-profile').cloneNode(true);
+                // Remove the print button from the clone so it doesn't print
+                const printBtnClone = profileContent.querySelector('#btn-print-profile');
+                if (printBtnClone) printBtnClone.remove();
+
+                let name = '-', email = '-', phone = '-', college = '-', program = '-';
+                const row = document.querySelector(`.student-row[data-sid="${this.currentProfileSid}"]`);
+                if (row && row.children.length >= 6) {
+                    name = row.children[1].innerText;
+                    email = row.children[2].innerText;
+                    phone = row.children[3].innerText;
+                    college = row.children[4].innerText;
+                    program = row.children[5].innerText;
+                }
+
+                const printWindow = window.open('', '_blank');
+                printWindow.document.write(`
+                    <html>
+                    <head>
+                        <title>Student Statement of Account - ${this.currentProfileSid}</title>
+                        <style>
+                            body { font-family: 'Inter', sans-serif; padding: 2rem; color: #111; max-width: 900px; margin: 0 auto; }
+                            h1 { font-size: 1.5rem; text-align: center; margin-bottom: 0.2rem; }
+                            h2 { font-size: 1.2rem; text-align: center; color: #555; margin-bottom: 2rem; font-weight: normal; }
+                            .header-info { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid #ddd; }
+                            table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: 0.9rem; }
+                            th, td { padding: 0.75rem; border: 1px solid #ddd; text-align: left; }
+                            th { background-color: #f5f5f5; font-weight: 600; }
+                            td { background-color: #fff; }
+                            .text-right { text-align: right; }
+                            .success { color: #16a34a; font-weight: bold; }
+                            .warning { color: #d97706; font-weight: bold; }
+                            .danger { color: #dc2626; font-weight: bold; }
+                            h3 { font-size: 1.1rem; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
+                            @media print {
+                                body { padding: 0; }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Nile University</h1>
+                        <h2>Official Statement of Account - Fawry Payments</h2>
+                        <div class="header-info">
+                            <h3 style="margin:0 0 0.5rem 0;">${name} (${this.currentProfileSid})</h3>
+                            <p style="margin:0; font-size: 0.9rem; color: #444;">${email} | ${phone}</p>
+                            <p style="margin:0.25rem 0 0 0; font-size: 0.9rem; color: #444;">${college} / ${program}</p>
+                            <p style="margin-top:1rem; font-size:0.8rem; color:#888;">Generated on: ${new Date().toLocaleString()}</p>
+                        </div>
+                        ${profileContent.innerHTML}
+                    </body>
+                    </html>
+                `);
+                
+                printWindow.document.close();
+                printWindow.focus();
+                
+                // Slight delay to ensure CSS loads before printing
+                setTimeout(() => {
+                    printWindow.print();
+                    // printWindow.close(); // Optional: close after print dialog
+                }, 250);
+            });
+        }
+    }
+
     async loadStudentProfile(sid) {
+        this.currentProfileSid = sid;
         try {
             document.getElementById('inline-student-profile').classList.remove('hidden');
             document.getElementById('student-summary-body').innerHTML = '';
