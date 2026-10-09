@@ -70,14 +70,14 @@ function validateID(id) {
 }
 
 // Shared utility: fetch all rows from a table with pagination
-async function fetchAll(table, selectCols = '*', queryFn = null) {
+async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id') {
     let allData = [];
     let from = 0;
     let fetchMore = true;
     while (fetchMore) {
         let query = supabase.from(table).select(selectCols);
         if (queryFn) query = queryFn(query);
-        query = query.order('id').range(from, from + 999);
+        query = query.order(orderByCol).range(from, from + 999);
         const { data, error } = await query;
         if (error) throw error;
         if (!data || data.length === 0) break;
@@ -1157,9 +1157,9 @@ class App {
             btn.disabled = true;
 
             try {
-                const mappings = await fetchAll('item_mappings');
-                const fixes = await fetchAll('manual_fixes');
-                const links = await fetchAll('links', 'payment_reference_number, custom_input_value');
+                const mappings = await fetchAll('item_mappings', '*', null, 'item_name');
+                const fixes = await fetchAll('manual_fixes', '*', null, 'reference_number');
+                const links = await fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number');
 
                 // Build hash maps for O(1) lookups
                 const fixesMap = new Map();
@@ -1707,7 +1707,7 @@ class App {
                 let from = 0;
                 let fetchMore = true;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('item_mappings').select('*').order('id').range(from, from + 999);
+                    const { data, error } = await supabase.from('item_mappings').select('*').order('item_name').range(from, from + 999);
                     if (error) throw error;
                     allData = allData.concat(data);
                     if (data.length < 1000) fetchMore = false;
@@ -1738,7 +1738,7 @@ class App {
                 let from = 0;
                 let fetchMore = true;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('manual_fixes').select('*').order('id').range(from, from + 999);
+                    const { data, error } = await supabase.from('manual_fixes').select('*').order('reference_number').range(from, from + 999);
                     if (error) throw error;
                     allData = allData.concat(data);
                     if (data.length < 1000) fetchMore = false;
@@ -1857,7 +1857,7 @@ class App {
         const tbody = document.getElementById('mappings-body');
         tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(4) + '</tr>').join('');
         try {
-            const allData = await fetchAll('item_mappings');
+            const allData = await fetchAll('item_mappings', '*', null, 'item_name');
 
             if (allData.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state"><i data-lucide="git-merge" style="width:48px;height:48px;opacity:0.5;"></i><h3>No mappings yet</h3><p>Click "Add Mapping" to create your first item mapping.</p></div></td></tr>';
@@ -1918,7 +1918,7 @@ class App {
         try {
             const searchVal = document.getElementById('fixes-search')?.value.trim();
             const queryFn = searchVal ? (q) => q.ilike('reference_number', `%${searchVal}%`) : null;
-            const allData = await fetchAll('manual_fixes', '*', queryFn);
+            const allData = await fetchAll('manual_fixes', '*', queryFn, 'reference_number');
 
             if (allData.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
@@ -2617,7 +2617,7 @@ class App {
             let fetchMoreStudents = true;
             let sFrom = 0;
             while(fetchMoreStudents) {
-                const { data, error } = await supabase.from('student_master').select('*').order('id').range(sFrom, sFrom + 999);
+                const { data, error } = await supabase.from('student_master').select('*').order('student_id').range(sFrom, sFrom + 999);
                 if (error) throw error;
                 students = students.concat(data || []);
                 if (!data || data.length < 1000) fetchMoreStudents = false;
@@ -3123,7 +3123,7 @@ class App {
                 let fetchMore = true;
                 let from = 0;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('payment_links').select('*').order('id').range(from, from + 999);
+                    const { data, error } = await supabase.from('payment_links').select('*').order('invoice_number').range(from, from + 999);
                     if (error) throw error;
                     if (!data || data.length === 0) break;
                     allData = allData.concat(data);
