@@ -2021,26 +2021,24 @@ class App {
 
                     const tbody = document.getElementById('students-table-body');
                     if (!data || data.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><i data-lucide="users" style="width:48px;height:48px;opacity:0.5;"></i><h3>No students found</h3><p>Try a different search term.</p></div></td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="users" style="width:48px;height:48px;opacity:0.5;"></i><h3>No students found</h3><p>Try a different search term.</p></div></td></tr>';
                         if (window.lucide) lucide.createIcons();
                         return;
                     }
                     tbody.innerHTML = data.map(s => `
-                        <tr>
+                        <tr class="student-row" style="cursor: pointer;" data-sid="${escapeHTML(s.student_id)}">
                             <td><strong>${escapeHTML(s.student_id)}</strong></td>
                             <td>${escapeHTML(s.full_name)}</td>
-                            <td><span class="copyable-email" style="cursor: pointer; color: var(--primary); font-weight: 500;" data-email="${escapeHTML(s.email || '')}" title="Click to copy">${escapeHTML(s.email)}</span></td>
+                            <td><span class="copyable-email" style="color: var(--primary); font-weight: 500;" data-email="${escapeHTML(s.email || '')}" title="Click to copy">${escapeHTML(s.email)}</span></td>
                             <td>${escapeHTML(s.mobile)}</td>
                             <td>${escapeHTML(s.college)}</td>
                             <td>${escapeHTML(s.program)}</td>
-                            <td>
-                                <button class="btn btn-outline btn-sm btn-view-profile" data-sid="${escapeHTML(s.student_id)}">View Profile</button>
-                            </td>
                         </tr>
                     `).join('');
                     
-                    tbody.querySelectorAll('.btn-view-profile').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
+                    tbody.querySelectorAll('.student-row').forEach(row => {
+                        row.addEventListener('click', (e) => {
+                            if (e.target.classList.contains('copyable-email')) return; // don't open profile if clicking email to copy
                             this.loadStudentProfile(e.currentTarget.getAttribute('data-sid'));
                         });
                     });
