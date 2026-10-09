@@ -2015,10 +2015,13 @@ class App {
                         .limit(50);
                         
                     if (error) throw error;
+                    
+                    const profileEl = document.getElementById('inline-student-profile');
+                    if (profileEl) profileEl.classList.add('hidden');
 
                     const tbody = document.getElementById('students-table-body');
                     if (!data || data.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="users" style="width:48px;height:48px;opacity:0.5;"></i><h3>No students found</h3><p>Try a different search term.</p></div></td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><i data-lucide="users" style="width:48px;height:48px;opacity:0.5;"></i><h3>No students found</h3><p>Try a different search term.</p></div></td></tr>';
                         if (window.lucide) lucide.createIcons();
                         return;
                     }
@@ -2041,6 +2044,10 @@ class App {
                             this.loadStudentProfile(e.currentTarget.getAttribute('data-sid'));
                         });
                     });
+                    
+                    if (data.length === 1) {
+                        this.loadStudentProfile(data[0].student_id);
+                    }
                 } catch(err) {
                     Toast.show('Search error: ' + err.message, 'error');
                 }
@@ -3756,7 +3763,7 @@ class App {
 
     async loadStudentProfile(sid) {
         try {
-            document.getElementById('modal-student-profile').classList.remove('hidden');
+            document.getElementById('inline-student-profile').classList.remove('hidden');
             document.getElementById('student-profile-header').innerHTML = '<p>Loading...</p>';
             document.getElementById('student-summary-body').innerHTML = '';
             document.getElementById('student-ledger-body').innerHTML = '';
@@ -3828,7 +3835,7 @@ class App {
 
         } catch (err) {
             Toast.show('Error loading profile: ' + err.message, 'error');
-            document.getElementById('modal-student-profile').classList.add('hidden');
+            document.getElementById('inline-student-profile').classList.add('hidden');
         }
     }
 
