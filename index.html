@@ -599,11 +599,13 @@
                     </div>
                     
                     <!-- Inline Student Profile -->
-                    <div id="inline-student-profile" class="hidden glass-card" style="margin-top: 1.5rem; position: relative;">
-                        <button class="btn btn-primary" id="btn-print-profile" style="position: absolute; top: 1rem; right: 1rem;">
-                            <i data-lucide="printer"></i> Print / Save PDF
-                        </button>
-                        <h3 style="margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">Categorized Payment Summary</h3>
+                    <div id="inline-student-profile" class="hidden glass-card" style="margin-top: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                            <h3 style="margin: 0;">Categorized Payment Summary</h3>
+                            <button class="btn btn-outline btn-sm" id="btn-print-profile">
+                                <i data-lucide="printer"></i> Print / Save PDF
+                            </button>
+                        </div>
                         <div class="table-container" style="margin-bottom: 2rem;">
                             <table class="data-table">
                                 <thead>
