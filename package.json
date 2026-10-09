@@ -1,0 +1,25 @@
+{
+    "name": "fawry-app",
+    "version": "1.0.0",
+    "description": "Internal web app for NU Finance. It imports Fawry payment exports, matches payments to students, reconciles bank settlement files, and produces the Dynamics 365 (ERP) journal file.",
+    "main": "app.js",
+    "scripts": {
+        "test": "vitest run"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/abdo326c/fawry-query-app.git"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "module",
+    "bugs": {
+        "url": "https://github.com/abdo326c/fawry-query-app/issues"
+    },
+    "homepage": "https://github.com/abdo326c/fawry-query-app#readme",
+    "devDependencies": {
+        "jsdom": "^30.1.2",
+        "vitest": "^5.0.3"
+    }
+}

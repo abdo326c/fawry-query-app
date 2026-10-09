@@ -1,0 +1,17 @@
+{
+  "name": "Fawry Payments Database",
+  "short_name": "Fawry App",
+  "description": "Internal web app for NU Finance to manage Fawry payments.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {
+      "src": "nu-logo.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
