@@ -1,8 +1,18 @@
 import { supabase } from './supabase.js';
 import { FawryProcessor } from './csv-processor.js';
+import {
+    validateID,
+    fetchAll,
+    fetchByIn,
+    recomputeTransactions,
+    upsertTransactions,
+    applyBusinessRules,
+    buildMappingLookup,
+    originalItemName,
+    escapeHTML
+} from './rules.js';
 
-// Shared utility: escape HTML to prevent XSS
-
+// Promise-based confirm dialog using the in-page modal
 window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
     return new Promise((resolve) => {
         const modal = document.getElementById('modal-custom-confirm');
@@ -30,15 +40,6 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
     });
 };
 
-function escapeHTML(str) {
-    if (str == null) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
 window.escapeHTML = escapeHTML;
 
 // Shared utility: format money
@@ -49,44 +50,7 @@ function formatMoney(num) {
 // Shared utility: sanitize user input for Supabase .or() filter strings
 function sanitizeForFilter(str) {
     if (!str) return '';
-    return String(str).replace(/[,)(%\\]/g, '');
-}
-
-// Shared utility: standalone validateID (no need to instantiate FawryProcessor)
-function validateID(id) {
-    if (!id) return "Missing ID";
-    const idText = String(id).trim().replace(/\u00A0/g, '');
-    if (!idText || idText.length === 0) return "Missing ID";
-    const idLength = idText.length;
-    const onlyTextLeft = idText.replace(/[0-9]/g, '');
-    if (idLength === 17 && idText.toUpperCase().startsWith("DIP")) {
-        const remainder = idText.substring(3).replace(/[0-9]/g, '');
-        if (remainder === "") return "Valid";
-    }
-    if (onlyTextLeft !== "") return "Error: Text/Name detected";
-    if (idLength < 4) return `Error: ID Too Short (${idLength} digits)`;
-    if (idLength > 9) return `Error: ID Too Long (${idLength} digits)`;
-    if (idText.startsWith("2") && idLength !== 9) return `Error: Invalid 2-Series Length (${idLength} digits)`;
-    return "Valid";
-}
-
-// Shared utility: fetch all rows from a table with pagination
-async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id') {
-    let allData = [];
-    let from = 0;
-    let fetchMore = true;
-    while (fetchMore) {
-        let query = supabase.from(table).select(selectCols);
-        if (queryFn) query = queryFn(query);
-        query = query.order(orderByCol).range(from, from + 999);
-        const { data, error } = await query;
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        allData = allData.concat(data);
-        if (data.length < 1000) fetchMore = false;
-        else from += 1000;
-    }
-    return allData;
+    return String(str).replace(/[,)(%\\"*]/g, '').trim();
 }
 
 class Toast {
@@ -267,7 +231,9 @@ class App {
         const fpThemeEl = document.getElementById('flatpickr-theme');
 
         // Check local storage or system preference
-        const savedTheme = localStorage.getItem('fawry-theme');
+        let savedTheme = null;
+        try { savedTheme = localStorage.getItem('fawry-theme'); } catch (e) { /* storage unavailable */ }
+        const saveTheme = (t) => { try { localStorage.setItem('fawry-theme', t); } catch (e) { /* ignore */ } };
         const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
 
         if (savedTheme === 'light' || (!savedTheme && prefersLight)) {
@@ -275,9 +241,12 @@ class App {
             htmlEl.classList.add('light');
             if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
             if(textEl) textEl.innerText = 'Dark Mode';
-            if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/light.css";
+            if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/light.css";
         } else {
-            if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/dark.css";
+            htmlEl.classList.add('dark');
+            if(iconEl) iconEl.setAttribute('data-lucide', 'sun');
+            if(textEl) textEl.innerText = 'Light Mode';
+            if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css";
         }
 
         btnToggle.addEventListener('click', () => {
@@ -285,17 +254,17 @@ class App {
             if (isLight) {
                 htmlEl.classList.remove('light');
                 htmlEl.classList.add('dark');
-                localStorage.setItem('fawry-theme', 'dark');
+                saveTheme('dark');
                 if(iconEl) iconEl.setAttribute('data-lucide', 'sun');
                 if(textEl) textEl.innerText = 'Light Mode';
-                if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/dark.css";
+                if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css";
             } else {
                 htmlEl.classList.remove('dark');
                 htmlEl.classList.add('light');
-                localStorage.setItem('fawry-theme', 'light');
+                saveTheme('light');
                 if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
                 if(textEl) textEl.innerText = 'Dark Mode';
-                if (fpThemeEl) fpThemeEl.href = "https://npmcdn.com/flatpickr/dist/themes/light.css";
+                if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/light.css";
             }
             if (window.lucide) lucide.createIcons();
         });
@@ -692,13 +661,13 @@ class App {
             let totalQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
                 .gte('payment_date', dateFrom).lte('payment_date', dateTo);
                 
-            if (selectedBanks.length > 0) {
-                validQuery = validQuery.in('bank', selectedBanks);
-                totalQuery = totalQuery.in('bank', selectedBanks);
-            }
-                
-            const { count: validCount } = await validQuery;
-            const { count: totalCountAll } = await totalQuery;
+            // Always filter by the selected banks (no bank selected → zero, consistent with the table)
+            validQuery = validQuery.in('bank', selectedBanks);
+            totalQuery = totalQuery.in('bank', selectedBanks);
+
+            const [{ count: validCount, error: vErr }, { count: totalCountAll, error: tErr }] = await Promise.all([validQuery, totalQuery]);
+            if (vErr) throw vErr;
+            if (tErr) throw tErr;
             
             document.getElementById('stat-total-transactions').textContent = (totalCountAll || 0).toLocaleString();
             
@@ -711,7 +680,7 @@ class App {
             if (window.lucide) lucide.createIcons();
 
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${selectedBanks.length + 2}" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
         }
     }
 
@@ -785,35 +754,110 @@ class App {
             } else {
                 Toast.show("Import finished with errors. Please review the log.", "error");
             }
+        } catch (err) {
+            console.error(err);
+            Toast.show('Import failed: ' + err.message, 'error');
         } finally {
             this.isImporting = false;
         }
     }
 
+    // Returns the adjusted names currently stored for these mapping rules (call BEFORE changing the rules,
+    // so transactions already renamed by the old rule can still be found).
+    async getCurrentAdjustedNames(names) {
+        const rows = await fetchByIn('item_mappings', 'item_name, adjusted_item_name', 'item_name', names, 'item_name', 100);
+        return rows.map(r => r.adjusted_item_name).filter(Boolean);
+    }
+
+    // Fetches every transaction affected by a change to the mapping rules for `names`:
+    // rows still carrying the original name, plus rows renamed earlier via `renamedTo`.
+    async fetchTransactionsForItemNames(names, renamedTo = []) {
+        const wanted = new Set(names.map(n => String(n).trim()).filter(Boolean));
+        if (wanted.size === 0) return [];
+        const searchNames = [...new Set([...wanted, ...renamedTo.map(n => String(n).trim()).filter(Boolean)])];
+        const rows = await fetchByIn('transactions', '*', 'item_name', searchNames, 'id', 50);
+        return rows.filter(t =>
+            wanted.has(String(originalItemName(t) || '').trim()) || wanted.has(String(t.item_name || '').trim())
+        );
+    }
+
+    // Re-applies all rules to the given rows and saves the ones that changed. Returns the number updated.
+    async reapplyRulesTo(rows) {
+        const changed = await recomputeTransactions(rows);
+        if (changed.length > 0) await upsertTransactions(changed);
+        return changed.length;
+    }
+
+    async recordBatch(fileName, type, processed, inserted, errorMessage) {
+        const { error } = await supabase.from('import_batches').insert({
+            user_email: this.currentUser ? this.currentUser.email : 'System',
+            file_name: fileName,
+            status: errorMessage ? (inserted > 0 ? 'partial' : 'failed') : (inserted === processed ? 'success' : (inserted > 0 ? 'partial' : 'failed')),
+            records_processed: processed,
+            records_inserted: inserted,
+            details: { type, error_message: errorMessage }
+        });
+        if (error) console.warn('Could not record import history:', error.message);
+    }
+
+    async logAudit(action, affected, details) {
+        if (!this.currentUser) return;
+        const { error } = await supabase.from('audit_logs').insert({
+            user_email: this.currentUser.email,
+            action,
+            affected_references: affected,
+            details
+        });
+        if (error) console.warn('Audit log failed:', error.message);
+    }
+
+    resetMappingModal(title = 'Add Mapping') {
+        ['map-original', 'map-adjusted', 'map-category', 'map-second-category'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        const suggest = document.getElementById('mapping-suggestion');
+        if (suggest) suggest.style.display = 'none';
+        document.getElementById('modal-mapping-title').innerText = title;
+    }
+
+    resetFixModal(title = 'Add Fix') {
+        ['fix-ref', 'fix-id', 'fix-name', 'fix-mapping', 'fix-second-mapping'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        document.getElementById('modal-fix-title').innerText = title;
+    }
+
     initModals() {
         // Open Mapping Modal
         document.getElementById('btn-add-mapping').addEventListener('click', () => {
-            document.getElementById('map-original').value = '';
-            document.getElementById('map-category').value = '';
-            document.getElementById('map-second').value = '';
-            if (document.getElementById('mapping-suggestion')) document.getElementById('mapping-suggestion').style.display = 'none';
+            this.resetMappingModal('Add Mapping');
             document.getElementById('modal-mapping').classList.remove('hidden');
         });
 
-        // Smart Mapping Auto-Suggest
-        document.getElementById('map-original').addEventListener('input', async (e) => {
-            const query = e.target.value.trim();
-            const suggestDiv = document.getElementById('mapping-suggestion');
-            if (query.length < 3) {
-                suggestDiv.style.display = 'none';
-                return;
-            }
-
-            // Fetch existing mappings to compare against
-            const { data: mappings } = await supabase.from('item_mappings').select('item_name, mapping');
-            if (mappings && mappings.length > 0) {
-                const fuse = new Fuse(mappings, { keys: ['item_name'], threshold: 0.3 });
-                const results = fuse.search(query);
+        // Smart Mapping Auto-Suggest (mappings are loaded once per modal opening)
+        let suggestTimeout;
+        document.getElementById('map-original').addEventListener('input', (e) => {
+            clearTimeout(suggestTimeout);
+            suggestTimeout = setTimeout(async () => {
+                const query = e.target.value.trim();
+                const suggestDiv = document.getElementById('mapping-suggestion');
+                if (!suggestDiv) return;
+                if (query.length < 3 || typeof Fuse === 'undefined') {
+                    suggestDiv.style.display = 'none';
+                    return;
+                }
+                try {
+                    if (!this.mappingSuggestCache) {
+                        this.mappingSuggestCache = await fetchAll('item_mappings', 'item_name, mapping', q => q.not('mapping', 'is', null), 'item_name');
+                    }
+                } catch (err) {
+                    suggestDiv.style.display = 'none';
+                    return;
+                }
+                const fuse = new Fuse(this.mappingSuggestCache, { keys: ['item_name'], threshold: 0.3 });
+                const results = fuse.search(query).filter(r => r.item.item_name !== query);
                 if (results.length > 0) {
                     const topMatch = results[0].item;
                     suggestDiv.innerText = `💡 Smart Suggestion: Click to map to "${topMatch.mapping}" (similar to ${topMatch.item_name})`;
@@ -826,301 +870,229 @@ class App {
                 } else {
                     suggestDiv.style.display = 'none';
                 }
-            }
+            }, 300);
         });
 
         // Open Fix Modal
         document.getElementById('btn-add-fix').addEventListener('click', () => {
-            document.getElementById('fix-ref').value = '';
-            document.getElementById('fix-id').value = '';
+            this.resetFixModal('Add Fix');
             document.getElementById('modal-fix').classList.remove('hidden');
         });
 
         // Save Mapping
-        document.getElementById('btn-save-mapping').addEventListener('click', async () => {
+        const btnSaveMapping = document.getElementById('btn-save-mapping');
+        btnSaveMapping.addEventListener('click', async () => {
             const original = document.getElementById('map-original').value.trim();
-            const adjusted = document.getElementById('map-adjusted').value;
-            const category = document.getElementById('map-category').value;
-            const secondCategory = document.getElementById('map-second-category').value;
-            
+            const adjusted = document.getElementById('map-adjusted').value.trim();
+            const category = document.getElementById('map-category').value.trim();
+            const secondCategory = document.getElementById('map-second-category').value.trim();
+
             if (!original) return Toast.show('Original Item Name is required', 'warning');
 
-            const { error } = await supabase.from('item_mappings').upsert([{
-                item_name: original,
-                adjusted_item_name: adjusted || null,
-                mapping: category || null,
-                second_mapping: secondCategory || null
-            }], { onConflict: 'item_name', ignoreDuplicates: false });
+            btnSaveMapping.disabled = true;
+            try {
+                const previouslyRenamedTo = await this.getCurrentAdjustedNames([original]);
+                const { error } = await supabase.from('item_mappings').upsert([{
+                    item_name: original,
+                    adjusted_item_name: adjusted || null,
+                    mapping: category || null,
+                    second_mapping: secondCategory || null
+                }], { onConflict: 'item_name', ignoreDuplicates: false });
+                if (error) throw error;
 
-            if (error) Toast.show('Error saving mapping: ' + error.message, 'error');
-            else {
-                if (this.currentUser) {
-                    await supabase.from('audit_logs').insert({
-                        user_email: this.currentUser.email,
-                        action: 'Single Mapping Added',
-                        affected_references: original,
-                        details: { original, adjusted, category }
-                    });
-                }
-                let fetchMore = true;
-                let from = 0;
-                while (fetchMore) {
-                    const { data: existingTx } = await supabase.from('transactions').select('*').eq('item_name', original).order('id').range(from, from + 999);
-                    if (!existingTx || existingTx.length === 0) break;
-                    for (const tx of existingTx) {
-                        if (adjusted) tx.item_name = adjusted;
-                        if (category !== undefined) tx.mapping = category || null;
-                        if (typeof secondCategory !== 'undefined') tx.second_mapping = secondCategory || null;
-                    }
-                    await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
-                    if (existingTx.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
+                await this.logAudit('Single Mapping Added', original, { original, adjusted, category, secondCategory });
 
+                // Re-apply rules to every affected transaction (fetch everything first, then update)
+                const rows = await this.fetchTransactionsForItemNames([original], [...previouslyRenamedTo, adjusted]);
+                const updated = await this.reapplyRulesTo(rows);
+
+                this.mappingSuggestCache = null; // rules changed – reload suggestions next time
+                Toast.show(`Mapping saved. ${updated} transaction(s) updated.`, 'success');
                 document.getElementById('modal-mapping').classList.add('hidden');
-                document.getElementById('map-original').value = '';
-                document.getElementById('map-adjusted').value = '';
-                document.getElementById('map-category').value = '';
+                this.resetMappingModal();
                 this.loadMappings();
+            } catch (err) {
+                Toast.show('Error saving mapping: ' + err.message, 'error');
+            } finally {
+                btnSaveMapping.disabled = false;
             }
         });
 
         // Save Fix
-        document.getElementById('btn-save-fix').addEventListener('click', async () => {
-            const ref = document.getElementById('fix-ref').value;
-            const correctId = document.getElementById('fix-id').value;
-            const correctName = document.getElementById('fix-name').value;
-            const correctMapping = document.getElementById('fix-mapping').value;
-            const correctSecondMapping = document.getElementById('fix-second-mapping').value;
+        const btnSaveFix = document.getElementById('btn-save-fix');
+        btnSaveFix.addEventListener('click', async () => {
+            const ref = document.getElementById('fix-ref').value.trim();
+            const correctId = document.getElementById('fix-id').value.trim();
+            const correctName = document.getElementById('fix-name').value.trim();
+            const correctMapping = document.getElementById('fix-mapping').value.trim();
+            const correctSecondMapping = document.getElementById('fix-second-mapping').value.trim();
 
             if (!ref) return Toast.show('Reference Number is required', 'warning');
-            
-            const { data: existing } = await supabase.from('manual_fixes').select('reference_number').eq('reference_number', ref).maybeSingle();
-            if (existing) {
-                if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`, 'Update', 'Cancel')) {
-                    return; // Ignore
-                }
+            if (!correctId && !correctName && !correctMapping && !correctSecondMapping) {
+                return Toast.show('Enter at least one value to correct', 'warning');
             }
 
-            const { error } = await supabase.from('manual_fixes').upsert([{
-                reference_number: ref,
-                correct_id: correctId || null,
-                item_name: correctName || null,
-                mapping: correctMapping || null,
-                second_mapping: correctSecondMapping || null
-            }], { onConflict: 'reference_number', ignoreDuplicates: false });
-
-            if (error) {
-                Toast.show('Error saving fix: ' + error.message, 'error');
-            } else {
-                if (this.currentUser) {
-                    await supabase.from('audit_logs').insert({
-                        user_email: this.currentUser.email,
-                        action: 'Single Manual Fix Added',
-                        affected_references: ref,
-                        details: { correctId, correctName, correctMapping }
-                    });
-                }
-                
-                Toast.show('Manual fix saved successfully!', 'success');
-                const { data: existingTx } = await supabase.from('transactions').select('*').eq('reference_number', ref);
-                if (existingTx && existingTx.length > 0) {
-                    for (const tx of existingTx) {
-                        if (correctId) {
-                            tx.student_id = correctId;
-                            tx.id_status = validateID(tx.student_id);
-                        }
-                        if (correctName) tx.item_name = correctName;
-                        if (correctMapping !== undefined) tx.mapping = correctMapping || null;
-                        if (typeof correctSecondMapping !== 'undefined') tx.second_mapping = correctSecondMapping || null;
+            btnSaveFix.disabled = true;
+            try {
+                const { data: existing, error: existErr } = await supabase.from('manual_fixes').select('reference_number').eq('reference_number', ref).maybeSingle();
+                if (existErr) throw existErr;
+                if (existing && document.getElementById('modal-fix-title').innerText !== 'Edit Fix') {
+                    if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`, 'Update', 'Cancel')) {
+                        return;
                     }
-                    await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
                 }
 
+                const { error } = await supabase.from('manual_fixes').upsert([{
+                    reference_number: ref,
+                    correct_id: correctId || null,
+                    item_name: correctName || null,
+                    mapping: correctMapping || null,
+                    second_mapping: correctSecondMapping || null
+                }], { onConflict: 'reference_number', ignoreDuplicates: false });
+                if (error) throw error;
+
+                await this.logAudit('Single Manual Fix Added', ref, { correctId, correctName, correctMapping, correctSecondMapping });
+
+                // Re-apply all rules to this reference's transactions (empty fields no longer wipe existing mappings)
+                const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
+                const updated = await this.reapplyRulesTo(rows);
+
+                Toast.show(`Manual fix saved. ${updated} transaction(s) updated.`, 'success');
                 document.getElementById('modal-fix').classList.add('hidden');
-                document.getElementById('fix-ref').value = '';
-                document.getElementById('fix-id').value = '';
-                document.getElementById('fix-name').value = '';
-                document.getElementById('fix-mapping').value = '';
+                this.resetFixModal();
                 this.loadFixes();
+            } catch (err) {
+                Toast.show('Error saving fix: ' + err.message, 'error');
+            } finally {
+                btnSaveFix.disabled = false;
             }
         });
     }
 
     initBulkUploads() {
         const handleUpload = async (e, type) => {
-            const file = e.target.files[0];
+            const input = e.target;
+            const file = input.files[0];
             if (!file) return;
+            input.value = ''; // Reset so the same file can be selected again
 
-            const buffer = await file.arrayBuffer();
-            const workbook = XLSX.read(buffer, { type: 'array' });
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
-
-            if (data.length === 0) {
-                Toast.show('File is empty!', 'warning');
+            if (this.isBulkUploading) {
+                Toast.show('An upload is already in progress. Please wait.', 'warning');
                 return;
             }
-
-            e.target.value = ''; // Reset
+            this.isBulkUploading = true;
 
             const getVal = (row, keyStr) => {
                 const exact = row[keyStr];
                 if (exact !== undefined && exact !== "") return exact;
-                const foundKey = Object.keys(row).find(k => k.toLowerCase() === keyStr.toLowerCase());
-                return foundKey ? row[foundKey] : null;
+                const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+                const foundKey = Object.keys(row).find(k => norm(k) === norm(keyStr));
+                const v = foundKey ? row[foundKey] : null;
+                return v === "" ? null : v;
             };
+            const clean = v => (v === null || v === undefined) ? null : (String(v).trim() || null);
 
             const chunkSize = 500;
+            let processed = 0;
+            let inserted = 0;
 
-            if (type === 'mappings') {
-                const mappings = data.map(row => ({
-                    item_name: getVal(row, 'Item Name'),
-                    adjusted_item_name: getVal(row, 'Adjusted Item Name') || null,
-                    mapping: getVal(row, 'Mapping') || null,
-                    second_mapping: getVal(row, '2nd Mapping') || null
-                })).filter(m => m.item_name);
+            try {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
 
-                let inserted = 0;
-                for (let i = 0; i < mappings.length; i += chunkSize) {
-                    const chunk = mappings.slice(i, i + chunkSize);
-                    const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
-                    if (error) {
-                        Toast.show(`Partial upload error: Only ${inserted} mappings saved. Error: ` + error.message, 'error');
-                        return;
-                    }
-                    inserted += chunk.length;
-                }
-
-                const itemNames = mappings.map(m => m.item_name);
-                for (let i = 0; i < itemNames.length; i += 50) {
-                    const chunkItems = itemNames.slice(i, i + 50);
-                    let fetchMore = true;
-                    let from = 0;
-                    while (fetchMore) {
-                        const { data: existingTx } = await supabase.from('transactions').select('*').in('item_name', chunkItems).order('id').range(from, from + 999);
-                        if (!existingTx || existingTx.length === 0) break;
-                        for (const tx of existingTx) {
-                            const mapDef = mappings.find(m => m.item_name === tx.item_name);
-                            if (mapDef) {
-                                if (mapDef.adjusted_item_name) tx.item_name = mapDef.adjusted_item_name;
-                                if (mapDef.mapping !== undefined) tx.mapping = mapDef.mapping;
-                                if (mapDef.second_mapping !== undefined) tx.second_mapping = mapDef.second_mapping;
-                            }
-                        }
-                        await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
-                        if (existingTx.length < 1000) fetchMore = false;
-                        else from += 1000;
-                    }
-                }
-
-                if (this.currentUser) {
-                    await supabase.from('audit_logs').insert({
-                        user_email: this.currentUser.email,
-                        action: 'Bulk Mappings Uploaded',
-                        affected_references: `Batch of ${inserted} items`,
-                        details: { count: inserted }
-                    });
-                }
-
-                await supabase.from('import_batches').insert({
-                    user_email: this.currentUser ? this.currentUser.email : 'System',
-                    file_name: file.name,
-                    status: inserted === mappings.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
-                    records_processed: mappings.length,
-                    records_inserted: inserted,
-                    details: { type: 'mappings' }
-                });
-
-                Toast.show(`Successfully uploaded ${inserted} item mappings and updated existing transactions!`, 'success');
-                this.loadMappings();
-
-            } else if (type === 'fixes') {
-                const fixes = data.map(row => ({
-                    reference_number: String(getVal(row, 'Reference Number')),
-                    correct_id: getVal(row, 'Correct ID') || null,
-                    item_name: getVal(row, 'Item Name') || null,
-                    mapping: getVal(row, 'Mapping') || null,
-                    second_mapping: getVal(row, '2nd Mapping') || null
-                })).filter(f => f.reference_number && f.reference_number !== "null");
-
-                const refsToCheck = fixes.map(f => f.reference_number);
-                const existingRefs = new Set();
-                for (let i = 0; i < refsToCheck.length; i += 500) {
-                    const chunkRefs = refsToCheck.slice(i, i + 500);
-                    const { data: existingData } = await supabase.from('manual_fixes').select('reference_number').in('reference_number', chunkRefs);
-                    if (existingData) {
-                        existingData.forEach(r => existingRefs.add(r.reference_number));
-                    }
-                }
-
-                let fixesToProcess = fixes;
-                if (existingRefs.size > 0) {
-                    if (await window.customConfirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to overwrite them with the new values?`, 'Overwrite Existing', 'Skip Existing')) {
-                        // Keep all fixes
-                    } else {
-                        // Filter out existing ones
-                        fixesToProcess = fixes.filter(f => !existingRefs.has(f.reference_number));
-                    }
-                }
-
-                if (fixesToProcess.length === 0) {
-                    Toast.show('No new fixes to process.', 'info');
+                if (data.length === 0) {
+                    Toast.show('File is empty!', 'warning');
                     return;
                 }
 
-                let inserted = 0;
-                for (let i = 0; i < fixesToProcess.length; i += chunkSize) {
-                    const chunk = fixesToProcess.slice(i, i + chunkSize);
-                    const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
-                    if (error) {
-                        Toast.show(`Partial upload error: Only ${inserted} fixes saved. Error: ` + error.message, 'error');
+                Toast.show('Uploading... please wait.', 'info');
+
+                if (type === 'mappings') {
+                    const byName = new Map();
+                    data.forEach(row => {
+                        const item_name = clean(getVal(row, 'Item Name'));
+                        if (!item_name) return;
+                        byName.set(item_name, {
+                            item_name,
+                            adjusted_item_name: clean(getVal(row, 'Adjusted Item Name')),
+                            mapping: clean(getVal(row, 'Mapping')),
+                            second_mapping: clean(getVal(row, '2nd Mapping'))
+                        });
+                    });
+                    const mappings = Array.from(byName.values());
+                    processed = mappings.length;
+                    const previouslyRenamedTo = await this.getCurrentAdjustedNames(mappings.map(m => m.item_name));
+
+                    for (let i = 0; i < mappings.length; i += chunkSize) {
+                        const chunk = mappings.slice(i, i + chunkSize);
+                        const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
+                        if (error) throw new Error(`Only ${inserted} of ${mappings.length} mappings saved. ${error.message}`);
+                        inserted += chunk.length;
+                    }
+
+                    // Fetch ALL affected transactions first, then update (no paging while modifying)
+                    const rows = await this.fetchTransactionsForItemNames(mappings.map(m => m.item_name), [...previouslyRenamedTo, ...mappings.map(m => m.adjusted_item_name)]);
+                    const updated = await this.reapplyRulesTo(rows);
+
+                    await this.logAudit('Bulk Mappings Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: updated });
+                    this.mappingSuggestCache = null;
+                    Toast.show(`Uploaded ${inserted} item mappings and updated ${updated} transactions.`, 'success');
+                    this.loadMappings();
+
+                } else if (type === 'fixes') {
+                    const byRef = new Map();
+                    data.forEach(row => {
+                        const reference_number = clean(getVal(row, 'Reference Number'));
+                        if (!reference_number || reference_number === 'null') return;
+                        byRef.set(reference_number, {
+                            reference_number,
+                            correct_id: clean(getVal(row, 'Correct ID')),
+                            item_name: clean(getVal(row, 'Item Name')),
+                            mapping: clean(getVal(row, 'Mapping')),
+                            second_mapping: clean(getVal(row, '2nd Mapping'))
+                        });
+                    });
+                    const fixes = Array.from(byRef.values());
+
+                    const existingRows = await fetchByIn('manual_fixes', 'reference_number', 'reference_number', fixes.map(f => f.reference_number), 'reference_number', 500);
+                    const existingRefs = new Set(existingRows.map(r => String(r.reference_number)));
+
+                    let fixesToProcess = fixes;
+                    if (existingRefs.size > 0) {
+                        const overwrite = await window.customConfirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to overwrite them with the new values?`, 'Overwrite Existing', 'Skip Existing');
+                        if (!overwrite) fixesToProcess = fixes.filter(f => !existingRefs.has(f.reference_number));
+                    }
+
+                    if (fixesToProcess.length === 0) {
+                        Toast.show('No new fixes to process.', 'info');
                         return;
                     }
-                    inserted += chunk.length;
-                }
+                    processed = fixesToProcess.length;
 
-                const refs = fixesToProcess.map(f => f.reference_number);
-                for (let i = 0; i < refs.length; i += 200) {
-                    const chunkRefs = refs.slice(i, i + 200);
-                    const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
-                    if (existingTx && existingTx.length > 0) {
-                        for (const tx of existingTx) {
-                            const fix = fixesToProcess.find(f => String(f.reference_number) === String(tx.reference_number));
-                            if (fix) {
-                                if (fix.correct_id) {
-                                    tx.student_id = fix.correct_id;
-                                    tx.id_status = validateID(tx.student_id);
-                                }
-                                if (fix.item_name) tx.item_name = fix.item_name;
-                                if (fix.mapping !== undefined) tx.mapping = fix.mapping;
-                                if (fix.second_mapping !== undefined) tx.second_mapping = fix.second_mapping;
-                            }
-                        }
-                        await supabase.from('transactions').upsert(existingTx, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
+                    for (let i = 0; i < fixesToProcess.length; i += chunkSize) {
+                        const chunk = fixesToProcess.slice(i, i + chunkSize);
+                        const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
+                        if (error) throw new Error(`Only ${inserted} of ${fixesToProcess.length} fixes saved. ${error.message}`);
+                        inserted += chunk.length;
                     }
+
+                    // Re-apply all rules to affected transactions (blank cells no longer wipe mappings)
+                    const rows = await fetchByIn('transactions', '*', 'reference_number', fixesToProcess.map(f => f.reference_number));
+                    const updated = await this.reapplyRulesTo(rows);
+
+                    await this.logAudit('Bulk Fixes Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: updated });
+                    Toast.show(`Uploaded ${inserted} manual fixes and updated ${updated} transactions.`, 'success');
+                    this.loadFixes();
                 }
 
-                if (this.currentUser) {
-                    await supabase.from('audit_logs').insert({
-                        user_email: this.currentUser.email,
-                        action: 'Bulk Fixes Uploaded',
-                        affected_references: `Batch of ${inserted} items`,
-                        details: { count: inserted }
-                    });
-                }
-
-                await supabase.from('import_batches').insert({
-                    user_email: this.currentUser ? this.currentUser.email : 'System',
-                    file_name: file.name,
-                    status: inserted === fixesToProcess.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
-                    records_processed: fixesToProcess.length,
-                    records_inserted: inserted,
-                    details: { type: 'fixes' }
-                });
-
-                Toast.show(`Successfully uploaded ${inserted} manual fixes and updated existing transactions!`, 'success');
-                this.loadFixes();
+                await this.recordBatch(file.name, type, processed, inserted, null);
+            } catch (err) {
+                Toast.show('Upload error: ' + err.message, 'error');
+                await this.recordBatch(file.name, type, processed, inserted, err.message);
+            } finally {
+                this.isBulkUploading = false;
             }
         };
 
@@ -1177,116 +1149,80 @@ class App {
                 const links = await fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number');
 
                 // Build hash maps for O(1) lookups
-                const fixesMap = new Map();
-                fixes.forEach(f => fixesMap.set(String(f.reference_number), f));
-                const mappingsMap = new Map();
-                mappings.forEach(m => mappingsMap.set(String(m.item_name || '').trim(), m));
-                const linksMap = new Map();
-                links.forEach(l => linksMap.set(String(l.payment_reference_number), l));
+                const fixesMap = new Map(fixes.map(f => [String(f.reference_number), f]));
+                const linksMap = new Map(links.map(l => [String(l.payment_reference_number), l]));
+                const lookupMapping = buildMappingLookup(mappings);
 
                 window.reapplyProposals = [];
 
-                // 1. Get exact count of transactions
-                const { count, error: countErr } = await supabase.from('transactions').select('*', { count: 'exact', head: true });
-                if (countErr) throw countErr;
+                // Fetch every transaction (sequential pages – a failed page stops the run instead of being skipped)
+                const txs = await fetchAll('transactions', '*', null, 'id');
 
-                if (count && count > 0) {
-                    // 2. Fetch in parallel (5 at a time)
-                    const chunkSize = 1000;
-                    const ranges = [];
-                    for (let i = 0; i < count; i += chunkSize) {
-                        ranges.push([i, i + chunkSize - 1]);
+                for (const tx of txs) {
+                    const ref = String(tx.reference_number);
+                    const link = linksMap.get(ref);
+                    const fix = fixesMap.get(ref);
+                    const r = applyBusinessRules(
+                        { studentId: tx.student_id, itemName: originalItemName(tx) },
+                        { link, fix, lookupMapping }
+                    );
+
+                    const oldMapping = tx.mapping || null;
+                    const oldSecond = tx.second_mapping || null;
+                    if (tx.student_id === r.studentId && tx.item_name === r.itemName && oldMapping === r.mapping &&
+                        oldSecond === r.secondMapping && tx.id_status === r.idStatus) {
+                        continue;
                     }
 
-                    for (let i = 0; i < ranges.length; i += 5) {
-                        const batch = ranges.slice(i, i + 5);
-                        const promises = batch.map(r => supabase.from('transactions').select('*').order('id').range(r[0], r[1]));
-                        const results = await Promise.all(promises);
+                    const reasons = [];
+                    if (link && link.custom_input_value) reasons.push('Student Link');
+                    if (lookupMapping(fix && fix.item_name ? fix.item_name : originalItemName(tx))) reasons.push('Mapping Rule');
+                    if (fix) reasons.push('Manual Fix');
 
-                        results.forEach(({ data: txs, error }) => {
-                            if (error) return; // Skip errors in chunks
-                            if (!txs) return;
-
-                            for (const tx of txs) {
-                                let originalItemName = tx.check_column ? tx.check_column.substring(tx.reference_number.length + 1) : tx.item_name;
-                                
-                                let newStudentId = tx.student_id;
-                                let newItemName = originalItemName;
-                                let newMapping = null;
-                                let newSecondMapping = null;
-                                
-                                let reasons = [];
-
-                                const link = linksMap.get(String(tx.reference_number));
-                                if (link && link.custom_input_value) {
-                                    newStudentId = link.custom_input_value;
-                                    reasons.push("Student Link");
-                                }
-
-                                const mapDef = mappingsMap.get(String(newItemName || '').trim());
-                                if (mapDef) {
-                                    if (mapDef.adjusted_item_name) newItemName = mapDef.adjusted_item_name;
-                                    if (mapDef.mapping) newMapping = mapDef.mapping;
-                                    if (mapDef.second_mapping) newSecondMapping = mapDef.second_mapping;
-                                    reasons.push("Mapping Rule");
-                                }
-
-                                const fix = fixesMap.get(String(tx.reference_number));
-                                if (fix) {
-                                    if (fix.correct_id) newStudentId = fix.correct_id;
-                                    if (fix.item_name) newItemName = fix.item_name;
-                                    if (fix.mapping) newMapping = fix.mapping;
-                                    if (fix.second_mapping) newSecondMapping = fix.second_mapping;
-                                    reasons.push("Manual Fix");
-                                }
-
-                                let newStatus = validateID(newStudentId);
-
-                                if (tx.student_id !== newStudentId || tx.item_name !== newItemName || tx.mapping !== newMapping || tx.second_mapping !== newSecondMapping || tx.id_status !== newStatus) {
-                                    
-                                    let oldValues = [];
-                                    let newValues = [];
-                                    let changeType = [];
-                                    if (tx.student_id !== newStudentId) {
-                                        changeType.push('ID');
-                                        oldValues.push(tx.student_id || 'Empty');
-                                        newValues.push(newStudentId || 'Empty');
-                                    }
-                                    if (tx.mapping !== newMapping) {
-                                        changeType.push('Mapping');
-                                        oldValues.push(tx.mapping || 'Empty');
-                                        newValues.push(newMapping || 'Empty');
-                                    }
-                                    if (tx.second_mapping !== newSecondMapping) {
-                                        changeType.push('2nd Mapping');
-                                        oldValues.push(tx.second_mapping || 'Empty');
-                                        newValues.push(newSecondMapping || 'Empty');
-                                    }
-                                    if (tx.id_status !== newStatus && tx.student_id === newStudentId) {
-                                        changeType.push('Status');
-                                        oldValues.push(tx.id_status || 'Empty');
-                                        newValues.push(newStatus || 'Empty');
-                                    }
-
-                                    window.reapplyProposals.push({
-                                        originalTx: tx,
-                                        updatedTx: {
-                                            ...tx,
-                                            student_id: newStudentId,
-                                            item_name: newItemName,
-                                            mapping: newMapping,
-                                            second_mapping: newSecondMapping,
-                                            id_status: newStatus
-                                        },
-                                        changeType: changeType.join(', '),
-                                        oldStr: oldValues.join(', '),
-                                        newStr: newValues.join(', '),
-                                        reason: [...new Set(reasons)].join(' + ') || 'Status Re-validation'
-                                    });
-                                }
-                            }
-                        });
+                    const oldValues = [];
+                    const newValues = [];
+                    const changeType = [];
+                    if (tx.student_id !== r.studentId) {
+                        changeType.push('ID');
+                        oldValues.push(tx.student_id || 'Empty');
+                        newValues.push(r.studentId || 'Empty');
                     }
+                    if (tx.item_name !== r.itemName) {
+                        changeType.push('Item Name');
+                        oldValues.push(tx.item_name || 'Empty');
+                        newValues.push(r.itemName || 'Empty');
+                    }
+                    if (oldMapping !== r.mapping) {
+                        changeType.push('Mapping');
+                        oldValues.push(oldMapping || 'Empty');
+                        newValues.push(r.mapping || 'Empty');
+                    }
+                    if (oldSecond !== r.secondMapping) {
+                        changeType.push('2nd Mapping');
+                        oldValues.push(oldSecond || 'Empty');
+                        newValues.push(r.secondMapping || 'Empty');
+                    }
+                    if (tx.id_status !== r.idStatus && tx.student_id === r.studentId) {
+                        changeType.push('Status');
+                        oldValues.push(tx.id_status || 'Empty');
+                        newValues.push(r.idStatus || 'Empty');
+                    }
+
+                    window.reapplyProposals.push({
+                        originalTx: tx,
+                        updatedTx: {
+                            ...tx,
+                            student_id: r.studentId,
+                            item_name: r.itemName,
+                            mapping: r.mapping,
+                            second_mapping: r.secondMapping,
+                            id_status: r.idStatus
+                        },
+                        changeType: changeType.join(', '),
+                        oldStr: oldValues.join(', '),
+                        newStr: newValues.join(', '),
+                        reason: reasons.join(' + ') || 'Status Re-validation'
+                    });
                 }
 
                 if (window.reapplyProposals.length === 0) {
@@ -1781,6 +1717,7 @@ class App {
     }
 
     async loadTransactions() {
+        const requestId = (this.txRequestId = (this.txRequestId || 0) + 1);
         const tbody = document.getElementById('transactions-body');
         tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(9) + '</tr>').join('');
 
@@ -1821,6 +1758,9 @@ class App {
             .order('payment_date', { ascending: false })
             .order('id', { ascending: false })
             .range(fromRange, toRange);
+
+        // A newer request was started while this one was running – ignore this (stale) result
+        if (requestId !== this.txRequestId) return;
 
         const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
 
@@ -2116,7 +2056,9 @@ class App {
             });
             fileInput.addEventListener('change', (e) => {
                 if (e.target.files.length) {
-                    this.handleStudentImport(e.target.files[0]);
+                    const f = e.target.files[0];
+                    e.target.value = ''; // allow re-selecting the same file
+                    this.handleStudentImport(f);
                 }
             });
         }
@@ -2140,7 +2082,9 @@ class App {
             });
             amFileInput.addEventListener('change', (e) => {
                 if (e.target.files.length) {
-                    this.handleTargetedMatcherImport(e.target.files[0]);
+                    const f = e.target.files[0];
+                    e.target.value = '';
+                    this.handleTargetedMatcherImport(f);
                 }
             });
         }
@@ -2285,22 +2229,37 @@ class App {
                     return;
                 }
 
-                if (!await window.customConfirm(`Are you sure you want to revert the import for "${fileName}"? This will delete all its transactions.`, 'Revert', 'Cancel')) return;
+                if (!await window.customConfirm(`Are you sure you want to revert the import for "${fileName}"? This will delete the transactions first created by this import. Transactions already settled or recorded in ERP are kept.`, 'Revert', 'Cancel')) return;
                 
                 btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Reverting...';
                 btn.disabled = true;
                 if (window.lucide) lucide.createIcons();
 
                 try {
-                    // Delete transactions
-                    const { error: txError } = await supabase.from('transactions').delete().eq('batch_id', batchId);
+                    // Delete only rows first created by this batch that are NOT settled and NOT recorded in ERP
+                    const { data: deletedRows, error: txError } = await supabase.from('transactions')
+                        .delete()
+                        .eq('batch_id', batchId)
+                        .or('is_settled.is.null,is_settled.eq.false')
+                        .is('erp_batch_number', null)
+                        .select('id');
                     if (txError) throw txError;
-                    
+
+                    const { count: keptCount, error: keptErr } = await supabase.from('transactions')
+                        .select('id', { count: 'exact', head: true })
+                        .eq('batch_id', batchId);
+                    if (keptErr) throw keptErr;
+
                     // Update batch status
-                    const { error: batchError } = await supabase.from('import_batches').update({ status: 'reverted' }).eq('id', batchId);
+                    const { error: batchError } = await supabase.from('import_batches')
+                        .update({ status: keptCount > 0 ? 'partially reverted' : 'reverted' })
+                        .eq('id', batchId);
                     if (batchError) throw batchError;
-                    
-                    Toast.show(`Successfully reverted ${fileName}`, 'success');
+
+                    const deletedCount = deletedRows ? deletedRows.length : 0;
+                    Toast.show(keptCount > 0
+                        ? `Reverted ${fileName}: deleted ${deletedCount}, kept ${keptCount} settled/ERP-recorded transaction(s).`
+                        : `Successfully reverted ${fileName} (${deletedCount} transactions deleted)`, keptCount > 0 ? 'warning' : 'success');
                     this.loadHistory();
                     this.loadDashboard();
                     this.loadTransactions();
@@ -2333,26 +2292,26 @@ class App {
             tbody.innerHTML = data.map(b => {
                 const date = new Date(b.created_at).toLocaleString();
                 const type = b.details && b.details.type ? b.details.type : 'transactions';
-                const canRevert = type === 'transactions' && b.status !== 'reverted' && b.status !== 'failed';
+                const canRevert = type === 'transactions' && b.status !== 'reverted' && b.status !== 'failed' && b.status !== 'processing';
                 
                 let statusColor = 'var(--text-muted)';
                 if (b.status === 'success') statusColor = 'var(--success)';
                 else if (b.status === 'failed') statusColor = 'var(--danger)';
-                else if (b.status === 'reverted') statusColor = 'var(--warning)';
+                else if (b.status === 'reverted' || b.status === 'partially reverted') statusColor = 'var(--warning)';
                 else if (b.status === 'partial') statusColor = '#eab308'; // yellow-500
                 
                 return `
                     <tr>
                         <td>${escapeHTML(b.file_name)} <span style="font-size: 0.75rem; color: var(--text-muted);">(${escapeHTML(type)})</span></td>
-                        <td>${date}</td>
+                        <td>${escapeHTML(date)}</td>
                         <td>${escapeHTML(b.user_email || 'System')}</td>
-                        <td>${b.records_processed || 0}</td>
+                        <td>${Number(b.records_processed) || 0}</td>
                         <td style="color: ${statusColor};">
                             <div style="text-transform: capitalize; font-weight: 500;">${escapeHTML(b.status)}</div>
                             ${b.status === 'failed' && b.details && b.details.error_message ? `<div style="font-size: 0.75rem; margin-top: 0.25rem; word-break: break-word; max-width: 250px;">${escapeHTML(b.details.error_message)}</div>` : ''}
                         </td>
                         <td>
-                            ${canRevert ? `<button class="btn btn-outline btn-revert-batch" data-batch-id="${b.id}" data-file-name="${escapeHTML(b.file_name)}" data-type="${escapeHTML(type)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;"><i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i> Revert</button>` : ''}
+                            ${canRevert ? `<button class="btn btn-outline btn-revert-batch" data-batch-id="${escapeHTML(b.id)}" data-file-name="${escapeHTML(b.file_name)}" data-type="${escapeHTML(type)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;"><i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i> Revert</button>` : ''}
                         </td>
                     </tr>
                 `;
@@ -2378,6 +2337,7 @@ class App {
             while(fetchMore) {
                 const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column, erp_batch_number, is_settled').order('id').range(from, from + 999);
                 if (error) throw error;
+                if (!data || data.length === 0) break;
                 allData = allData.concat(data);
                 if (data.length < 1000) fetchMore = false;
                 else from += 1000;
@@ -2386,8 +2346,10 @@ class App {
             const grouped = {};
             for (const tx of allData) {
                 if (!tx.reference_number) continue;
-                const trimmedName = String(tx.item_name || '').trim();
-                const key = `${tx.reference_number}-${tx.item_price}-${trimmedName}`;
+                // Same reference + price + ORIGINAL item (check_column), ignoring stray spaces.
+                // (item_name is not used: two different items can share an adjusted name legitimately.)
+                const check = tx.check_column != null ? String(tx.check_column).replace(/\s+/g, ' ').trim() : `${tx.reference_number}-${String(tx.item_name || '').trim()}`;
+                const key = `${tx.reference_number}|${Number(tx.item_price)}|${check}`;
                 if (!grouped[key]) grouped[key] = [];
                 grouped[key].push(tx);
             }
@@ -2401,11 +2363,12 @@ class App {
                     txs.sort((a, b) => {
                         const aScore = (a.is_settled ? 100 : 0) + (a.erp_batch_number ? 50 : 0);
                         const bScore = (b.is_settled ? 100 : 0) + (b.erp_batch_number ? 50 : 0);
-                        return bScore - aScore;
+                        return (bScore - aScore) || (a.id < b.id ? -1 : 1); // tie → keep the oldest row
                     });
                     
                     for (let i = 1; i < txs.length; i++) {
-                        toDeleteIds.push(txs[i].id);
+                        // Never delete a copy that is settled or recorded in ERP
+                        if (!txs[i].is_settled && !txs[i].erp_batch_number) toDeleteIds.push(txs[i].id);
                     }
                     duplicates.push({
                         ref: txs[0].reference_number,
@@ -2419,13 +2382,13 @@ class App {
             
             window.duplicateIdsToDelete = toDeleteIds;
             
-            document.getElementById('duplicates-summary').innerText = `Found ${duplicates.length} duplicate pairs due to trailing spaces in previous uploads.`;
+            document.getElementById('duplicates-summary').innerText = `Found ${duplicates.length} duplicated transaction(s) (${toDeleteIds.length} extra row(s) will be removed). Settled / ERP-recorded copies are always kept.`;
             const tbody = document.getElementById('duplicates-body');
             tbody.innerHTML = duplicates.map(d => `
                 <tr>
                     <td>${escapeHTML(d.ref)}</td>
                     <td>${escapeHTML(d.name)}</td>
-                    <td>${d.price}</td>
+                    <td>${escapeHTML(d.price)}</td>
                     <td><pre style="margin:0; font-size:0.8rem;">'${escapeHTML(d.trimmedCheck)}'</pre></td>
                     <td><pre style="margin:0; font-size:0.8rem;">'${escapeHTML(d.untrimmedCheck)}'</pre></td>
                 </tr>
@@ -2542,7 +2505,7 @@ class App {
 
         } catch (err) {
             status.className = 'alert alert-danger';
-            status.innerHTML = `<i data-lucide="alert-triangle"></i> Error: ${err.message}`;
+            status.innerHTML = `<i data-lucide="alert-triangle"></i> Error: ${escapeHTML(err.message)}`;
             if (window.lucide) lucide.createIcons();
             console.error(err);
             if (this.currentUser) {
@@ -2645,7 +2608,17 @@ class App {
             const activeFilters = this.headerFilters.automatch || {};
             for (const [col, values] of Object.entries(activeFilters)) {
                 if (values && values.length > 0 && col !== 'proposed_fix') {
-                    invalidTx = invalidTx.filter(t => values.includes(String(t[col])));
+                    if (col === 'id_status') {
+                        // Statuses are stored as e.g. "Error: ID Too Short (3 digits)" – match by category
+                        invalidTx = invalidTx.filter(t => {
+                            const st = String(t.id_status || '');
+                            return (values.includes('Valid') && st === 'Valid') ||
+                                (values.includes('Missing ID') && st.includes('Missing ID')) ||
+                                (values.includes('Error') && st.includes('Error'));
+                        });
+                    } else {
+                        invalidTx = invalidTx.filter(t => values.includes(String(t[col])));
+                    }
                 }
             }
             
@@ -2692,8 +2665,9 @@ class App {
                 if (l.customer_email) requiredEmails.add(String(l.customer_email).toLowerCase().trim());
             }
 
+            const enableNameMatch = document.getElementById('automatch-enable-name')?.checked;
             let nameStudents = [];
-            let fetchMoreStudents = true;
+            let fetchMoreStudents = enableNameMatch;
             let sFrom = 0;
             while(fetchMoreStudents) {
                 const { data, error } = await supabase.from('student_master').select('student_id, full_name').order('student_id').range(sFrom, sFrom + 999);
@@ -2707,24 +2681,28 @@ class App {
             const idArr = Array.from(requiredIds);
             for (let i = 0; i < idArr.length; i += 200) {
                 const chunk = idArr.slice(i, i+200);
-                const { data: d1 } = await supabase.from('student_master').select('*').in('student_id', chunk);
+                const { data: d1, error: e1 } = await supabase.from('student_master').select('*').in('student_id', chunk);
+                if (e1) throw e1;
                 if (d1) students.push(...d1);
-                const { data: d2 } = await supabase.from('student_master').select('*').in('national_id', chunk);
+                const { data: d2, error: e2 } = await supabase.from('student_master').select('*').in('national_id', chunk);
+                if (e2) throw e2;
                 if (d2) students.push(...d2);
             }
             
             const emailArr = Array.from(requiredEmails);
             for (let i = 0; i < emailArr.length; i += 200) {
-                const { data } = await supabase.from('student_master').select('*').in('email', emailArr.slice(i, i+200));
+                const { data, error } = await supabase.from('student_master').select('*').in('email', emailArr.slice(i, i+200));
+                if (error) throw error;
                 if (data) students.push(...data);
             }
 
             const mobileArr = Array.from(requiredMobiles);
             for (let i = 0; i < mobileArr.length; i += 20) {
                 const chunk = mobileArr.slice(i, i+20);
-                const orFilters = chunk.map(m => `mobile.ilike.%${m}%,guardian_mobile.ilike.%${m}%`).join(',');
+                const orFilters = chunk.filter(m => m.length >= 7).map(m => `mobile.ilike.%${m}%,guardian_mobile.ilike.%${m}%`).join(',');
                 if (orFilters) {
-                    const { data } = await supabase.from('student_master').select('*').or(orFilters);
+                    const { data, error } = await supabase.from('student_master').select('*').or(orFilters);
+                    if (error) throw error;
                     if (data) students.push(...data);
                 }
             }
@@ -2822,7 +2800,6 @@ class App {
                 }
 
                 // Try 5: Name (Link & Transaction)
-                const enableNameMatch = document.getElementById('automatch-enable-name')?.checked;
                 if (enableNameMatch) {
                     let searchStr = '';
                     if (!proposedStudent && link && link.customer_name) {
@@ -2844,7 +2821,7 @@ class App {
                         const results = nameFuse.search(searchStr);
                         if (results.length > 0) {
                             const bestMatch = results[0];
-                            // 0.0 is perfect match, 0.35 is our threshold
+                            // 0.0 is a perfect match; anything scoring below 0.20 is accepted
                             if (bestMatch.score < 0.20) {
                                 proposedStudent = bestMatch.item;
                                 const confidence = Math.round((1 - bestMatch.score) * 100);
@@ -2891,7 +2868,7 @@ class App {
                     const isNameMatch = proposal.matchReason.includes('Name');
                     html += `
                         <tr>
-                            <td><input type="checkbox" class="automatch-checkbox" value="${proposal.tx_id}"></td>
+                            <td><input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}"></td>
                             <td>${escapeHTML(proposal.original_ref)}</td>
                             <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
@@ -2964,8 +2941,8 @@ class App {
             const updateGroups = {};
 
             for (const cb of checkboxes) {
-                const tx_id = parseInt(cb.value);
-                const proposal = this.automatchProposals.find(p => p.tx_id === tx_id);
+                const proposal = this.automatchProposals.find(p => String(p.tx_id) === cb.value);
+                const tx_id = proposal ? proposal.tx_id : null;
                 if (proposal) {
                     const sid = proposal.proposedStudent.student_id;
                     if (!updateGroups[sid]) updateGroups[sid] = [];
@@ -2998,20 +2975,20 @@ class App {
 
             // Insert into manual_fixes
             if (manualFixesToInsert.length > 0) {
-                await supabase.from('manual_fixes').upsert(manualFixesToInsert, { onConflict: 'reference_number', ignoreDuplicates: false });
+                // De-duplicate by reference (a reference can have several items) – an upsert cannot touch the same row twice
+                const uniqueFixes = Array.from(new Map(manualFixesToInsert.map(f => [String(f.reference_number), f])).values());
+                for (let i = 0; i < uniqueFixes.length; i += 500) {
+                    const { error } = await supabase.from('manual_fixes').upsert(uniqueFixes.slice(i, i + 500), { onConflict: 'reference_number', ignoreDuplicates: false });
+                    if (error) throw new Error('IDs were updated, but saving them as manual fixes failed: ' + error.message);
+                }
             }
 
             // Audit Log
-            if (this.currentUser && appliedRefs.length > 0) {
-                await supabase.from('audit_logs').insert({
-                    user_email: this.currentUser.email,
-                    action: 'Applied Auto-Matches',
-                    affected_references: appliedRefs.join(', '),
-                    details: { count: appliedRefs.length }
-                });
+            if (appliedRefs.length > 0) {
+                await this.logAudit('Applied Auto-Matches', appliedRefs.join(', '), { count: appliedRefs.length });
             }
 
-            Toast.show(`Successfully applied ${checkboxes.length} fixes!`, 'success');
+            Toast.show(`Successfully applied ${appliedRefs.length} fixes!`, 'success');
             
             // Clear targeted state
             this.targetedMatchRefs = [];
@@ -3052,10 +3029,14 @@ class App {
             }
         });
         
+        let linksSearchTimeout;
         document.getElementById('links-search')?.addEventListener('input', (e) => {
-            this.paymentLinksSearch = e.target.value.toLowerCase();
-            this.paymentLinksPage = 1;
-            this.loadPaymentLinks();
+            clearTimeout(linksSearchTimeout);
+            linksSearchTimeout = setTimeout(() => {
+                this.paymentLinksSearch = e.target.value.toLowerCase();
+                this.paymentLinksPage = 1;
+                this.loadPaymentLinks();
+            }, 300);
         });
 
         document.getElementById('btn-add-link')?.addEventListener('click', () => {
@@ -3147,83 +3128,98 @@ class App {
             input.onchange = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                
+
                 try {
                     Toast.show("Importing... Please wait.", "info");
-                    
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        const data = new Uint8Array(e.target.result);
-                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-                        const firstSheetName = workbook.SheetNames[0];
-                        const worksheet = workbook.Sheets[firstSheetName];
-                        const json = XLSX.utils.sheet_to_json(worksheet);
-                        
-                        // Helper: convert Excel date (serial number or Date object or string) to ISO string
-                        const parseDate = (val) => {
-                            if (!val) return null;
-                            if (val instanceof Date) { const d = new Date(val.getTime() - val.getTimezoneOffset() * 60000); return d.toISOString().split('T')[0]; }
-                            if (typeof val === 'number') {
-                                // Excel serial date: days since 1899-12-30
-                                const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-                                const d = new Date(excelEpoch.getTime() + val * 86400000);
-                                return d.toISOString().split('T')[0];
-                            }
-                            return String(val);
-                        };
-                        const parseDateTime = (val) => {
-                            if (!val) return null;
-                            if (val instanceof Date) return val.toISOString();
-                            if (typeof val === 'number') {
-                                const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-                                const d = new Date(excelEpoch.getTime() + val * 86400000);
-                                return d.toISOString();
-                            }
-                            return new Date(val).toISOString();
-                        };
 
-                        const upsertData = json.map(row => ({
-                            name: row['Name'] || row['Item Name'] || row['name'] || 'Unknown',
-                            amount: row['Amount'] || row['amount'] || null,
-                            invoice_number: row['Invoice Number'] || row['invoice_number'] || null,
-                            creation_date: parseDate(row['Creation Date'] || row['creation_date']),
-                            expiry_date: parseDateTime(row['Expiry Date'] || row['expiry_date']),
-                            invoice_link: row['Invoice Link'] || row['Payment Link'] || row['invoice_link'] || row['PAYMENT LINK'] || null
-                        })).filter(r => r.invoice_link);
-                        
-                        if (upsertData.length === 0) {
-                            Toast.show("No valid links found in file.", "error");
-                            return;
+                    const buffer = await file.arrayBuffer();
+                    const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
+                    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const json = XLSX.utils.sheet_to_json(worksheet);
+
+                    // Helper: convert Excel date (serial number, Date object or string) to YYYY-MM-DD
+                    const parseDate = (val) => {
+                        if (!val) return null;
+                        if (val instanceof Date) { const d = new Date(val.getTime() - val.getTimezoneOffset() * 60000); return d.toISOString().split('T')[0]; }
+                        if (typeof val === 'number') {
+                            // Excel serial date: days since 1899-12-30
+                            const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+                            const d = new Date(excelEpoch.getTime() + val * 86400000);
+                            return d.toISOString().split('T')[0];
                         }
+                        return String(val).trim() || null;
+                    };
+                    const parseDateTime = (val) => {
+                        if (!val) return null;
+                        if (val instanceof Date) return val.toISOString();
+                        if (typeof val === 'number') {
+                            const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+                            const d = new Date(excelEpoch.getTime() + val * 86400000);
+                            return d.toISOString();
+                        }
+                        const d = new Date(val);
+                        if (isNaN(d.getTime())) throw new Error(`Invalid Expiry Date: "${val}"`);
+                        return d.toISOString();
+                    };
+                    const clean = v => (v === null || v === undefined) ? null : (String(v).trim() || null);
 
-                        let imported = 0;
-                        for (let i = 0; i < upsertData.length; i += 1000) {
-                            const chunk = upsertData.slice(i, i + 1000);
-                            const { error } = await supabase.from('payment_links').upsert(chunk, { onConflict: 'invoice_number' });
-                            if (error) {
-                                const { error: insertErr } = await supabase.from('payment_links').insert(chunk);
-                                if (insertErr) throw insertErr;
+                    const rows = json.map(row => ({
+                        name: clean(row['Name'] || row['Item Name'] || row['name']) || 'Unknown',
+                        amount: parseFloat(String(row['Amount'] ?? row['amount'] ?? '').replace(/[^\d.-]/g, '')) || null,
+                        invoice_number: clean(row['Invoice Number'] ?? row['invoice_number']),
+                        creation_date: parseDate(row['Creation Date'] || row['creation_date']),
+                        expiry_date: parseDateTime(row['Expiry Date'] || row['expiry_date']),
+                        invoice_link: clean(row['Invoice Link'] || row['Payment Link'] || row['invoice_link'] || row['PAYMENT LINK'])
+                    })).filter(r => r.invoice_link);
+
+                    if (rows.length === 0) {
+                        Toast.show("No valid links found in file.", "error");
+                        return;
+                    }
+
+                    // Rows with an invoice number are upserted (de-duplicated, last one wins);
+                    // rows without one are inserted as new links.
+                    const withInvoice = Array.from(new Map(rows.filter(r => r.invoice_number).map(r => [r.invoice_number, r])).values());
+                    const withoutInvoice = rows.filter(r => !r.invoice_number);
+
+                    let imported = 0;
+                    for (let i = 0; i < withInvoice.length; i += 1000) {
+                        const chunk = withInvoice.slice(i, i + 1000);
+                        const { error } = await supabase.from('payment_links').upsert(chunk, { onConflict: 'invoice_number' });
+                        if (error) {
+                            // Fallback when invoice_number has no unique constraint:
+                            // update links that already exist, insert only the new ones (no duplicates).
+                            const existing = await fetchByIn('payment_links', 'id, invoice_number', 'invoice_number', chunk.map(r => r.invoice_number), 'id');
+                            const existingByInvoice = new Map(existing.map(r => [String(r.invoice_number), r.id]));
+                            const toInsert = chunk.filter(r => !existingByInvoice.has(String(r.invoice_number)));
+                            for (const r of chunk.filter(r => existingByInvoice.has(String(r.invoice_number)))) {
+                                const { error: upErr } = await supabase.from('payment_links').update(r).eq('invoice_number', r.invoice_number);
+                                if (upErr) throw new Error(`Saved ${imported} links, then failed: ${upErr.message}`);
+                                imported++;
                             }
+                            if (toInsert.length > 0) {
+                                const { error: insErr } = await supabase.from('payment_links').insert(toInsert);
+                                if (insErr) throw new Error(`Saved ${imported} links, then failed: ${insErr.message}`);
+                                imported += toInsert.length;
+                            }
+                        } else {
                             imported += chunk.length;
                         }
+                    }
+                    for (let i = 0; i < withoutInvoice.length; i += 1000) {
+                        const chunk = withoutInvoice.slice(i, i + 1000);
+                        const { error } = await supabase.from('payment_links').insert(chunk);
+                        if (error) throw new Error(`Saved ${imported} links, then failed: ${error.message}`);
+                        imported += chunk.length;
+                    }
 
-                        if (this.currentUser) {
-                            await supabase.from('import_batches').insert({
-                                user_email: this.currentUser.email,
-                                file_name: file.name,
-                                status: 'success',
-                                records_processed: upsertData.length,
-                                records_inserted: imported,
-                                details: { type: 'payment_links' }
-                            });
-                        }
-                        
-                        Toast.show(`Imported ${imported} links successfully`, "success");
-                        this.loadPaymentLinks();
-                    };
-                    reader.readAsArrayBuffer(file);
+                    await this.recordBatch(file.name, 'payment_links', withInvoice.length + withoutInvoice.length, imported, null);
+
+                    Toast.show(`Imported ${imported} links successfully`, "success");
+                    this.loadPaymentLinks();
                 } catch (err) {
                     Toast.show("Error importing: " + err.message, "error");
+                    await this.recordBatch(file.name, 'payment_links', 0, 0, err.message);
                 }
             };
             input.click();
@@ -3324,7 +3320,7 @@ class App {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td><div class="truncate-text" title="${escapeHTML(link.name || '')}">${escapeHTML(link.name) || '-'}</div></td>
-                    <td><span class="amount">${link.amount ? link.amount + ' EGP' : '-'}</span></td>
+                    <td><span class="amount">${link.amount ? escapeHTML(formatMoney(link.amount)) + ' EGP' : '-'}</span></td>
                     <td>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
                             <span class="badge badge-gray">${escapeHTML(link.invoice_number || '-')}</span>
@@ -3336,8 +3332,8 @@ class App {
                     <td>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
                             <button class="btn btn-outline copy-link-btn" data-url="${escapeHTML(link.invoice_link || '')}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy Link</button>
-                            <button class="btn btn-outline edit-link-btn" data-id="${link.id}">Edit</button>
-                            <button class="btn btn-outline delete-link-btn" style="color: var(--danger);" data-id="${link.id}">Delete</button>
+                            <button class="btn btn-outline edit-link-btn" data-id="${escapeHTML(link.id)}">Edit</button>
+                            <button class="btn btn-outline delete-link-btn" style="color: var(--danger);" data-id="${escapeHTML(link.id)}">Delete</button>
                         </div>
                     </td>
                 `;
@@ -3365,7 +3361,7 @@ class App {
             tbody.querySelectorAll('.edit-link-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const id = e.currentTarget.getAttribute('data-id');
-                    const link = data.find(l => l.id === id);
+                    const link = data.find(l => String(l.id) === id);
                     if (link) {
                         document.getElementById('modal-link-title').textContent = 'Edit Payment Link';
                         document.getElementById('link-id').value = link.id;
@@ -3390,8 +3386,8 @@ class App {
             
             tbody.querySelectorAll('.delete-link-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
+                    const id = e.currentTarget.getAttribute('data-id'); // read before await (currentTarget is cleared afterwards)
                     if (await window.customConfirm("Are you sure you want to delete this link?", 'Delete', 'Cancel')) {
-                        const id = e.currentTarget.getAttribute('data-id');
                         const { error } = await supabase.from('payment_links').delete().eq('id', id);
                         if (error) {
                             Toast.show("Error deleting link: " + error.message, "error");
@@ -3409,7 +3405,7 @@ class App {
             document.getElementById('btn-links-next').disabled = this.paymentLinksPage === totalPages;
 
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="7" class="empty-state text-danger">Error: ${err.message}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" class="empty-state text-danger">Error: ${escapeHTML(err.message)}</td></tr>`;
         }
         
         if (window.lucide) lucide.createIcons();
@@ -3475,21 +3471,16 @@ class App {
 
         if (!dateFrom || !dateTo) return;
 
-        let query = supabase.from('transactions').select('item_name, mapping, second_mapping');
-        if (dateFrom) query = query.gte('payment_date', dateFrom);
-        if (dateTo) query = query.lte('payment_date', dateTo);
-        if (bank) query = query.eq('bank', bank);
-
         let allData = [];
-        let from = 0;
-        let fetchMore = true;
-        while (fetchMore) {
-            const { data, error } = await query.order('id').range(from, from + 999);
-            if (error) break;
-            if (!data || data.length === 0) break;
-            allData = allData.concat(data);
-            if (data.length < 1000) fetchMore = false;
-            else from += 1000;
+        try {
+            allData = await fetchAll('transactions', 'item_name, mapping, second_mapping', q => {
+                q = q.gte('payment_date', dateFrom).lte('payment_date', dateTo);
+                if (bank) q = q.eq('bank', bank);
+                return q;
+            }, 'id');
+        } catch (err) {
+            Toast.show('Error loading ERP filters: ' + err.message, 'error');
+            return;
         }
 
         const items = [...new Set(allData.map(d => d.item_name).filter(Boolean))].sort();
@@ -3502,7 +3493,7 @@ class App {
             const currentItems = this.erpItemNameSelect.getValue();
             this.erpItemNameSelect.clearOptions();
             items.forEach(i => this.erpItemNameSelect.addOption({value: i, text: i}));
-            this.erpItemNameSelect.setValue(currentItems);
+            this.erpItemNameSelect.setValue(currentItems, true); // silent – caller reloads once
         } else if (itemSelect) {
             const currentItem = itemSelect.value;
             itemSelect.innerHTML = items.map(i => `<option value="${escapeHTML(i)}">${escapeHTML(i)}</option>`).join('');
@@ -3513,7 +3504,7 @@ class App {
             const currentMappings = this.erpMappingSelect.getValue();
             this.erpMappingSelect.clearOptions();
             mappings.forEach(m => this.erpMappingSelect.addOption({value: m, text: m}));
-            this.erpMappingSelect.setValue(currentMappings);
+            this.erpMappingSelect.setValue(currentMappings, true);
         } else if (mappingSelect) {
             const currentMapping = mappingSelect.value;
             mappingSelect.innerHTML = mappings.map(m => `<option value="${escapeHTML(m)}">${escapeHTML(m)}</option>`).join('');
@@ -3523,6 +3514,7 @@ class App {
 
     async loadErpExport() {
         if (!this.currentUser) return;
+        const requestId = (this.erpRequestId = (this.erpRequestId || 0) + 1);
         
         const dateFrom = document.getElementById('erp-filter-date-from').value;
         const dateTo = document.getElementById('erp-filter-date-to').value;
@@ -3542,31 +3534,27 @@ class App {
             mappings = Array.from(mappingSelect.selectedOptions).map(o => o.value).filter(Boolean);
         }
 
-        let query = supabase.from('transactions').select('*');
-        if (dateFrom) query = query.gte('payment_date', dateFrom);
-        if (dateTo) query = query.lte('payment_date', dateTo);
-        if (bank) query = query.eq('bank', bank);
-        if (itemNames && itemNames.length > 0) query = query.in('item_name', itemNames);
-        if (mappings && mappings.length > 0) query = query.in('mapping', mappings);
-
         let allData = [];
-        let from = 0;
-        let fetchMore = true;
-        
-        while (fetchMore) {
-            const { data, error } = await query.order('id').range(from, from + 999);
-            if (error) {
-                Toast.show('Error loading ERP data', 'error');
-                fetchMore = false;
-                break;
-            }
-            if (!data || data.length === 0) break;
-            allData = allData.concat(data);
-            if (data.length < 1000) fetchMore = false;
-            else from += 1000;
+        try {
+            allData = await fetchAll('transactions', '*', q => {
+                if (dateFrom) q = q.gte('payment_date', dateFrom);
+                if (dateTo) q = q.lte('payment_date', dateTo);
+                if (bank) q = q.eq('bank', bank);
+                if (itemNames.length > 0) q = q.in('item_name', itemNames);
+                if (mappings.length > 0) q = q.in('mapping', mappings);
+                return q;
+            }, 'id');
+        } catch (err) {
+            if (requestId !== this.erpRequestId) return;
+            // Never keep partial data – exporting it would silently miss transactions
+            this.erpData = [];
+            this.renderErpPreview();
+            Toast.show('Error loading ERP data: ' + err.message, 'error');
+            return;
         }
 
-        this.erpData = allData || [];
+        if (requestId !== this.erpRequestId) return; // a newer filter change is loading
+        this.erpData = allData;
         this.renderErpPreview();
     }
 
@@ -3580,14 +3568,14 @@ class App {
         const previewData = this.erpData.slice(0, 5);
         
         previewData.forEach((row, index) => {
-            const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
+            const paddedAccount = this.erpAccount(row);
             const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>${escapeHTML(row.payment_date || '')}</td>
                 <td>${escapeHTML(paddedAccount)}</td>
                 <td>${escapeHTML(description)}</td>
-                <td>${escapeHTML(String(row.net_amount || ''))}</td>
+                <td>${escapeHTML(formatMoney(this.erpAmount(row)))}</td>
                 <td>${escapeHTML(row.bank || '')}</td>
                 <td>${index + 1}</td>
             `;
@@ -3606,13 +3594,40 @@ class App {
         }
     }
 
-    downloadErpExport() {
+    // Amount credited per ERP line. item_price is the per-line amount
+    // (the importer already sets it to Net Amount for NUADCB136). net_amount is order-level
+    // and would be repeated on every item of a multi-item NUADIB64 order.
+    erpAmount(row) {
+        const v = parseFloat(row.item_price);
+        return isNaN(v) ? 0 : Math.round(v * 100) / 100;
+    }
+
+    erpAccount(row) {
+        const id = String(row.student_id ?? '').trim();
+        return /^\d+$/.test(id) ? id.padStart(9, '0') : id;
+    }
+
+    async downloadErpExport() {
         if (!this.erpData || this.erpData.length === 0) {
             Toast.show('No data to export', 'warning');
             return;
         }
 
-        const invalidTransactions = this.erpData.filter(row => row.id_status && row.id_status !== 'Valid');
+        // Rows already recorded in ERP are excluded by default to avoid posting them twice
+        let rows = this.erpData;
+        const alreadyRecorded = rows.filter(r => r.erp_batch_number).length;
+        if (alreadyRecorded > 0) {
+            const include = await window.customConfirm(
+                `${alreadyRecorded} of ${rows.length} transactions are already recorded in ERP (they have a Journal Batch Number). Exporting them again may post them twice.`,
+                'Include them anyway', 'Exclude recorded rows');
+            if (!include) rows = rows.filter(r => !r.erp_batch_number);
+        }
+        if (rows.length === 0) {
+            Toast.show('Nothing left to export – all rows are already recorded in ERP.', 'info');
+            return;
+        }
+
+        const invalidTransactions = rows.filter(row => row.id_status && row.id_status !== 'Valid');
 
         if (invalidTransactions.length > 0) {
             const tbody = document.getElementById('erp-warning-table-body');
@@ -3620,7 +3635,7 @@ class App {
                 <tr>
                     <td>${escapeHTML(t.reference_number || '')}</td>
                     <td style="color: var(--danger); font-weight: bold;">${escapeHTML(t.student_id || '')}</td>
-                    <td>${escapeHTML(String(t.net_amount || ''))}</td>
+                    <td>${escapeHTML(formatMoney(this.erpAmount(t)))}</td>
                     <td>${escapeHTML(t.id_status)}</td>
                 </tr>
             `).join('');
@@ -3630,42 +3645,40 @@ class App {
             const btnContinue = document.getElementById('btn-erp-continue-export');
             btnContinue.onclick = () => {
                 document.getElementById('modal-erp-warning').classList.add('hidden');
-                this.generateErpExcel();
+                this.generateErpExcel(rows);
             };
         } else {
-            this.generateErpExcel();
+            this.generateErpExcel(rows);
         }
     }
 
-    generateErpExcel() {
-        const exportData = this.erpData.map((row, index) => {
-            const paddedAccount = (row.student_id || '').trim().padStart(9, '0');
-            return {
-                'Date': row.payment_date,
-                'Voucher': '',
-                'Company': 'NU',
-                'Account': paddedAccount,
-                'Name': '',
-                'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`,
-                'Debit': 0,
-                'Credit': row.net_amount,
-                'Currency': 'EGP',
-                'Offset account type': 'Bank',
-                'Offset Non-ledger account': row.bank,
-                'Offset main account': '',
-                'Method of payment': '',
-                'Payment reference': row.reference_number || '',
-                'Line number': index + 1
-            };
-        });
+    generateErpExcel(rows = this.erpData) {
+        const exportData = rows.map((row, index) => ({
+            'Date': row.payment_date,
+            'Voucher': '',
+            'Company': 'NU',
+            'Account': this.erpAccount(row),
+            'Name': '',
+            'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`,
+            'Debit': 0,
+            'Credit': this.erpAmount(row),
+            'Currency': 'EGP',
+            'Offset account type': 'Bank',
+            'Offset Non-ledger account': row.bank,
+            'Offset main account': '',
+            'Method of payment': '',
+            'Payment reference': row.reference_number || '',
+            'Line number': index + 1
+        }));
 
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
-        
+
         const dateStr = new Date().toISOString().split('T')[0];
         XLSX.writeFile(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
-        Toast.show('ERP Template Exported', 'success');
+        const total = exportData.reduce((sum, r) => sum + r.Credit, 0);
+        Toast.show(`ERP file exported: ${exportData.length} lines, total EGP ${formatMoney(total)}`, 'success');
     }
 
     async recordErpReferences() {

@@ -1,4 +1,12 @@
 import { supabase } from './supabase.js';
+import {
+    validateID as sharedValidateID,
+    applyBusinessRules,
+    buildMappingLookup,
+    fetchAll,
+    fetchByIn,
+    escapeHTML
+} from './rules.js';
 
 export class FawryProcessor {
     constructor(userEmail = 'System') {
@@ -19,13 +27,21 @@ export class FawryProcessor {
     }
 
     async loadConfig() {
-        // Load mappings and fixes from Supabase
-        const { data: mappings, error: mapErr } = await supabase.from('item_mappings').select('*');
-        const { data: fixes, error: fixErr } = await supabase.from('manual_fixes').select('*');
-        if (mapErr) this.log(`Warning: Failed to load item mappings: ${mapErr.message}`);
-        if (fixErr) this.log(`Warning: Failed to load manual fixes: ${fixErr.message}`);
-        this.mappings = mappings || [];
-        this.fixes = fixes || [];
+        // Load ALL mappings and fixes (paginated – Supabase returns max 1,000 rows per request)
+        try {
+            this.mappings = await fetchAll('item_mappings', '*', null, 'item_name');
+        } catch (err) {
+            this.mappings = [];
+            this.hasErrors = true;
+            this.log(`Error: Failed to load item mappings: ${err.message}`);
+        }
+        try {
+            this.fixes = await fetchAll('manual_fixes', '*', null, 'reference_number');
+        } catch (err) {
+            this.fixes = [];
+            this.hasErrors = true;
+            this.log(`Error: Failed to load manual fixes: ${err.message}`);
+        }
     }
 
     log(msg) {
@@ -48,7 +64,7 @@ export class FawryProcessor {
                 <div class="log-time">${new Date().toLocaleTimeString()}</div>
                 <div class="log-content">
                     <i data-lucide="${icon}" style="width: 16px; height: 16px;"></i>
-                    <span>${window.escapeHTML ? window.escapeHTML(msg) : msg.replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c] || c))}</span>
+                    <span>${escapeHTML(msg)}</span>
                 </div>
             `;
             
@@ -211,7 +227,13 @@ export class FawryProcessor {
 
     async processFiles(files) {
         this.log(`Starting import for ${files.length} files...`);
+        this.hasErrors = false;
+        this.skippedTransactions = [];
         await this.loadConfig();
+        if (this.hasErrors) {
+            this.log(`Import stopped: rules could not be loaded, so imported data would be incomplete.`);
+            return false;
+        }
 
         // Separate Links files from Order files
         const linkFiles = [];
@@ -263,7 +285,6 @@ export class FawryProcessor {
             }
         }
 
-        this.hasErrors = false;
         let hasErrors = false;
 
         // Process Links first
@@ -292,118 +313,94 @@ export class FawryProcessor {
     async processLinks(item) {
         return new Promise((resolve) => {
             const processData = async (data) => {
+                let uniqueLinks = [];
                 try {
                     const links = data.map(row => {
-                    return {
-                        invoice_number: this.getVal(row, 'INVOICE NUMBER'),
-                        customer_name: this.getVal(row, 'CUSTOMER NAME'),
-                        customer_mobile: this.getVal(row, 'CUSTOMER MOBILE NUMBER'),
-                        customer_email: this.getVal(row, 'CUSTOMER EMAIL'),
-                        payment_status: this.getVal(row, 'PAYMENT STATUS'),
-                        paid_amount: this.parseAmount(this.getVal(row, 'PAID AMOUNT')),
-                        payment_reference_number: String(this.getVal(row, 'PAYMENT REFERENCE NUMBER') || this.getVal(row, 'REFERENCE NUMBER') || this.getVal(row, 'BANK TRANSACTION ID')),
-                        customer_national_id: this.getVal(row, 'CUSTOMER NATIONAL ID'),
-                        custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID') || this.getVal(row, 'CUSTOMER NATIONAL ID')
-                    };
-                }).filter(r => r.payment_reference_number && r.payment_reference_number !== "null");
+                        const ref = this.getVal(row, 'PAYMENT REFERENCE NUMBER') || this.getVal(row, 'REFERENCE NUMBER') || this.getVal(row, 'BANK TRANSACTION ID');
+                        return {
+                            invoice_number: this.getVal(row, 'INVOICE NUMBER'),
+                            customer_name: this.getVal(row, 'CUSTOMER NAME'),
+                            customer_mobile: this.getVal(row, 'CUSTOMER MOBILE NUMBER'),
+                            customer_email: this.getVal(row, 'CUSTOMER EMAIL'),
+                            payment_status: this.getVal(row, 'PAYMENT STATUS'),
+                            paid_amount: this.parseAmount(this.getVal(row, 'PAID AMOUNT')),
+                            payment_reference_number: ref === null || ref === undefined ? '' : String(ref).trim(),
+                            customer_national_id: this.getVal(row, 'CUSTOMER NATIONAL ID'),
+                            custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID') || this.getVal(row, 'CUSTOMER NATIONAL ID')
+                        };
+                    }).filter(r => r.payment_reference_number && r.payment_reference_number !== "null");
 
-                // Deduplicate
-                const uniqueLinks = [];
-                const seen = new Set();
-                for (const l of links) {
-                    if (!seen.has(l.payment_reference_number)) {
-                        seen.add(l.payment_reference_number);
-                        uniqueLinks.push(l);
-                    }
-                }
+                    // Deduplicate (keep the last occurrence – usually the most recent export row)
+                    const byRef = new Map();
+                    for (const l of links) byRef.set(l.payment_reference_number, l);
+                    uniqueLinks = Array.from(byRef.values());
 
-                this.log(`Found ${uniqueLinks.length} unique links. Saving to database...`);
-                
-                // Upsert links
-                const chunkSize = 500;
-                let insertedCount = 0;
-                let lastError = null;
-                for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
-                    const chunk = uniqueLinks.slice(i, i + chunkSize);
-                    const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
-                    if (error) {
-                        lastError = error.message;
-                        this.log(`Error saving links: ${error.message}`);
-                    } else {
-                        insertedCount += chunk.length;
-                    }
-                }
+                    this.log(`Found ${uniqueLinks.length} unique links. Saving to database...`);
 
-                const { error: batchError } = await supabase.from('import_batches').insert({
-                    user_email: this.userEmail,
-                    file_name: item.file.name,
-                    status: insertedCount === uniqueLinks.length ? 'success' : (insertedCount > 0 ? 'partial' : 'failed'),
-                    records_processed: uniqueLinks.length,
-                    records_inserted: insertedCount,
-                    details: { type: 'links', error_message: lastError }
-                });
-                
-                if (batchError) {
-                    this.log(`History Warning: Could not record links import history. Error: ${batchError.message}`);
-                    console.error("Links History Error:", batchError);
-                }
-
-                // Re-enrich existing transactions with these new links
-                this.log(`Re-enriching existing transactions with new links...`);
-                const refs = uniqueLinks.map(l => String(l.payment_reference_number));
-                
-                const linkLookup = new Map();
-                uniqueLinks.forEach(l => linkLookup.set(String(l.payment_reference_number), l));
-                
-                const chunkPromises = [];
-                for (let i = 0; i < refs.length; i += 200) {
-                    const chunkRefs = refs.slice(i, i + 200);
-                    
-                    chunkPromises.push(async () => {
-                        const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
-                        if (existingTx && existingTx.length > 0) {
-                            const { data: existingFixes } = await supabase.from('manual_fixes').select('*').in('reference_number', chunkRefs);
-                            const fixesMap = new Map();
-                            if (existingFixes) {
-                                existingFixes.forEach(f => fixesMap.set(String(f.reference_number), f));
-                            }
-                            
-                            const updates = [];
-                            for (const tx of existingTx) {
-                                const link = linkLookup.get(String(tx.reference_number));
-                                if (link && link.custom_input_value) {
-                                    let newStudentId = tx.student_id;
-                                    let newStatus = tx.id_status;
-                                    if (!fixesMap.has(String(tx.reference_number))) {
-                                        newStudentId = link.custom_input_value;
-                                        newStatus = this.validateID(newStudentId);
-                                    } else {
-                                        const fix = fixesMap.get(String(tx.reference_number));
-                                        if (fix.correct_id) {
-                                            newStudentId = fix.correct_id;
-                                            newStatus = this.validateID(newStudentId);
-                                        }
-                                    }
-                                    
-                                    if (tx.student_id !== newStudentId || tx.id_status !== newStatus) {
-                                        tx.student_id = newStudentId;
-                                        tx.id_status = newStatus;
-                                        updates.push(tx);
-                                    }
-                                }
-                            }
-                            if (updates.length > 0) {
-                                await supabase.from('transactions').upsert(updates, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
-                            }
+                    // Upsert links
+                    const chunkSize = 500;
+                    let insertedCount = 0;
+                    let lastError = null;
+                    for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
+                        const chunk = uniqueLinks.slice(i, i + chunkSize);
+                        const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
+                        if (error) {
+                            lastError = error.message;
+                            this.log(`Error saving links: ${error.message}`);
+                        } else {
+                            insertedCount += chunk.length;
                         }
+                    }
+
+                    const { error: batchError } = await supabase.from('import_batches').insert({
+                        user_email: this.userEmail,
+                        file_name: item.file.name,
+                        status: insertedCount === uniqueLinks.length ? 'success' : (insertedCount > 0 ? 'partial' : 'failed'),
+                        records_processed: uniqueLinks.length,
+                        records_inserted: insertedCount,
+                        details: { type: 'links', error_message: lastError }
                     });
-                }
-                
-                // Execute in parallel batches of 5 to not overwhelm Supabase
-                const concurrencyLimit = 5;
-                for (let i = 0; i < chunkPromises.length; i += concurrencyLimit) {
-                    await Promise.all(chunkPromises.slice(i, i + concurrencyLimit).map(fn => fn()));
-                }
+                    if (batchError) {
+                        this.log(`History Warning: Could not record links import history. ${batchError.message}`);
+                    }
+
+                    // Re-enrich existing transactions with the new links (same rules as a normal import)
+                    this.log(`Re-enriching existing transactions with new links...`);
+                    const linkLookup = new Map(uniqueLinks.map(l => [String(l.payment_reference_number), l]));
+                    const fixesMap = new Map(this.fixes.map(f => [String(f.reference_number), f]));
+                    const lookupMapping = buildMappingLookup(this.mappings);
+
+                    const existingTx = await fetchByIn('transactions', '*', 'reference_number', Array.from(linkLookup.keys()));
+                    const updates = [];
+                    for (const tx of existingTx) {
+                        const ref = String(tx.reference_number);
+                        const link = linkLookup.get(ref);
+                        if (!link || !link.custom_input_value) continue;
+                        const r = applyBusinessRules(
+                            { studentId: tx.student_id, itemName: tx.item_name },
+                            // Only the student ID is re-derived here; item name/mapping stay as they are.
+                            { link, fix: fixesMap.get(ref), lookupMapping: () => undefined }
+                        );
+                        if (tx.student_id !== r.studentId || tx.id_status !== r.idStatus) {
+                            updates.push({ ...tx, student_id: r.studentId, id_status: r.idStatus });
+                        }
+                    }
+
+                    let enrichError = null;
+                    for (let i = 0; i < updates.length; i += 500) {
+                        const { error } = await supabase.from('transactions').upsert(updates.slice(i, i + 500), {
+                            onConflict: 'reference_number,item_price,check_column',
+                            ignoreDuplicates: false
+                        });
+                        if (error) {
+                            enrichError = error.message;
+                            this.log(`Error updating transactions with links: ${error.message}`);
+                            break;
+                        }
+                    }
+                    if (!enrichError) this.log(`Updated student IDs on ${updates.length} existing transactions.`);
+
+                    resolve(!lastError && !enrichError);
                 } catch (err) {
                     await supabase.from('import_batches').insert({
                         user_email: this.userEmail,
@@ -413,10 +410,9 @@ export class FawryProcessor {
                         records_inserted: 0,
                         details: { type: 'links', error_message: err.message }
                     });
-                    throw err;
+                    this.log(`Error processing link data: ${err.message}`);
+                    resolve(false);
                 }
-                
-                resolve();
             };
 
             if (item.type === 'csv') {
@@ -424,16 +420,10 @@ export class FawryProcessor {
                     header: true,
                     skipEmptyLines: true,
                     error: (err) => { this.log(`CSV parse error: ${err.message}`); resolve(false); },
-                    complete: (results) => processData(results.data).catch(err => {
-                        this.log(`Error processing link data: ${err.message}`);
-                        resolve(false);
-                    })
+                    complete: (results) => processData(results.data)
                 });
             } else {
-                processData(item.data).catch(err => {
-                    this.log(`Error processing data: ${err.message}`);
-                    resolve(false);
-                });
+                processData(item.data);
             }
         });
     }
@@ -446,12 +436,15 @@ export class FawryProcessor {
                 const transformedRows = [];
                 
                 for (const row of rows) {
-                    let refNumber = this.getVal(row, 'Reference Number');
+                    const rawRef = this.getVal(row, 'Reference Number');
+                    if (rawRef === null || rawRef === undefined) continue;
+                    const refNumber = String(rawRef).trim();
                     if (!refNumber) continue;
 
                     let itemName = String(this.getVal(row, 'Item Name') || '').trim();
                     
-                    // TUI / SU Check
+                    // TUI / SU Check (exact match – kept as before, because the result is part of
+                    // check_column, the key used to recognise rows that were already imported)
                     if (this.tuiList.includes(itemName)) {
                         itemName = "TUI";
                     } else if (itemName === "Student Union & Activities") {
@@ -460,13 +453,21 @@ export class FawryProcessor {
 
                     // Extract numbers from Customer Name
                     const custName = this.getVal(row, 'Customer Name');
-                    let studentId = custName ? String(custName).replace(/-/g, '').replace(/\D/g, '') : "";
-                    if (!studentId && custName) studentId = custName;
+                    const custNameStr = custName ? String(custName).trim() : '';
+                    let studentId;
+                    if (/^DIP\d{14}$/i.test(custNameStr)) {
+                        // Diploma IDs keep their DIP prefix
+                        studentId = custNameStr.toUpperCase();
+                    } else {
+                        studentId = custNameStr.replace(/\D/g, '');
+                        if (!studentId && custNameStr) studentId = custNameStr;
+                    }
 
                     let totalAmount = this.parseAmount(this.getVal(row, 'Total Amount Plus Fees'));
                     let netAmount = this.parseAmount(this.getVal(row, 'Net Amount'));
                     let fawryFees = this.parseAmount(this.getVal(row, 'Fawry Fees'));
                     let itemPrice = this.parseAmount(this.getVal(row, 'Item Price'));
+                    // Exact match kept as before: the bank decides item_price, which is part of the duplicate-check key
                     let merchant = this.getVal(row, 'Merchant Name') || "";
                     let bank = merchant === "Nile University Edu" ? "NUADIB64" : "NUADCB136";
                     
@@ -547,72 +548,51 @@ export class FawryProcessor {
     }
 
     async enrichTransactions(transactions, fileName = 'Unknown') {
-        // Collect references to fetch links
+        if (transactions.length === 0) {
+            this.log(`No payable transactions found in ${fileName}. Nothing to import.`);
+            return true;
+        }
+
         const refs = transactions.map(t => t.reference_number);
-        
-        // Fetch matching links in parallel
-        const dbLinks = [];
-        const fetchChunkSize = 200;
-        const fetchPromises = [];
-        for (let i = 0; i < refs.length; i += fetchChunkSize) {
-            const chunkRefs = refs.slice(i, i + fetchChunkSize);
-            fetchPromises.push(supabase
-                .from('links')
-                .select('payment_reference_number, custom_input_value')
-                .in('payment_reference_number', chunkRefs));
+
+        // 1. Fetch matching links (all pages)
+        let dbLinks = [];
+        try {
+            dbLinks = await fetchByIn('links', 'payment_reference_number, custom_input_value', 'payment_reference_number', refs, 'payment_reference_number');
+        } catch (err) {
+            this.log(`Error: Failed to fetch payment links: ${err.message}`);
+            return false;
         }
-        
-        const fetchResults = await Promise.all(fetchPromises);
-        fetchResults.forEach(({ data, error }) => {
-            if (data) {
-                dbLinks.push(...data);
-            } else if (error) {
-                this.log(`Warning: Failed to fetch some links: ${error.message}`);
-            }
-        });
-            
-        const linkMap = {};
-        dbLinks.forEach(l => {
-            linkMap[l.payment_reference_number] = l.custom_input_value;
-        });
+        const linkMap = new Map(dbLinks.map(l => [String(l.payment_reference_number), l]));
+        const fixesMap = new Map(this.fixes.map(f => [String(f.reference_number), f]));
+        const lookupMapping = buildMappingLookup(this.mappings);
 
-        const fixesMap = {};
-        this.fixes.forEach(f => fixesMap[f.reference_number] = f);
-
-        const mappingMap = {};
-        this.mappings.forEach(m => mappingMap[String(m.item_name || '').trim()] = m);
-
-        // Final application
+        // 2. Apply links, manual fixes and mappings (shared rules – same as "Re-apply Rules")
         for (const t of transactions) {
-            // Apply Link
-            if (linkMap[t.reference_number]) {
-                t.student_id = linkMap[t.reference_number];
-            }
-
-            // Apply Fixes
-            const fix = fixesMap[t.reference_number];
-            if (fix) {
-                if (fix.correct_id) t.student_id = fix.correct_id;
-                if (fix.item_name) t.item_name = fix.item_name;
-                if (fix.mapping) t.mapping = fix.mapping;
-                if (fix.second_mapping) t.second_mapping = fix.second_mapping;
-            }
-
-            // Apply Validation Status (The Bulletproof rules)
-            t.id_status = this.validateID(t.student_id);
-
-            // Apply Mappings if not overridden by fixes
-            if (!fix || !fix.mapping) {
-                const mapDef = mappingMap[String(t.item_name || '').trim()];
-                if (mapDef) {
-                    if (mapDef.adjusted_item_name) t.item_name = mapDef.adjusted_item_name;
-                    t.mapping = mapDef.mapping;
-                    if (mapDef.second_mapping) t.second_mapping = mapDef.second_mapping;
-                }
-            }
+            const ref = String(t.reference_number);
+            const r = applyBusinessRules(
+                { studentId: t.student_id, itemName: t.item_name },
+                { link: linkMap.get(ref), fix: fixesMap.get(ref), lookupMapping }
+            );
+            t.student_id = r.studentId;
+            t.item_name = r.itemName;
+            t.mapping = r.mapping;
+            t.second_mapping = r.secondMapping;
+            t.id_status = r.idStatus;
         }
 
-        // 1. Create the import batch first to get its ID
+        // 3. Find which rows already exist, so a re-import does NOT take ownership of them.
+        //    (Otherwise "Revert" on the newer file would delete rows that came from an older import.)
+        let existingKeys = new Set();
+        try {
+            const existing = await fetchByIn('transactions', 'id, reference_number, item_price, check_column', 'reference_number', refs);
+            existing.forEach(e => existingKeys.add(this.txKey(e)));
+        } catch (err) {
+            this.log(`Error: Could not check existing transactions: ${err.message}`);
+            return false;
+        }
+
+        // 4. Register the import batch
         this.log(`Registering import batch...`);
         const { data: batchData, error: batchInitError } = await supabase.from('import_batches').insert({
             user_email: this.userEmail,
@@ -627,80 +607,75 @@ export class FawryProcessor {
             this.log(`Database error: Could not register import batch. ${batchInitError.message}`);
             return false;
         }
-
         const batchId = batchData.id;
 
-        // 2. Attach batch_id to all transactions
-        for (let t of transactions) {
-            t.batch_id = batchId;
+        const newRows = [];
+        const existingRows = [];
+        for (const t of transactions) {
+            if (existingKeys.has(this.txKey(t))) {
+                // Keep the original batch_id / file_name of rows that were imported before
+                const { batch_id, file_name, ...rest } = t;
+                existingRows.push(rest);
+            } else {
+                newRows.push({ ...t, batch_id: batchId });
+            }
         }
+        this.log(`${newRows.length} new and ${existingRows.length} already-existing transactions. Saving...`);
 
-        // 3. Insert into Supabase in parallel batches
-        this.log(`Inserting data into database...`);
+        // 5. Upsert in chunks (3 concurrent requests max)
         const chunkSize = 1000;
-        let inserted = 0;
+        let saved = 0;
         let hasError = false;
         let lastError = null;
-        
-        const upsertThunks = [];
-        for (let i = 0; i < transactions.length; i += chunkSize) {
-            const chunk = transactions.slice(i, i + chunkSize);
-            upsertThunks.push(async () => {
-                const { error } = await supabase.from('transactions').upsert(chunk, { 
-                    onConflict: 'reference_number,item_price,check_column', 
-                    ignoreDuplicates: false 
+        const total = transactions.length;
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+
+        const thunks = [];
+        for (const rows of [newRows, existingRows]) {
+            for (let i = 0; i < rows.length; i += chunkSize) {
+                const chunk = rows.slice(i, i + chunkSize);
+                thunks.push(async () => {
+                    const { error } = await supabase.from('transactions').upsert(chunk, {
+                        onConflict: 'reference_number,item_price,check_column',
+                        ignoreDuplicates: false
+                    });
+                    if (error) {
+                        hasError = true;
+                        this.hasErrors = true;
+                        lastError = error.message;
+                        this.log(`Database error: ${error.message}`);
+                    } else {
+                        saved += chunk.length;
+                        if (progressFill) progressFill.style.width = `${(saved / total) * 100}%`;
+                        if (progressText) progressText.innerText = `${saved} / ${total} rows processed`;
+                    }
                 });
-                
-                if (error) {
-                    hasError = true;
-                    this.hasErrors = true;
-                    lastError = error.message;
-                    this.log(`Database error: ${error.message}`);
-                } else {
-                    inserted += chunk.length;
-                    document.getElementById('progress-fill').style.width = `${(inserted / transactions.length) * 100}%`;
-                    document.getElementById('progress-text').innerText = `${inserted} / ${transactions.length} rows processed`;
-                }
-            });
+            }
         }
-        
-        // Execute upserts in parallel (3 concurrent requests max to avoid overwhelming DB)
-        for (let i = 0; i < upsertThunks.length; i += 3) {
-            const batchPromises = upsertThunks.slice(i, i + 3).map(thunk => thunk());
-            await Promise.all(batchPromises);
+        for (let i = 0; i < thunks.length; i += 3) {
+            await Promise.all(thunks.slice(i, i + 3).map(fn => fn()));
         }
 
-        // 4. Update batch status
+        // 6. Update batch status
         const { error: batchUpdateError } = await supabase.from('import_batches').update({
-            status: inserted === transactions.length ? 'success' : (inserted > 0 ? 'partial' : 'failed'),
-            records_inserted: inserted,
-            details: { type: 'transactions', error_message: lastError }
+            status: saved === total ? 'success' : (saved > 0 ? 'partial' : 'failed'),
+            records_inserted: saved,
+            details: { type: 'transactions', error_message: lastError, new_rows: newRows.length, updated_rows: existingRows.length }
         }).eq('id', batchId);
-        
+
         if (batchUpdateError) {
-            this.log(`History Warning: Could not update import history. Error: ${batchUpdateError.message}`);
-            console.error("Tx History Error:", batchUpdateError);
+            this.log(`History Warning: Could not update import history. ${batchUpdateError.message}`);
         }
 
-        return !hasError && inserted > 0;
+        return !hasError;
+    }
+
+    txKey(t) {
+        return `${String(t.reference_number)}|${Number(t.item_price)}|${String(t.check_column)}`;
     }
 
     validateID(id) {
-        if (!id) return "Missing ID";
-        const idText = String(id).trim().replace(/\u00A0/g, '');
-        if (!idText || idText.length === 0) return "Missing ID";
-        const idLength = idText.length;
-        const onlyTextLeft = idText.replace(/[0-9]/g, '');
-        
-        if (idLength === 17 && idText.toUpperCase().startsWith("DIP")) {
-            const remainder = idText.substring(3).replace(/[0-9]/g, '');
-            if (remainder === "") return "Valid";
-        }
-        
-        if (onlyTextLeft !== "") return "Error: Text/Name detected";
-        if (idLength < 4) return `Error: ID Too Short (${idLength} digits)`;
-        if (idLength > 9) return `Error: ID Too Long (${idLength} digits)`;
-        if (idText.startsWith("2") && idLength !== 9) return `Error: Invalid 2-Series Length (${idLength} digits)`;
-        return "Valid";
+        return sharedValidateID(id);
     }
 }

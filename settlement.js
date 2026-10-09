@@ -1,11 +1,12 @@
+const settlementEsc = (v) => (window.escapeHTML ? window.escapeHTML(v) : String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c])));
+
 class SettlementProcessor {
     constructor(supabaseClient) {
         this.supabase = supabaseClient;
         this.settlementData = [];
         this.reconciliationResults = [];
         this.systemTransactions = [];
-        // Auto-detect bank
-        
+        this.isProcessing = false;
         this.initUI();
     }
 
@@ -37,7 +38,11 @@ class SettlementProcessor {
         });
 
         this.fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) this.handleFiles(e.target.files);
+            if (e.target.files.length > 0) {
+                const files = Array.from(e.target.files);
+                e.target.value = ''; // allow selecting the same file(s) again
+                this.handleFiles(files);
+            }
         });
 
         this.btnExportConsolidated.addEventListener('click', () => this.exportConsolidated());
@@ -52,27 +57,33 @@ class SettlementProcessor {
     }
 
     async handleFiles(files) {
+        if (this.isProcessing) {
+            Toast.show('Settlement files are already being processed. Please wait.', 'warning');
+            return;
+        }
+        this.isProcessing = true;
         this.setStatus('<i data-lucide="loader" class="spin"></i> Processing files...');
         if (window.lucide) lucide.createIcons();
         this.settlementData = [];
         this.reconciliationResults = [];
-        if (!this.processedFileNames) this.processedFileNames = new Set();
+        // Each run starts fresh; only duplicates WITHIN the same selection are skipped.
+        const seenInThisRun = new Set();
 
         try {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                if (this.processedFileNames.has(file.name)) {
-                    Toast.show(`File ${file.name} was already processed. Skipping.`, 'info');
+                const lower = file.name.toLowerCase();
+                if (seenInThisRun.has(file.name)) {
+                    Toast.show(`File ${file.name} was selected twice. Skipping the duplicate.`, 'info');
                     continue;
                 }
-                
-                if (file.name.endsWith('.zip')) {
+                seenInThisRun.add(file.name);
+
+                if (lower.endsWith('.zip')) {
                     await this.processZip(file);
-                    this.processedFileNames.add(file.name);
-                } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.xlsm')) {
+                } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.xlsm')) {
                     if (!file.name.startsWith('~$')) {
                         await this.processExcel(file, file.name);
-                        this.processedFileNames.add(file.name);
                     }
                 }
             }
@@ -84,17 +95,21 @@ class SettlementProcessor {
             
         } catch (err) {
             console.error(err);
-            this.setStatus(`Error: ${err.message}`, true);
+            this.setStatus(`Error: ${settlementEsc(err.message)}`, true);
+        } finally {
+            this.isProcessing = false;
         }
     }
 
     async processZip(file) {
         const zip = await JSZip.loadAsync(file);
-        const excelFiles = Object.keys(zip.files).filter(name => 
-            (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.xlsm')) && 
-            !name.includes('~$') && 
-            !name.includes('__MACOSX')
-        );
+        const excelFiles = Object.keys(zip.files).filter(name => {
+            const lower = name.toLowerCase();
+            return (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.xlsm')) &&
+                !zip.files[name].dir &&
+                !name.includes('~$') &&
+                !name.includes('__MACOSX');
+        });
 
         for (const name of excelFiles) {
             const content = await zip.files[name].async('arraybuffer');
@@ -144,10 +159,11 @@ class SettlementProcessor {
                         const rowData = { SOURCE_FILE: fileName };
                         let hasSettlementNo = false;
 
+                        if (!row) continue;
                         for (let j = 0; j < cleanHeaders.length; j++) {
                             const colName = cleanHeaders[j];
                             if (colName) {
-                                let val = row[j];
+                                let val = row[j] === undefined ? null : row[j];
                                 rowData[colName] = val;
                                 if (colName === 'SETTLEMENTNO' && val !== null && String(val).trim() !== '') {
                                     hasSettlementNo = true;
@@ -168,11 +184,11 @@ class SettlementProcessor {
                                 rowData['NETAMOUNT'] = (rowData['NETAMOUNT'] || 0) - rowData['NETAMOUNT_REFUND'];
                             }
                             
-                            // Convert dates safely
+                            // Convert Excel serial dates to local "YYYY-MM-DD HH:MM:SS" text
+                            // (no UTC conversion, so late-evening payments stay on the right day)
                             ['SETTLEMENT_DATE', 'TRXDATE'].forEach(dateCol => {
                                 if (rowData[dateCol] && typeof rowData[dateCol] === 'number') {
-                                    const d = new Date(Math.round((rowData[dateCol] - 25569) * 86400 * 1000));
-                                    rowData[dateCol] = d.toISOString();
+                                    rowData[dateCol] = SettlementProcessor.excelSerialToText(rowData[dateCol]);
                                 }
                             });
 
@@ -197,9 +213,11 @@ class SettlementProcessor {
 
         // Group settlement data by ORDER_REF_NUMBER
         const stlGrouped = {};
+        let skippedNoRef = 0;
         for (const row of this.settlementData) {
-            const ref = String(row['ORDER_REF_NUMBER']).trim();
-            if (!ref) continue;
+            const rawRef = row['ORDER_REF_NUMBER'];
+            const ref = rawRef === null || rawRef === undefined ? '' : String(rawRef).trim();
+            if (!ref) { skippedNoRef++; continue; }
             
             if (!stlGrouped[ref]) {
                 stlGrouped[ref] = {
@@ -219,15 +237,10 @@ class SettlementProcessor {
         let minTrxDateStr = '2099-12-31';
         let maxTrxDateStr = '1970-01-01';
         for (const ref of settlementRefs) {
-            const trxRaw = stlGrouped[ref].TRXDATE;
-            if (trxRaw) {
-                const ms = new Date(trxRaw).getTime();
-                if (!isNaN(ms)) {
-                    const d = new Date(ms);
-                    const dStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-                    if (dStr < minTrxDateStr) minTrxDateStr = dStr;
-                    if (dStr > maxTrxDateStr) maxTrxDateStr = dStr;
-                }
+            const dStr = SettlementProcessor.toDateOnly(stlGrouped[ref].TRXDATE);
+            if (dStr) {
+                if (dStr < minTrxDateStr) minTrxDateStr = dStr;
+                if (dStr > maxTrxDateStr) maxTrxDateStr = dStr;
             }
         }
 
@@ -241,41 +254,40 @@ class SettlementProcessor {
         const chunkSize = 150;
         for (let i = 0; i < settlementRefs.length; i += chunkSize) {
             const chunk = settlementRefs.slice(i, i + chunkSize);
-            const { data: refTx, error: refErr } = await this.supabase
-                .from('transactions')
-                .select('*')
-                .in('reference_number', chunk);
-                
-            if (refErr) {
-                this.setStatus('Error fetching DB transactions by reference: ' + refErr.message, true);
+            let refTx;
+            try {
+                refTx = await this.fetchAllPages(() => this.supabase
+                    .from('transactions')
+                    .select('*')
+                    .in('reference_number', chunk));
+            } catch (refErr) {
+                this.setStatus('Error fetching DB transactions by reference: ' + settlementEsc(refErr.message), true);
                 return;
             }
-            if (refTx) {
-                refTx.forEach(tx => {
-                    txMap.set(tx.id, tx);
-                    if (tx.bank) detectedBanks.add(tx.bank);
-                });
-            }
+            refTx.forEach(tx => {
+                txMap.set(tx.id, tx);
+                if (tx.bank) detectedBanks.add(tx.bank);
+            });
         }
 
         const bankArray = Array.from(detectedBanks);
 
         // 2. Fetch by precise payment date range AND detected banks to find "Missing in Settlement"
         if (minTrxDateStr !== '2099-12-31' && bankArray.length > 0) {
-            const { data: dateTx, error: dateErr } = await this.supabase
-                .from('transactions')
-                .select('*')
-                .in('bank', bankArray)
-                .gte('payment_date', minTrxDateStr)
-                .lte('payment_date', maxTrxDateStr);
-                
-            if (dateErr) {
-                this.setStatus('Error fetching DB transactions by date: ' + dateErr.message, true);
+            let dateTx;
+            try {
+                // Paginated – a busy period easily has more than 1,000 transactions
+                dateTx = await this.fetchAllPages(() => this.supabase
+                    .from('transactions')
+                    .select('*')
+                    .in('bank', bankArray)
+                    .gte('payment_date', minTrxDateStr)
+                    .lte('payment_date', maxTrxDateStr));
+            } catch (dateErr) {
+                this.setStatus('Error fetching DB transactions by date: ' + settlementEsc(dateErr.message), true);
                 return;
             }
-            if (dateTx) {
-                dateTx.forEach(tx => txMap.set(tx.id, tx));
-            }
+            dateTx.forEach(tx => txMap.set(tx.id, tx));
         }
 
         this.systemTransactions = Array.from(txMap.values());
@@ -283,19 +295,21 @@ class SettlementProcessor {
         // Group DB transactions by reference_number (essential for NUADIB64)
         const dbGrouped = {};
         for (const tx of this.systemTransactions) {
-            const ref = String(tx.reference_number).trim();
+            const ref = tx.reference_number == null ? '' : String(tx.reference_number).trim();
             if (!ref) continue;
             if (!dbGrouped[ref]) {
                 dbGrouped[ref] = {
                     reference_number: ref,
                     payment_date: tx.payment_date,
                     item_price: 0,
-                    is_settled: tx.is_settled,
+                    is_settled: !!tx.is_settled,
                     settlement_batch: tx.settlement_batch,
                     items: []
                 };
             }
             dbGrouped[ref].item_price += parseFloat(tx.item_price || 0);
+            // A reference counts as settled only when ALL of its items are settled
+            dbGrouped[ref].is_settled = dbGrouped[ref].is_settled && !!tx.is_settled;
             dbGrouped[ref].items.push(tx);
         }
 
@@ -371,7 +385,8 @@ class SettlementProcessor {
         }
 
         this.renderResults();
-        this.setStatus(`<i data-lucide="check-circle"></i> Reconciliation complete! Matches: ${matchCount}, Issues: ${mismatchCount}`);
+        const noRefNote = skippedNoRef > 0 ? ` (${skippedNoRef} settlement row(s) without ORDER_REF_NUMBER were ignored)` : '';
+        this.setStatus(`<i data-lucide="check-circle"></i> Reconciliation complete! Matches: ${matchCount}, Issues: ${mismatchCount}${noRefNote}`);
         if (window.lucide) lucide.createIcons();
     }
 
@@ -394,8 +409,7 @@ class SettlementProcessor {
 
             let dbSettledBadge = r.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;font-size:0.7rem;">Yes</span>' : '';
 
-            // Using window.escapeHTML if available
-            const esc = window.escapeHTML || (s => s);
+            const esc = settlementEsc;
 
             return `
                 <tr>
@@ -440,7 +454,9 @@ class SettlementProcessor {
             return;
         }
 
-        if (!confirm(`Are you sure you want to mark ${matches.length} transactions as settled in the database?`)) return;
+        const question = `Are you sure you want to mark ${matches.length} references as settled in the database?`;
+        const ok = window.customConfirm ? await window.customConfirm(question, 'Mark as Settled', 'Cancel') : confirm(question);
+        if (!ok) return;
 
         this.btnMarkSettled.disabled = true;
         this.btnMarkSettled.innerHTML = '<i data-lucide="loader" class="spin"></i> Updating...';
@@ -450,8 +466,9 @@ class SettlementProcessor {
             // Group updates by settlement_batch to minimize API calls
             const updatesByBatch = {};
             for (const m of matches) {
-                if (!updatesByBatch[m.settlement_no]) updatesByBatch[m.settlement_no] = [];
-                updatesByBatch[m.settlement_no].push(m.reference);
+                const batchKey = m.settlement_no == null ? '' : String(m.settlement_no);
+                if (!updatesByBatch[batchKey]) updatesByBatch[batchKey] = [];
+                updatesByBatch[batchKey].push(m.reference);
             }
 
             for (const batch in updatesByBatch) {
@@ -464,7 +481,7 @@ class SettlementProcessor {
                         .from('transactions')
                         .update({
                             is_settled: true,
-                            settlement_batch: batch
+                            settlement_batch: batch || null
                         })
                         .in('reference_number', chunk);
                     
@@ -472,19 +489,62 @@ class SettlementProcessor {
                 }
             }
 
-            Toast.show(`Successfully marked ${matches.length} transactions as settled!`, 'success');
+            Toast.show(`Successfully marked ${matches.length} references as settled!`, 'success');
             
             // Re-fetch or just update local state
             for (const m of matches) m.is_settled = true;
             this.renderResults();
 
         } catch (err) {
-            Toast.show('Error updating database: ' + err.message, 'error');
+            Toast.show('Error updating database: ' + err.message + ' – some references may already be marked. Re-run the reconciliation to see the current state.', 'error');
         } finally {
             this.btnMarkSettled.disabled = false;
             this.btnMarkSettled.innerHTML = '<i data-lucide="check-square"></i> Mark Matched as Settled in DB';
             if (window.lucide) lucide.createIcons();
         }
+    }
+
+    // Runs a query repeatedly with .range() until every row is fetched (Supabase returns max 1,000 per request)
+    async fetchAllPages(buildQuery, pageSize = 1000) {
+        let all = [];
+        let from = 0;
+        while (true) {
+            const { data, error } = await buildQuery().order('id').range(from, from + pageSize - 1);
+            if (error) throw error;
+            if (!data || data.length === 0) break;
+            all = all.concat(data);
+            if (data.length < pageSize) break;
+            from += pageSize;
+        }
+        return all;
+    }
+
+    // Excel serial number → "YYYY-MM-DD HH:MM:SS" (wall-clock time as shown in Excel, no timezone shift)
+    static excelSerialToText(serial) {
+        if (typeof XLSX !== 'undefined' && XLSX.SSF && XLSX.SSF.parse_date_code) {
+            const p = XLSX.SSF.parse_date_code(serial);
+            if (p && p.y) {
+                const pad = n => String(Math.floor(n)).padStart(2, '0');
+                return `${p.y}-${pad(p.m)}-${pad(p.d)} ${pad(p.H)}:${pad(p.M)}:${pad(p.S)}`;
+            }
+        }
+        // Fallback: treat the serial as UTC and format it in UTC (no local shift)
+        const d = new Date(Math.round((serial - 25569) * 86400 * 1000));
+        return d.toISOString().replace('T', ' ').substring(0, 19);
+    }
+
+    // Any date value from the settlement file → "YYYY-MM-DD" (or null)
+    static toDateOnly(raw) {
+        if (raw === null || raw === undefined || raw === '') return null;
+        if (typeof raw === 'number') return SettlementProcessor.excelSerialToText(raw).substring(0, 10);
+        const str = String(raw).trim();
+        let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+        m = str.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/); // Fawry format: DD/MM/YYYY
+        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+        const d = new Date(str);
+        if (isNaN(d.getTime())) return null;
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 }
 
