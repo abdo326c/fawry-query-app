@@ -3785,7 +3785,7 @@ class App {
                 printWindow.document.write(`
                     <html>
                     <head>
-                        <title>Student Statement of Account - ${this.currentProfileSid}</title>
+                        <title>Student Statement of Payments - ${this.currentProfileSid}</title>
                         <style>
                             body { font-family: 'Inter', sans-serif; padding: 2rem; color: #111; max-width: 900px; margin: 0 auto; }
                             h1 { font-size: 1.5rem; text-align: center; margin-bottom: 0.2rem; }
@@ -3796,9 +3796,6 @@ class App {
                             th { background-color: #f5f5f5; font-weight: 600; }
                             td { background-color: #fff; }
                             .text-right { text-align: right; }
-                            .success { color: #16a34a; font-weight: bold; }
-                            .warning { color: #d97706; font-weight: bold; }
-                            .danger { color: #dc2626; font-weight: bold; }
                             h3 { font-size: 1.1rem; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
                             @media print {
                                 body { padding: 0; }
@@ -3806,8 +3803,7 @@ class App {
                         </style>
                     </head>
                     <body>
-                        <h1>Nile University</h1>
-                        <h2>Official Statement of Account - Fawry Payments</h2>
+                        <h2>Statement of Payments</h2>
                         <div class="header-info">
                             <h3 style="margin:0 0 0.5rem 0;">${name} (${this.currentProfileSid})</h3>
                             <p style="margin:0; font-size: 0.9rem; color: #444;">${email} | ${phone}</p>
@@ -3850,16 +3846,12 @@ class App {
 
             // Render Ledger
             document.getElementById('student-ledger-body').innerHTML = txs.map(t => {
-                let statusBadge = t.is_settled ? '<span style="color: var(--success);">Settled</span>' : '<span style="color: var(--warning);">Pending</span>';
-                if (t.id_status && t.id_status.includes('Error')) statusBadge = '<span style="color: var(--danger);">Error</span>';
-                
                 return `
                 <tr>
                     <td>${escapeHTML(t.payment_date ? t.payment_date.split('T')[0] : '-')}</td>
                     <td>${escapeHTML(t.reference_number)}</td>
                     <td>${escapeHTML(t.item_name)}</td>
                     <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
-                    <td>${statusBadge}</td>
                     <td style="text-align: right; font-weight: 500;">${parseFloat(t.item_price || 0).toLocaleString()}</td>
                 </tr>
             `}).join('');
