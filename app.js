@@ -3787,6 +3787,7 @@ class App {
                     <head>
                         <title>Student Statement of Payments - ${this.currentProfileSid}</title>
                         <style>
+                            @page { margin: 0; }
                             body { font-family: 'Inter', sans-serif; padding: 2rem; color: #111; max-width: 900px; margin: 0 auto; }
                             h1 { font-size: 1.5rem; text-align: center; margin-bottom: 0.2rem; }
                             h2 { font-size: 1.2rem; text-align: center; color: #555; margin-bottom: 2rem; font-weight: normal; }
@@ -3797,8 +3798,9 @@ class App {
                             td { background-color: #fff; }
                             .text-right { text-align: right; }
                             h3 { font-size: 1.1rem; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
+                            .custom-footer { margin-top: 4rem; text-align: center; color: #666; font-size: 0.9rem; border-top: 1px solid #ddd; padding-top: 1rem; }
                             @media print {
-                                body { padding: 0; }
+                                body { padding: 1.5cm; }
                             }
                         </style>
                     </head>
@@ -3811,6 +3813,9 @@ class App {
                             <p style="margin-top:1rem; font-size:0.8rem; color:#888;">Generated on: ${new Date().toLocaleString()}</p>
                         </div>
                         ${profileContent.innerHTML}
+                        <div class="custom-footer">
+                            Finance Team | Abdelrahman Mohamed
+                        </div>
                     </body>
                     </html>
                 `);
