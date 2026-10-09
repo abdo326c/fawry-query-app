@@ -3764,23 +3764,8 @@ class App {
     async loadStudentProfile(sid) {
         try {
             document.getElementById('inline-student-profile').classList.remove('hidden');
-            document.getElementById('student-profile-header').innerHTML = '<p>Loading...</p>';
             document.getElementById('student-summary-body').innerHTML = '';
             document.getElementById('student-ledger-body').innerHTML = '';
-
-            // Fetch Student
-            const { data: sData, error: sErr } = await supabase.from('student_master').select('*').eq('student_id', sid).single();
-            if (sErr) throw sErr;
-            
-            document.getElementById('student-profile-header').innerHTML = `
-                <h3 style="margin: 0 0 0.5rem 0; font-size: 1.25rem;">${escapeHTML(sData.full_name)} (${escapeHTML(sData.student_id)})</h3>
-                <div style="display: flex; gap: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
-                    <span><i data-lucide="mail" style="width:14px;height:14px;"></i> ${escapeHTML(sData.email || '-')}</span>
-                    <span><i data-lucide="phone" style="width:14px;height:14px;"></i> ${escapeHTML(sData.mobile || '-')}</span>
-                    <span><i data-lucide="graduation-cap" style="width:14px;height:14px;"></i> ${escapeHTML(sData.college || '-')} / ${escapeHTML(sData.program || '-')}</span>
-                </div>
-            `;
-            if (window.lucide) lucide.createIcons();
 
             // Fetch Transactions
             const { data: txs, error: tErr } = await supabase.from('transactions').select('*').eq('student_id', sid).order('payment_date', { ascending: false });
