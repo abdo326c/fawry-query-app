@@ -2030,8 +2030,17 @@ class App {
                             <td>${escapeHTML(s.mobile)}</td>
                             <td>${escapeHTML(s.college)}</td>
                             <td>${escapeHTML(s.program)}</td>
+                            <td>
+                                <button class="btn btn-outline btn-sm btn-view-profile" data-sid="${escapeHTML(s.student_id)}">View Profile</button>
+                            </td>
                         </tr>
                     `).join('');
+                    
+                    tbody.querySelectorAll('.btn-view-profile').forEach(btn => {
+                        btn.addEventListener('click', (e) => {
+                            this.loadStudentProfile(e.currentTarget.getAttribute('data-sid'));
+                        });
+                    });
                 } catch(err) {
                     Toast.show('Search error: ' + err.message, 'error');
                 }
@@ -3742,6 +3751,84 @@ class App {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
             if (window.lucide) lucide.createIcons();
+        }
+    }
+
+    async loadStudentProfile(sid) {
+        try {
+            document.getElementById('modal-student-profile').classList.remove('hidden');
+            document.getElementById('student-profile-header').innerHTML = '<p>Loading...</p>';
+            document.getElementById('student-summary-body').innerHTML = '';
+            document.getElementById('student-ledger-body').innerHTML = '';
+
+            // Fetch Student
+            const { data: sData, error: sErr } = await supabase.from('student_master').select('*').eq('student_id', sid).single();
+            if (sErr) throw sErr;
+            
+            document.getElementById('student-profile-header').innerHTML = `
+                <h3 style="margin: 0 0 0.5rem 0; font-size: 1.25rem;">${escapeHTML(sData.full_name)} (${escapeHTML(sData.student_id)})</h3>
+                <div style="display: flex; gap: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
+                    <span><i data-lucide="mail" style="width:14px;height:14px;"></i> ${escapeHTML(sData.email || '-')}</span>
+                    <span><i data-lucide="phone" style="width:14px;height:14px;"></i> ${escapeHTML(sData.mobile || '-')}</span>
+                    <span><i data-lucide="graduation-cap" style="width:14px;height:14px;"></i> ${escapeHTML(sData.college || '-')} / ${escapeHTML(sData.program || '-')}</span>
+                </div>
+            `;
+            if (window.lucide) lucide.createIcons();
+
+            // Fetch Transactions
+            const { data: txs, error: tErr } = await supabase.from('transactions').select('*').eq('student_id', sid).order('payment_date', { ascending: false });
+            if (tErr) throw tErr;
+
+            if (!txs || txs.length === 0) {
+                document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 2rem;">No payments found for this student.</td></tr>';
+                document.getElementById('student-summary-body').innerHTML = '<tr><td colspan="2" style="text-align: center; padding: 1rem;">No data</td></tr>';
+                return;
+            }
+
+            // Render Ledger
+            document.getElementById('student-ledger-body').innerHTML = txs.map(t => {
+                let statusBadge = t.is_settled ? '<span style="color: var(--success);">Settled</span>' : '<span style="color: var(--warning);">Pending</span>';
+                if (t.id_status && t.id_status.includes('Error')) statusBadge = '<span style="color: var(--danger);">Error</span>';
+                
+                return `
+                <tr>
+                    <td>${escapeHTML(t.payment_date ? t.payment_date.split('T')[0] : '-')}</td>
+                    <td>${escapeHTML(t.reference_number)}</td>
+                    <td>${escapeHTML(t.item_name)}</td>
+                    <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
+                    <td>${statusBadge}</td>
+                    <td style="text-align: right; font-weight: 500;">${parseFloat(t.item_price || 0).toLocaleString()}</td>
+                </tr>
+            `}).join('');
+
+            // Calculate Summary Grouped by Mapping
+            const summary = {};
+            let total = 0;
+            txs.forEach(t => {
+                const mapKey = t.mapping || 'Unmapped';
+                const amt = parseFloat(t.item_price || 0);
+                if (!summary[mapKey]) summary[mapKey] = 0;
+                summary[mapKey] += amt;
+                total += amt;
+            });
+
+            const summaryHtml = Object.keys(summary).sort().map(k => `
+                <tr>
+                    <td><strong>${escapeHTML(k)}</strong></td>
+                    <td style="text-align: right;">${summary[k].toLocaleString()}</td>
+                </tr>
+            `).join('');
+            
+            document.getElementById('student-summary-body').innerHTML = summaryHtml + `
+                <tr style="background-color: var(--bg-secondary);">
+                    <td><strong>Grand Total</strong></td>
+                    <td style="text-align: right; font-size: 1.1rem; font-weight: 700;">${total.toLocaleString()} EGP</td>
+                </tr>
+            `;
+
+        } catch (err) {
+            Toast.show('Error loading profile: ' + err.message, 'error');
+            document.getElementById('modal-student-profile').classList.add('hidden');
         }
     }
 
