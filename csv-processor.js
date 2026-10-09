@@ -292,7 +292,8 @@ export class FawryProcessor {
     async processLinks(item) {
         return new Promise((resolve) => {
             const processData = async (data) => {
-                const links = data.map(row => {
+                try {
+                    const links = data.map(row => {
                     return {
                         invoice_number: this.getVal(row, 'INVOICE NUMBER'),
                         customer_name: this.getVal(row, 'CUSTOMER NAME'),
@@ -358,7 +359,7 @@ export class FawryProcessor {
                 for (let i = 0; i < refs.length; i += 200) {
                     const chunkRefs = refs.slice(i, i + 200);
                     
-                    chunkPromises.push((async () => {
+                    chunkPromises.push(async () => {
                         const { data: existingTx } = await supabase.from('transactions').select('*').in('reference_number', chunkRefs);
                         if (existingTx && existingTx.length > 0) {
                             const { data: existingFixes } = await supabase.from('manual_fixes').select('*').in('reference_number', chunkRefs);
@@ -385,28 +386,34 @@ export class FawryProcessor {
                                     }
                                     
                                     if (tx.student_id !== newStudentId || tx.id_status !== newStatus) {
-                                        updates.push({
-                                            id: tx.id,
-                                            reference_number: tx.reference_number,
-                                            item_price: tx.item_price,
-                                            check_column: tx.check_column,
-                                            student_id: newStudentId,
-                                            id_status: newStatus
-                                        });
+                                        tx.student_id = newStudentId;
+                                        tx.id_status = newStatus;
+                                        updates.push(tx);
                                     }
                                 }
                             }
                             if (updates.length > 0) {
-                                await supabase.from('transactions').upsert(updates, { onConflict: 'id', ignoreDuplicates: false });
+                                await supabase.from('transactions').upsert(updates, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
                             }
                         }
-                    })());
+                    });
                 }
                 
                 // Execute in parallel batches of 5 to not overwhelm Supabase
                 const concurrencyLimit = 5;
                 for (let i = 0; i < chunkPromises.length; i += concurrencyLimit) {
-                    await Promise.all(chunkPromises.slice(i, i + concurrencyLimit));
+                    await Promise.all(chunkPromises.slice(i, i + concurrencyLimit).map(fn => fn()));
+                }
+                } catch (err) {
+                    await supabase.from('import_batches').insert({
+                        user_email: this.userEmail,
+                        file_name: item.file.name,
+                        status: 'failed',
+                        records_processed: data.length,
+                        records_inserted: 0,
+                        details: { type: 'links', error_message: err.message }
+                    });
+                    throw err;
                 }
                 
                 resolve();

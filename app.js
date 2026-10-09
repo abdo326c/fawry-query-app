@@ -49,7 +49,7 @@ function formatMoney(num) {
 // Shared utility: sanitize user input for Supabase .or() filter strings
 function sanitizeForFilter(str) {
     if (!str) return '';
-    return String(str).replace(/[,.)(%\\]/g, '');
+    return String(str).replace(/[,)(%\\]/g, '');
 }
 
 // Shared utility: standalone validateID (no need to instantiate FawryProcessor)
@@ -687,10 +687,18 @@ class App {
             document.getElementById('stat-total-collections').textContent = `EGP ${formatMoney(totalCollections)}`;
             
             // Fetch valid/error counts for the date range
-            const { count: validCount } = await supabase.from('transactions').select('*', { count: 'exact', head: true })
+            let validQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
                 .gte('payment_date', dateFrom).lte('payment_date', dateTo).eq('id_status', 'Valid');
-            const { count: totalCountAll } = await supabase.from('transactions').select('*', { count: 'exact', head: true })
+            let totalQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
                 .gte('payment_date', dateFrom).lte('payment_date', dateTo);
+                
+            if (selectedBanks.length > 0) {
+                validQuery = validQuery.in('bank', selectedBanks);
+                totalQuery = totalQuery.in('bank', selectedBanks);
+            }
+                
+            const { count: validCount } = await validQuery;
+            const { count: totalCountAll } = await totalQuery;
             
             document.getElementById('stat-total-transactions').textContent = (totalCountAll || 0).toLocaleString();
             
@@ -785,6 +793,10 @@ class App {
     initModals() {
         // Open Mapping Modal
         document.getElementById('btn-add-mapping').addEventListener('click', () => {
+            document.getElementById('map-original').value = '';
+            document.getElementById('map-category').value = '';
+            document.getElementById('map-second').value = '';
+            if (document.getElementById('mapping-suggestion')) document.getElementById('mapping-suggestion').style.display = 'none';
             document.getElementById('modal-mapping').classList.remove('hidden');
         });
 
@@ -819,6 +831,8 @@ class App {
 
         // Open Fix Modal
         document.getElementById('btn-add-fix').addEventListener('click', () => {
+            document.getElementById('fix-ref').value = '';
+            document.getElementById('fix-id').value = '';
             document.getElementById('modal-fix').classList.remove('hidden');
         });
 
@@ -1988,6 +2002,47 @@ class App {
             });
         });
 
+        document.getElementById('btn-export-students')?.addEventListener('click', async () => {
+            try {
+                Toast.show("Preparing export...", "info");
+                const btn = document.getElementById('btn-export-students');
+                const oldHtml = btn.innerHTML;
+                btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Exporting...';
+                btn.disabled = true;
+                if (window.lucide) lucide.createIcons();
+
+                let allData = [];
+                let fetchMore = true;
+                let from = 0;
+                while (fetchMore) {
+                    const { data, error } = await supabase.from('student_master').select('*').order('student_id').range(from, from + 999);
+                    if (error) throw error;
+                    if (!data || data.length === 0) break;
+                    allData = allData.concat(data);
+                    if (data.length < 1000) fetchMore = false;
+                    else from += 1000;
+                }
+                
+                const ws = XLSX.utils.json_to_sheet(allData);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Students");
+                XLSX.writeFile(wb, "Student_Master_Export.xlsx");
+                Toast.show("Export complete", "success");
+                
+                btn.innerHTML = oldHtml;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            } catch (err) {
+                Toast.show("Error exporting: " + err.message, "error");
+                const btn = document.getElementById('btn-export-students');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i data-lucide="download"></i> Export Master List';
+                    if (window.lucide) lucide.createIcons();
+                }
+            }
+        });
+
         const tbodyGlobal = document.getElementById('students-table-body');
         if (tbodyGlobal) {
             tbodyGlobal.addEventListener('click', async (e) => {
@@ -2321,7 +2376,7 @@ class App {
             let from = 0;
             let fetchMore = true;
             while(fetchMore) {
-                const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column').order('id').range(from, from + 999);
+                const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column, erp_batch_number, is_settled').order('id').range(from, from + 999);
                 if (error) throw error;
                 allData = allData.concat(data);
                 if (data.length < 1000) fetchMore = false;
@@ -2342,34 +2397,23 @@ class App {
             
             for (const [key, txs] of Object.entries(grouped)) {
                 if (txs.length > 1) {
-                    const hasUntrimmed = txs.some(t => String(t.item_name) !== String(t.item_name).trim());
-                    const hasTrimmed = txs.some(t => String(t.item_name) === String(t.item_name).trim());
+                    // Score rows: prefer settled and erp exported
+                    txs.sort((a, b) => {
+                        const aScore = (a.is_settled ? 100 : 0) + (a.erp_batch_number ? 50 : 0);
+                        const bScore = (b.is_settled ? 100 : 0) + (b.erp_batch_number ? 50 : 0);
+                        return bScore - aScore;
+                    });
                     
-                    if (hasUntrimmed && hasTrimmed) {
-                        const untrimmed = txs.find(t => String(t.item_name) !== String(t.item_name).trim());
-                        const trimmed = txs.find(t => String(t.item_name) === String(t.item_name).trim());
-                        toDeleteIds.push(untrimmed.id);
-                        
-                        duplicates.push({
-                            ref: txs[0].reference_number,
-                            name: txs[0].item_name,
-                            price: txs[0].item_price,
-                            trimmedCheck: trimmed.check_column,
-                            untrimmedCheck: untrimmed.check_column
-                        });
-                    } else {
-                        // Mark all but one for deletion
-                        for (let i = 1; i < txs.length; i++) {
-                            toDeleteIds.push(txs[i].id);
-                        }
-                        duplicates.push({
-                            ref: txs[0].reference_number,
-                            name: txs[0].item_name,
-                            price: txs[0].item_price,
-                            trimmedCheck: txs[0].check_column,
-                            untrimmedCheck: txs[1].check_column
-                        });
+                    for (let i = 1; i < txs.length; i++) {
+                        toDeleteIds.push(txs[i].id);
                     }
+                    duplicates.push({
+                        ref: txs[0].reference_number,
+                        name: txs[0].item_name,
+                        price: txs[0].item_price,
+                        trimmedCheck: txs[0].check_column,
+                        untrimmedCheck: txs[1].check_column
+                    });
                 }
             }
             
@@ -2613,19 +2657,25 @@ class App {
                 return;
             }
 
-            // Fetch Master List (Paginated to get all)
-            let students = [];
-            let fetchMoreStudents = true;
-            let sFrom = 0;
-            while(fetchMoreStudents) {
-                const { data, error } = await supabase.from('student_master').select('*').order('student_id').range(sFrom, sFrom + 999);
-                if (error) throw error;
-                students = students.concat(data || []);
-                if (!data || data.length < 1000) fetchMoreStudents = false;
-                else sFrom += 1000;
+                        // Fetch Master List safely without bulk PII download
+            const requiredMobiles = new Set();
+            const requiredIds = new Set();
+            const requiredEmails = new Set();
+
+            for (const tx of filteredTx) {
+                if (tx.customer_mobile) requiredMobiles.add(String(tx.customer_mobile).replace(/[^0-9]/g, '').slice(-10));
+                if (tx.student_id) {
+                    const tId = String(tx.student_id).trim();
+                    requiredIds.add(tId);
+                    if (tId.includes('@')) requiredEmails.add(tId.toLowerCase());
+                    else if (tId.replace(/[^0-9]/g, '').length >= 10) {
+                        requiredMobiles.add(tId.replace(/[^0-9]/g, '').slice(-10));
+                        requiredIds.add(tId.replace(/[^0-9]/g, ''));
+                    }
+                }
             }
             
-            // Fetch Links only for the current invalid transactions (not all links!)
+            // Get links first to extract their PII
             const invalidRefs = filteredTx.map(t => String(t.reference_number));
             let links = [];
             for (let i = 0; i < invalidRefs.length; i += 500) {
@@ -2634,6 +2684,56 @@ class App {
                 if (error) throw error;
                 if (data) links = links.concat(data);
             }
+            
+            for (const l of links) {
+                if (l.customer_national_id) requiredIds.add(String(l.customer_national_id).trim());
+                if (l.custom_input_value) requiredIds.add(String(l.custom_input_value).trim());
+                if (l.customer_mobile) requiredMobiles.add(String(l.customer_mobile).replace(/[^0-9]/g, '').slice(-10));
+                if (l.customer_email) requiredEmails.add(String(l.customer_email).toLowerCase().trim());
+            }
+
+            let nameStudents = [];
+            let fetchMoreStudents = true;
+            let sFrom = 0;
+            while(fetchMoreStudents) {
+                const { data, error } = await supabase.from('student_master').select('student_id, full_name').order('student_id').range(sFrom, sFrom + 999);
+                if (error) throw error;
+                nameStudents = nameStudents.concat(data || []);
+                if (!data || data.length < 1000) fetchMoreStudents = false;
+                else sFrom += 1000;
+            }
+
+            let students = [];
+            const idArr = Array.from(requiredIds);
+            for (let i = 0; i < idArr.length; i += 200) {
+                const chunk = idArr.slice(i, i+200);
+                const { data: d1 } = await supabase.from('student_master').select('*').in('student_id', chunk);
+                if (d1) students.push(...d1);
+                const { data: d2 } = await supabase.from('student_master').select('*').in('national_id', chunk);
+                if (d2) students.push(...d2);
+            }
+            
+            const emailArr = Array.from(requiredEmails);
+            for (let i = 0; i < emailArr.length; i += 200) {
+                const { data } = await supabase.from('student_master').select('*').in('email', emailArr.slice(i, i+200));
+                if (data) students.push(...data);
+            }
+
+            const mobileArr = Array.from(requiredMobiles);
+            for (let i = 0; i < mobileArr.length; i += 20) {
+                const chunk = mobileArr.slice(i, i+20);
+                const orFilters = chunk.map(m => \mobile.ilike.%\%,guardian_mobile.ilike.%\%\).join(',');
+                if (orFilters) {
+                    const { data } = await supabase.from('student_master').select('*').or(orFilters);
+                    if (data) students.push(...data);
+                }
+            }
+
+            // Deduplicate students
+            const uniqueStudents = new Map();
+            for (const s of nameStudents) uniqueStudents.set(s.student_id, s);
+            for (const s of students) uniqueStudents.set(s.student_id, s);
+            students = Array.from(uniqueStudents.values());
 
             // Build lookups
             const linksMap = {};
@@ -2658,7 +2758,9 @@ class App {
                 }
                 if (s.guardian_mobile) {
                     const clean = String(s.guardian_mobile).replace(/[^0-9]/g, '');
-                    if (clean.length >= 10) studentMobileMap.set(clean.slice(-10), s);
+                    if (clean.length >= 10 && !studentMobileMap.has(clean.slice(-10))) {
+                        studentMobileMap.set(clean.slice(-10), s);
+                    }
                 }
             });
 
@@ -2668,7 +2770,7 @@ class App {
                 nameFuse = new Fuse(students, {
                     keys: ['full_name'],
                     includeScore: true,
-                    threshold: 0.35 // Allows for typos, missing middle names, etc.
+                    threshold: 0.20 // Allows for typos, missing middle names, etc.
                 });
             }
 
@@ -2743,7 +2845,7 @@ class App {
                         if (results.length > 0) {
                             const bestMatch = results[0];
                             // 0.0 is perfect match, 0.35 is our threshold
-                            if (bestMatch.score < 0.35) {
+                            if (bestMatch.score < 0.20) {
                                 proposedStudent = bestMatch.item;
                                 const confidence = Math.round((1 - bestMatch.score) * 100);
                                 matchReason = `Fuzzy Name Match (Confidence: ${confidence}%): "${proposedStudent.full_name}"`;
@@ -2809,14 +2911,6 @@ class App {
                     html += `
                         <tr>
                             <td></td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
-                                <td></td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
                             <td>${escapeHTML(proposal.original_ref)}</td>
                             <td>${escapeHTML(proposal.original_date)}</td>
                             <td>${escapeHTML(proposal.original_mapping || '-')}</td>
@@ -2891,13 +2985,14 @@ class App {
                 // Batch up to 500 ids per request to avoid huge URLs
                 for (let i = 0; i < txIds.length; i += 500) {
                     const chunk = txIds.slice(i, i + 500);
-                    await supabase
+                    const { error } = await supabase
                         .from('transactions')
                         .update({ 
                             student_id: sid,
                             id_status: validateID(sid)
                         })
                         .in('id', chunk);
+                    if (error) throw error;
                 }
             }
 
@@ -2917,6 +3012,13 @@ class App {
             }
 
             Toast.show(`Successfully applied ${checkboxes.length} fixes!`, 'success');
+            
+            // Clear targeted state
+            this.targetedMatchRefs = [];
+            if (document.getElementById('automatcher-import-status')) {
+                document.getElementById('automatcher-import-status').innerText = '';
+            }
+
             this.runAutoMatcher();
             this.loadDashboard();
             this.loadTransactions();
@@ -3060,10 +3162,10 @@ class App {
                         // Helper: convert Excel date (serial number or Date object or string) to ISO string
                         const parseDate = (val) => {
                             if (!val) return null;
-                            if (val instanceof Date) return val.toISOString().split('T')[0];
+                            if (val instanceof Date) { const d = new Date(val.getTime() - val.getTimezoneOffset() * 60000); return d.toISOString().split('T')[0]; }
                             if (typeof val === 'number') {
                                 // Excel serial date: days since 1899-12-30
-                                const excelEpoch = new Date(1899, 11, 30);
+                                const excelEpoch = new Date(Date.UTC(1899, 11, 30));
                                 const d = new Date(excelEpoch.getTime() + val * 86400000);
                                 return d.toISOString().split('T')[0];
                             }
@@ -3073,7 +3175,7 @@ class App {
                             if (!val) return null;
                             if (val instanceof Date) return val.toISOString();
                             if (typeof val === 'number') {
-                                const excelEpoch = new Date(1899, 11, 30);
+                                const excelEpoch = new Date(Date.UTC(1899, 11, 30));
                                 const d = new Date(excelEpoch.getTime() + val * 86400000);
                                 return d.toISOString();
                             }
@@ -3103,6 +3205,17 @@ class App {
                                 if (insertErr) throw insertErr;
                             }
                             imported += chunk.length;
+                        }
+
+                        if (this.currentUser) {
+                            await supabase.from('import_batches').insert({
+                                user_email: this.currentUser.email,
+                                file_name: file.name,
+                                status: 'success',
+                                records_processed: upsertData.length,
+                                records_inserted: imported,
+                                details: { type: 'payment_links' }
+                            });
                         }
                         
                         Toast.show(`Imported ${imported} links successfully`, "success");
@@ -3624,6 +3737,7 @@ class App {
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+
 
 
 

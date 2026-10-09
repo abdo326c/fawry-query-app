@@ -56,15 +56,23 @@ class SettlementProcessor {
         if (window.lucide) lucide.createIcons();
         this.settlementData = [];
         this.reconciliationResults = [];
+        if (!this.processedFileNames) this.processedFileNames = new Set();
 
         try {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
+                if (this.processedFileNames.has(file.name)) {
+                    Toast.show(`File ${file.name} was already processed. Skipping.`, 'info');
+                    continue;
+                }
+                
                 if (file.name.endsWith('.zip')) {
                     await this.processZip(file);
+                    this.processedFileNames.add(file.name);
                 } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.xlsm')) {
                     if (!file.name.startsWith('~$')) {
                         await this.processExcel(file, file.name);
+                        this.processedFileNames.add(file.name);
                     }
                 }
             }
@@ -155,14 +163,18 @@ class SettlementProcessor {
                                 }
                             });
                             
-                            // Convert dates safely
-                            if (rowData['SETTLEMENT_DATE']) {
-                                // Sometimes Excel dates come as numbers
-                                if (typeof rowData['SETTLEMENT_DATE'] === 'number') {
-                                    const d = new Date(Math.round((rowData['SETTLEMENT_DATE'] - 25569) * 86400 * 1000));
-                                    rowData['SETTLEMENT_DATE'] = d.toISOString();
-                                }
+                            // Subtract refund from NETAMOUNT
+                            if (rowData['NETAMOUNT_REFUND']) {
+                                rowData['NETAMOUNT'] = (rowData['NETAMOUNT'] || 0) - rowData['NETAMOUNT_REFUND'];
                             }
+                            
+                            // Convert dates safely
+                            ['SETTLEMENT_DATE', 'TRXDATE'].forEach(dateCol => {
+                                if (rowData[dateCol] && typeof rowData[dateCol] === 'number') {
+                                    const d = new Date(Math.round((rowData[dateCol] - 25569) * 86400 * 1000));
+                                    rowData[dateCol] = d.toISOString();
+                                }
+                            });
 
                             this.settlementData.push(rowData);
                         }
