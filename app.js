@@ -2722,7 +2722,7 @@ class App {
             const mobileArr = Array.from(requiredMobiles);
             for (let i = 0; i < mobileArr.length; i += 20) {
                 const chunk = mobileArr.slice(i, i+20);
-                const orFilters = chunk.map(m => \mobile.ilike.%\%,guardian_mobile.ilike.%\%\).join(',');
+                const orFilters = chunk.map(m => `mobile.ilike.%${m}%,guardian_mobile.ilike.%${m}%`).join(',');
                 if (orFilters) {
                     const { data } = await supabase.from('student_master').select('*').or(orFilters);
                     if (data) students.push(...data);
