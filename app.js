@@ -39,6 +39,7 @@ function escapeHTML(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
+window.escapeHTML = escapeHTML;
 
 // Shared utility: format money
 function formatMoney(num) {
@@ -3574,7 +3575,7 @@ class App {
         btn.disabled = true;
 
         try {
-            const unexportedRows = this.erpData.filter(r => r.erp_batch_number == null);
+            const unexportedRows = this.erpData.filter(r => !r.erp_batch_number);
             const alreadyExported = this.erpData.length - unexportedRows.length;
             
             if (unexportedRows.length === 0) {
@@ -3605,6 +3606,10 @@ class App {
             Toast.show('Successfully saved ERP references', 'success');
             document.getElementById('erp-batch-number').value = '';
             document.getElementById('erp-voucher').value = '';
+            
+            // Reload ERP data to reflect saved references
+            await this.loadErpExport();
+
         } catch (err) {
             Toast.show('Error saving: ' + err.message, 'error');
         } finally {
