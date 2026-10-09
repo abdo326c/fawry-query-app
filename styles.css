@@ -587,6 +587,7 @@ select option {
 
 .data-table {
     width: 100%;
+    min-width: 1200px;
     border-collapse: separate;
     border-spacing: 0;
     text-align: left;
@@ -612,7 +613,6 @@ select option {
     padding: 0.75rem 1.25rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     font-size: 0.85rem;
-    white-space: nowrap;
 }
 
 .data-table tbody tr {
