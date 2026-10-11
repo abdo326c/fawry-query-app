@@ -3,6 +3,8 @@ import {
     validateID as sharedValidateID,
     applyBusinessRules,
     buildMappingLookup,
+    diffTransaction,
+    updateRuleFields,
     fetchAll,
     fetchByIn,
     escapeHTML
@@ -364,41 +366,34 @@ export class FawryProcessor {
                         this.log(`History Warning: Could not record links import history. ${batchError.message}`);
                     }
 
-                    // Re-enrich existing transactions with the new links (same rules as a normal import)
+                    // Re-enrich existing transactions with the new links (same rules as Re-apply Rules:
+                    // start from the original imported values, write only the rule columns)
                     this.log(`Re-enriching existing transactions with new links...`);
                     const linkLookup = new Map(uniqueLinks.map(l => [String(l.payment_reference_number), l]));
                     const fixesMap = new Map(this.fixes.map(f => [String(f.reference_number), f]));
                     const lookupMapping = buildMappingLookup(this.mappings);
 
-                    const existingTx = await fetchByIn('transactions', '*', 'reference_number', Array.from(linkLookup.keys()));
-                    const updates = [];
-                    for (const tx of existingTx) {
-                        const ref = String(tx.reference_number);
-                        const link = linkLookup.get(ref);
-                        if (!link || !link.custom_input_value) continue;
-                        const r = applyBusinessRules(
-                            { studentId: tx.student_id, itemName: tx.item_name },
-                            // Only the student ID is re-derived here; item name/mapping stay as they are.
-                            { link, fix: fixesMap.get(ref), lookupMapping: () => undefined }
-                        );
-                        if (tx.student_id !== r.studentId || tx.id_status !== r.idStatus) {
-                            updates.push({ ...tx, student_id: r.studentId, id_status: r.idStatus });
-                        }
-                    }
-
                     let enrichError = null;
-                    for (let i = 0; i < updates.length; i += 500) {
-                        const { error } = await supabase.from('transactions').upsert(updates.slice(i, i + 500), {
-                            onConflict: 'reference_number,item_price,check_column',
-                            ignoreDuplicates: false
-                        });
-                        if (error) {
-                            enrichError = error.message;
-                            this.log(`Error updating transactions with links: ${error.message}`);
-                            break;
+                    try {
+                        const existingTx = await fetchByIn('transactions', '*', 'reference_number', Array.from(linkLookup.keys()));
+                        const updates = [];
+                        let lockedSkipped = 0;
+                        for (const tx of existingTx) {
+                            const ref = String(tx.reference_number);
+                            const diff = diffTransaction(tx, { link: linkLookup.get(ref), fix: fixesMap.get(ref), lookupMapping });
+                            if (!diff.changed) continue;
+                            if (diff.locked) { lockedSkipped++; continue; }
+                            updates.push({ id: tx.id, fields: diff.fields });
                         }
+                        const updated = await updateRuleFields(updates);
+                        this.log(`Updated ${updated} existing transactions.`);
+                        if (lockedSkipped > 0) {
+                            this.log(`${lockedSkipped} settled/ERP-recorded transactions were left unchanged. Use "Re-apply Rules" to review them.`);
+                        }
+                    } catch (err) {
+                        enrichError = err.message;
+                        this.log(`Error updating transactions with links: ${err.message}`);
                     }
-                    if (!enrichError) this.log(`Updated student IDs on ${updates.length} existing transactions.`);
 
                     resolve(!lastError && !enrichError);
                 } catch (err) {
@@ -497,6 +492,8 @@ export class FawryProcessor {
                         reference_number: refNumber,
                         payment_date: paymentDate || null,
                         student_id: studentId,
+                        // Kept untouched so links/fixes can be undone later (see Re-apply Rules)
+                        original_student_id: studentId || null,
                         customer_mobile: mobileNum,
                         total_amount: totalAmount,
                         net_amount: netAmount,

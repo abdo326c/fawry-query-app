@@ -41,7 +41,7 @@ After deploying a new version, do a hard refresh (Ctrl+F5) so browsers don't kee
 
 ## Business rules (order of precedence)
 
-The importer, saving a fix or mapping, and **Re-apply Rules** all go through the same function (`applyBusinessRules` in `rules.js`):
+The importer, saving or deleting a fix or mapping, and **Re-apply Rules** all go through the same function (`applyBusinessRules` in `rules.js`). Re-applying always starts from the **originally imported** values (`original_student_id`, and the item name kept in `check_column`), so removing a link, fix or rule undoes it. Re-applies only write the rule columns (`student_id`, `item_name`, `mapping`, `second_mapping`, `id_status`) and never change settled or ERP-recorded transactions unless you tick them in the Re-apply preview.
 
 1. **Student ID:** taken from the customer name, then the payment link's custom input value, then the manual fix's Correct ID (last one wins). Spaces inside numeric IDs are removed.
 2. **Item name:** the original Fawry item name, replaced by the manual fix's Item Name if one is set.
@@ -51,6 +51,8 @@ The importer, saving a fix or mapping, and **Re-apply Rules** all go through the
 ERP credit per line = `item_price`. For NUADCB136 the importer already stores Net Amount there. For NUADIB64 it's the item's own price, so multi-item orders aren't over-credited.
 
 ## Database requirements
+
+**Upgrading to 2.1.0:** run `migrations/2.1.0_original_student_id.sql` in the Supabase SQL editor **before** deploying the new files. Imports fail until the `original_student_id` column exists.
 
 Upserts rely on these unique constraints:
 
@@ -63,7 +65,7 @@ Upserts rely on these unique constraints:
 | `payment_links` | `invoice_number` (recommended; the import still works without it, just slower) |
 | `student_master` | `student_id` (primary key) |
 
-Columns used on `transactions`: `id, reference_number, payment_date (date), student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, merchant_name, bank, check_column, file_name, batch_id, mapping, second_mapping, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher`.
+Columns used on `transactions`: `id, reference_number, payment_date (date), student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, merchant_name, bank, check_column, file_name, batch_id, mapping, second_mapping, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher`.
 
 Other tables used: `import_batches`, `audit_logs`.
 

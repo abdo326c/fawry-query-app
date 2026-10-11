@@ -5,8 +5,8 @@ import {
     fetchAll,
     fetchByIn,
     recomputeTransactions,
-    upsertTransactions,
-    applyBusinessRules,
+    updateRuleFields,
+    diffTransaction,
     buildMappingLookup,
     originalItemName,
     escapeHTML
@@ -782,11 +782,21 @@ class App {
         );
     }
 
-    // Re-applies all rules to the given rows and saves the ones that changed. Returns the number updated.
+    // Re-applies all rules to the given rows and saves the ones that changed (rule columns only).
+    // Settled / ERP-recorded rows are never changed here; they are counted in lockedSkipped and
+    // can be reviewed with "Re-apply Rules".
     async reapplyRulesTo(rows) {
-        const changed = await recomputeTransactions(rows);
-        if (changed.length > 0) await upsertTransactions(changed);
-        return changed.length;
+        const all = await recomputeTransactions(rows, { includeLocked: true });
+        const open = all.filter(c => !c.diff.locked);
+        const updated = open.length > 0 ? await updateRuleFields(open) : 0;
+        return { updated, lockedSkipped: all.length - open.length };
+    }
+
+    // Toast text for a reapplyRulesTo result
+    reapplySummary({ updated, lockedSkipped }) {
+        let msg = `${updated} transaction(s) updated.`;
+        if (lockedSkipped > 0) msg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged – review them with "Re-apply Rules".`;
+        return msg;
     }
 
     async recordBatch(fileName, type, processed, inserted, errorMessage) {
@@ -905,10 +915,10 @@ class App {
 
                 // Re-apply rules to every affected transaction (fetch everything first, then update)
                 const rows = await this.fetchTransactionsForItemNames([original], [...previouslyRenamedTo, adjusted]);
-                const updated = await this.reapplyRulesTo(rows);
+                const result = await this.reapplyRulesTo(rows);
 
                 this.mappingSuggestCache = null; // rules changed – reload suggestions next time
-                Toast.show(`Mapping saved. ${updated} transaction(s) updated.`, 'success');
+                Toast.show(`Mapping saved. ${this.reapplySummary(result)}`, 'success');
                 document.getElementById('modal-mapping').classList.add('hidden');
                 this.resetMappingModal();
                 this.loadMappings();
@@ -956,9 +966,9 @@ class App {
 
                 // Re-apply all rules to this reference's transactions (empty fields no longer wipe existing mappings)
                 const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
-                const updated = await this.reapplyRulesTo(rows);
+                const result = await this.reapplyRulesTo(rows);
 
-                Toast.show(`Manual fix saved. ${updated} transaction(s) updated.`, 'success');
+                Toast.show(`Manual fix saved. ${this.reapplySummary(result)}`, 'success');
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
                 this.loadFixes();
@@ -1035,11 +1045,11 @@ class App {
 
                     // Fetch ALL affected transactions first, then update (no paging while modifying)
                     const rows = await this.fetchTransactionsForItemNames(mappings.map(m => m.item_name), [...previouslyRenamedTo, ...mappings.map(m => m.adjusted_item_name)]);
-                    const updated = await this.reapplyRulesTo(rows);
+                    const result = await this.reapplyRulesTo(rows);
 
-                    await this.logAudit('Bulk Mappings Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: updated });
+                    await this.logAudit('Bulk Mappings Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: result.updated, locked_skipped: result.lockedSkipped });
                     this.mappingSuggestCache = null;
-                    Toast.show(`Uploaded ${inserted} item mappings and updated ${updated} transactions.`, 'success');
+                    Toast.show(`Uploaded ${inserted} item mappings. ${this.reapplySummary(result)}`, 'success');
                     this.loadMappings();
 
                 } else if (type === 'fixes') {
@@ -1081,10 +1091,10 @@ class App {
 
                     // Re-apply all rules to affected transactions (blank cells no longer wipe mappings)
                     const rows = await fetchByIn('transactions', '*', 'reference_number', fixesToProcess.map(f => f.reference_number));
-                    const updated = await this.reapplyRulesTo(rows);
+                    const result = await this.reapplyRulesTo(rows);
 
-                    await this.logAudit('Bulk Fixes Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: updated });
-                    Toast.show(`Uploaded ${inserted} manual fixes and updated ${updated} transactions.`, 'success');
+                    await this.logAudit('Bulk Fixes Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: result.updated, locked_skipped: result.lockedSkipped });
+                    Toast.show(`Uploaded ${inserted} manual fixes. ${this.reapplySummary(result)}`, 'success');
                     this.loadFixes();
                 }
 
@@ -1137,7 +1147,13 @@ class App {
     }
 
     initReapply() {
-        // Event listener for the main "Re-apply Rules" button
+        const modal = document.getElementById('modal-reapply-preview');
+        const tbody = document.getElementById('reapply-preview-table-body');
+        const selectAll = document.getElementById('reapply-select-all');
+        const summaryEl = document.getElementById('reapply-summary');
+        const fmt = v => (v === null || v === undefined || v === '') ? 'Empty' : String(v);
+
+        // Main "Re-apply Rules" button: compute a preview of every change
         document.getElementById('btn-reapply-rules').addEventListener('click', async () => {
             const btn = document.getElementById('btn-reapply-rules');
             const originalText = btn.innerHTML;
@@ -1145,106 +1161,65 @@ class App {
             btn.disabled = true;
 
             try {
-                const mappings = await fetchAll('item_mappings', '*', null, 'item_name');
-                const fixes = await fetchAll('manual_fixes', '*', null, 'reference_number');
-                const links = await fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number');
+                const [mappings, fixes, links] = await Promise.all([
+                    fetchAll('item_mappings', '*', null, 'item_name'),
+                    fetchAll('manual_fixes', '*', null, 'reference_number'),
+                    fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number')
+                ]);
 
-                // Build hash maps for O(1) lookups
                 const fixesMap = new Map(fixes.map(f => [String(f.reference_number), f]));
                 const linksMap = new Map(links.map(l => [String(l.payment_reference_number), l]));
                 const lookupMapping = buildMappingLookup(mappings);
 
-                window.reapplyProposals = [];
-
                 // Fetch every transaction (sequential pages – a failed page stops the run instead of being skipped)
                 const txs = await fetchAll('transactions', '*', null, 'id');
 
+                // Same pure function as import / fix save / mapping save: starts from the ORIGINAL
+                // imported ID and item name, so removed links, fixes and rules are undone too.
+                const proposals = [];
                 for (const tx of txs) {
                     const ref = String(tx.reference_number);
-                    const link = linksMap.get(ref);
-                    const fix = fixesMap.get(ref);
-                    const r = applyBusinessRules(
-                        { studentId: tx.student_id, itemName: originalItemName(tx) },
-                        { link, fix, lookupMapping }
-                    );
-
-                    const oldMapping = tx.mapping || null;
-                    const oldSecond = tx.second_mapping || null;
-                    if (tx.student_id === r.studentId && tx.item_name === r.itemName && oldMapping === r.mapping &&
-                        oldSecond === r.secondMapping && tx.id_status === r.idStatus) {
-                        continue;
-                    }
-
-                    const reasons = [];
-                    if (link && link.custom_input_value) reasons.push('Student Link');
-                    if (lookupMapping(fix && fix.item_name ? fix.item_name : originalItemName(tx))) reasons.push('Mapping Rule');
-                    if (fix) reasons.push('Manual Fix');
-
-                    const oldValues = [];
-                    const newValues = [];
-                    const changeType = [];
-                    if (tx.student_id !== r.studentId) {
-                        changeType.push('ID');
-                        oldValues.push(tx.student_id || 'Empty');
-                        newValues.push(r.studentId || 'Empty');
-                    }
-                    if (tx.item_name !== r.itemName) {
-                        changeType.push('Item Name');
-                        oldValues.push(tx.item_name || 'Empty');
-                        newValues.push(r.itemName || 'Empty');
-                    }
-                    if (oldMapping !== r.mapping) {
-                        changeType.push('Mapping');
-                        oldValues.push(oldMapping || 'Empty');
-                        newValues.push(r.mapping || 'Empty');
-                    }
-                    if (oldSecond !== r.secondMapping) {
-                        changeType.push('2nd Mapping');
-                        oldValues.push(oldSecond || 'Empty');
-                        newValues.push(r.secondMapping || 'Empty');
-                    }
-                    if (tx.id_status !== r.idStatus && tx.student_id === r.studentId) {
-                        changeType.push('Status');
-                        oldValues.push(tx.id_status || 'Empty');
-                        newValues.push(r.idStatus || 'Empty');
-                    }
-
-                    window.reapplyProposals.push({
-                        originalTx: tx,
-                        updatedTx: {
-                            ...tx,
-                            student_id: r.studentId,
-                            item_name: r.itemName,
-                            mapping: r.mapping,
-                            second_mapping: r.secondMapping,
-                            id_status: r.idStatus
-                        },
-                        changeType: changeType.join(', '),
-                        oldStr: oldValues.join(', '),
-                        newStr: newValues.join(', '),
-                        reason: reasons.join(' + ') || 'Status Re-validation'
-                    });
+                    const diff = diffTransaction(tx, { link: linksMap.get(ref), fix: fixesMap.get(ref), lookupMapping });
+                    if (diff.changed) proposals.push({ tx, diff });
                 }
+                window.reapplyProposals = proposals;
 
-                if (window.reapplyProposals.length === 0) {
+                if (proposals.length === 0) {
                     Toast.show('No rules need to be applied. Everything is up to date!', 'info');
-                } else {
-                    // Populate modal
-                    const tbody = document.getElementById('reapply-preview-table-body');
-                    tbody.innerHTML = window.reapplyProposals.map((prop, idx) => `
-                        <tr>
-                            <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" checked></td>
-                            <td>${escapeHTML(prop.originalTx.reference_number || '')}</td>
-                            <td><span class="badge" style="background: rgba(0, 229, 255, 0.1); color: var(--primary-color);">${escapeHTML(prop.changeType || '')}</span></td>
-                            <td style="color: var(--text-muted); text-decoration: line-through;">${escapeHTML(prop.oldStr || '')}</td>
-                            <td style="color: var(--success-color); font-weight: 500;">${escapeHTML(prop.newStr || '')}</td>
-                            <td style="font-size: 0.85rem; color: var(--text-muted);">${escapeHTML(prop.reason || '')}</td>
-                        </tr>
-                    `).join('');
-                    
-                    document.getElementById('modal-reapply-preview').classList.remove('hidden');
-                    if (window.lucide) lucide.createIcons();
+                    return;
                 }
+
+                const lockedCount = proposals.filter(p => p.diff.locked).length;
+                if (summaryEl) {
+                    summaryEl.textContent = `${proposals.length} transaction(s) would change.` +
+                        (lockedCount > 0 ? ` ${lockedCount} of them are settled or already recorded in ERP and are not selected by default – changing them does not change what was already posted to ERP.` : '');
+                }
+
+                tbody.innerHTML = proposals.map((p, idx) => {
+                    const { tx, diff } = p;
+                    const lockBadge = diff.locked
+                        ? ` <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: var(--warning, #f59e0b);">${tx.erp_batch_number ? 'In ERP' : 'Settled'}</span>`
+                        : '';
+                    return `
+                        <tr>
+                            <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" ${diff.locked ? '' : 'checked'}></td>
+                            <td>${escapeHTML(tx.reference_number || '')}${lockBadge}</td>
+                            <td><span class="badge" style="background: rgba(0, 229, 255, 0.1); color: var(--primary-color);">${escapeHTML(diff.changes.map(c => c.label).join(', '))}</span></td>
+                            <td style="color: var(--text-muted); text-decoration: line-through;">${escapeHTML(diff.changes.map(c => fmt(c.from)).join(', '))}</td>
+                            <td style="color: var(--success-color); font-weight: 500;">${escapeHTML(diff.changes.map(c => fmt(c.to)).join(', '))}</td>
+                            <td style="font-size: 0.85rem; color: var(--text-muted);">${escapeHTML(diff.reasons.join(' + '))}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                // "Select all" reflects the rows as rendered (locked rows start unticked)
+                if (selectAll) {
+                    selectAll.checked = lockedCount === 0;
+                    selectAll.indeterminate = lockedCount > 0 && lockedCount < proposals.length;
+                }
+
+                modal.classList.remove('hidden');
+                if (window.lucide) lucide.createIcons();
 
             } catch (err) {
                 Toast.show('Error computing rules: ' + err.message, 'error');
@@ -1255,46 +1230,51 @@ class App {
             }
         });
 
-        // Event listener for "Select All" checkbox
-        document.getElementById('reapply-select-all')?.addEventListener('change', (e) => {
-            const checkboxes = document.querySelectorAll('.reapply-checkbox');
-            checkboxes.forEach(cb => cb.checked = e.target.checked);
+        // "Select All" checkbox
+        selectAll?.addEventListener('change', (e) => {
+            e.target.indeterminate = false;
+            document.querySelectorAll('.reapply-checkbox').forEach(cb => cb.checked = e.target.checked);
         });
 
-        // Event listener for the "Apply Selected" button in the modal
+        // "Apply Selected" button: writes only the rule columns of the selected rows
         document.getElementById('btn-apply-reapply-fixes')?.addEventListener('click', async () => {
             const btn = document.getElementById('btn-apply-reapply-fixes');
             const originalText = btn.innerHTML;
+
+            const selected = Array.from(document.querySelectorAll('.reapply-checkbox:checked'))
+                .map(cb => (window.reapplyProposals || [])[parseInt(cb.getAttribute('data-index'), 10)])
+                .filter(Boolean);
+
+            if (selected.length === 0) {
+                Toast.show('No transactions selected.', 'info');
+                modal.classList.add('hidden');
+                return;
+            }
+
+            const lockedSelected = selected.filter(p => p.diff.locked).length;
+            if (lockedSelected > 0) {
+                const ok = await window.customConfirm(
+                    `${lockedSelected} of the selected transactions are settled or already recorded in ERP. Changing them here will NOT change what was already posted to ERP. Continue?`,
+                    'Apply Anyway', 'Cancel');
+                if (!ok) return;
+            }
+
             btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Applying...';
             btn.disabled = true;
-
             try {
-                const checkboxes = document.querySelectorAll('.reapply-checkbox:checked');
-                const selectedTxs = Array.from(checkboxes).map(cb => {
-                    const idx = parseInt(cb.getAttribute('data-index'));
-                    return window.reapplyProposals[idx].updatedTx;
+                const updatedCount = await updateRuleFields(selected.map(p => ({ id: p.tx.id, fields: p.diff.fields })));
+
+                await this.logAudit('Rules Re-applied', `Batch of ${updatedCount} transactions`, {
+                    count: updatedCount,
+                    locked_included: lockedSelected
                 });
 
-                if (selectedTxs.length === 0) {
-                    Toast.show("No transactions selected.", "info");
-                    document.getElementById('modal-reapply-preview').classList.add('hidden');
-                    return;
-                }
-
-                // Chunk upserts
-                let updatedCount = 0;
-                for (let i = 0; i < selectedTxs.length; i += 1000) {
-                    const chunk = selectedTxs.slice(i, i + 1000);
-                    const { error } = await supabase.from('transactions').upsert(chunk, { onConflict: 'reference_number,item_price,check_column', ignoreDuplicates: false });
-                    if (error) throw error;
-                    updatedCount += chunk.length;
-                }
-
                 Toast.show(`Successfully updated ${updatedCount} transactions!`, 'success');
-                document.getElementById('modal-reapply-preview').classList.add('hidden');
+                modal.classList.add('hidden');
+                window.reapplyProposals = [];
                 this.loadTransactions();
 
-            } catch(err) {
+            } catch (err) {
                 Toast.show('Error applying rules: ' + err.message, 'error');
             } finally {
                 btn.innerHTML = originalText;
@@ -1303,6 +1283,7 @@ class App {
             }
         });
     }
+
 
     initFilters() {
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
@@ -1855,11 +1836,25 @@ class App {
                 btn.addEventListener('click', async () => {
                     const itemName = btn.getAttribute('data-delete-mapping');
                     if (!await window.customConfirm(`Delete mapping for "${itemName}"?`, 'Delete', 'Cancel')) return;
-                    const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
-                    if (error) Toast.show('Error deleting mapping: ' + error.message, 'error');
-                    else {
-                        Toast.show('Mapping deleted', 'success');
+                    btn.disabled = true;
+                    try {
+                        // Remember what the rule renamed items to, so those transactions can be found afterwards
+                        const previouslyRenamedTo = await this.getCurrentAdjustedNames([itemName]);
+                        const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
+                        if (error) throw error;
+
+                        await this.logAudit('Mapping Deleted', itemName, { item_name: itemName });
+
+                        // Undo the rule on affected transactions (item name and mappings go back to their original values)
+                        const rows = await this.fetchTransactionsForItemNames([itemName], previouslyRenamedTo);
+                        const result = await this.reapplyRulesTo(rows);
+
+                        this.mappingSuggestCache = null;
+                        Toast.show(`Mapping deleted. ${this.reapplySummary(result)}`, 'success');
                         this.loadMappings();
+                    } catch (err) {
+                        Toast.show('Error deleting mapping: ' + err.message, 'error');
+                        btn.disabled = false;
                     }
                 });
             });
@@ -1918,11 +1913,22 @@ class App {
                 btn.addEventListener('click', async () => {
                     const ref = btn.getAttribute('data-delete-fix');
                     if (!await window.customConfirm(`Delete fix for reference "${ref}"?`, 'Delete', 'Cancel')) return;
-                    const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
-                    if (error) Toast.show('Error deleting fix: ' + error.message, 'error');
-                    else {
-                        Toast.show('Fix deleted', 'success');
+                    btn.disabled = true;
+                    try {
+                        const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
+                        if (error) throw error;
+
+                        await this.logAudit('Manual Fix Deleted', ref, { reference_number: ref });
+
+                        // Undo the fix on this reference's transactions (ID, item name and mappings re-derived from the originals)
+                        const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
+                        const result = await this.reapplyRulesTo(rows);
+
+                        Toast.show(`Fix deleted. ${this.reapplySummary(result)}`, 'success');
                         this.loadFixes();
+                    } catch (err) {
+                        Toast.show('Error deleting fix: ' + err.message, 'error');
+                        btn.disabled = false;
                     }
                 });
             });

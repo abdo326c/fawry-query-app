@@ -27,7 +27,7 @@
             console.error("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
-    <link rel="stylesheet" href="styles.css?v=2.0.0">
+    <link rel="stylesheet" href="styles.css?v=2.1.0">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@0.294.0"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -39,7 +39,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
     <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" id="flatpickr-theme">
     <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
-    <script src="settlement.js?v=2.0.0"></script>
+    <script src="settlement.js?v=2.1.0"></script>
 </head>
 <body>
     <!-- Toast Container -->
@@ -1035,7 +1035,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.0.0"></script>
+    <script type="module" src="app.js?v=2.1.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">
         <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
@@ -1045,8 +1045,9 @@
             </div>
             <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 0;">
                 <p style="margin-bottom: 1rem; padding: 0 1.5rem; color: var(--text-muted);">
-                    The following transactions will be updated based on the latest mappings, links, and manual fixes. Please review and select the changes you want to apply.
+                    The following transactions will be updated based on the latest mappings, links, and manual fixes. Values are re-derived from the originally imported data, so removed links, fixes and rules are undone too. Please review and select the changes you want to apply.
                 </p>
+                <p id="reapply-summary" style="margin-bottom: 1rem; padding: 0 1.5rem; font-weight: 500;"></p>
                 <div class="table-container" style="margin: 0 1.5rem;">
                     <table class="data-table" id="reapply-preview-table">
                         <thead>
@@ -1054,7 +1055,8 @@
                                 <th style="width: 40px;"><input type="checkbox" id="reapply-select-all" checked></th>
                                 <th>Ref Number</th>
                                 <th>Change Type</th>
-                                <th>Old Value <i data-lucide="arrow-right" style="width: 14px; height: 14px; margin-left: 4px; vertical-align: middle;"></i> New Value</th>
+                                <th>Old Value</th>
+                                <th>New Value</th>
                                 <th>Reason</th>
                             </tr>
                         </thead>
