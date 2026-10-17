@@ -78,6 +78,28 @@ export class FawryProcessor {
         console.log(msg);
     }
 
+    setStep(step) {
+        const s1 = document.getElementById('import-step-1');
+        const s2 = document.getElementById('import-step-2');
+        const s3 = document.getElementById('import-step-3');
+        if (!s1 || !s2 || !s3) return;
+        [s1, s2, s3].forEach(s => s.classList.remove('active', 'done'));
+        if (step === 1) {
+            s1.classList.add('active');
+        } else if (step === 2) {
+            s1.classList.add('done');
+            s2.classList.add('active');
+        } else if (step === 3) {
+            s1.classList.add('done');
+            s2.classList.add('done');
+            s3.classList.add('active');
+        } else if (step >= 4) {
+            s1.classList.add('done');
+            s2.classList.add('done');
+            s3.classList.add('done');
+        }
+    }
+
     getVal(row, keyStr) {
         const exact = row[keyStr];
         if (exact !== undefined && exact !== "") return exact;
@@ -229,6 +251,7 @@ export class FawryProcessor {
     }
 
     async processFiles(files) {
+        this.setStep(1);
         this.log(`Starting import for ${files.length} files...`);
         this.hasErrors = false;
         this.skippedTransactions = [];
@@ -308,6 +331,7 @@ export class FawryProcessor {
             this.log(`Import failed or finished with errors. Please check the logs above.`);
             return false;
         } else {
+            this.setStep(4);
             this.log(`Import completed successfully!`);
             return true;
         }
@@ -573,6 +597,7 @@ export class FawryProcessor {
         const lookupMapping = buildMappingLookup(this.mappings);
 
         // 2. Apply links, manual fixes and mappings (shared rules – same as "Re-apply Rules")
+        this.setStep(2);
         for (const t of transactions) {
             const ref = String(t.reference_number);
             const r = applyBusinessRules(
@@ -602,7 +627,8 @@ export class FawryProcessor {
             return false;
         }
 
-        // 4. Register the import batch
+        // 4. Register the import batch and save to database
+        this.setStep(3);
         this.log(`Registering import batch...`);
         const { data: batchData, error: batchInitError } = await supabase.from('import_batches').insert({
             user_email: this.userEmail,

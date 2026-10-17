@@ -81,6 +81,7 @@
             </button>
         </div>
 
+        <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
         <aside class="sidebar">
             <button id="btn-close-sidebar" class="btn-icon" style="display: none; position: absolute; right: 10px; top: 10px;">
                 <i data-lucide="x" style="width: 24px; height: 24px;"></i>
@@ -112,6 +113,7 @@
                 </a>
                 <a href="#automatcher" class="nav-link" data-tab="automatcher">
                     <i data-lucide="zap"></i> Auto-Matcher
+                    <span id="sidebar-automatch-badge" class="nav-badge" style="display: none;">0</span>
                 </a>
                 <a href="#student-master" class="nav-link" data-tab="student-master">
                     <i data-lucide="users"></i> Students Details
@@ -311,6 +313,8 @@
                     </div>
                 </div>
                 
+                <div id="transactions-filter-chips" class="filter-chips"></div>
+
                 <div class="table-container glass-card">
                     <table class="data-table" id="transactions-table">
                         <thead>
@@ -400,6 +404,14 @@
             <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1.5rem;">
                 
                 
+                <div class="import-steps" id="import-stepper" style="margin-bottom: 1.5rem;">
+                    <div class="import-step" id="import-step-1"><i data-lucide="file-text" style="width: 16px; height: 16px;"></i><span>1. Parse Files</span></div>
+                    <div class="import-step-divider"></div>
+                    <div class="import-step" id="import-step-2"><i data-lucide="git-merge" style="width: 16px; height: 16px;"></i><span>2. Apply Rules & Links</span></div>
+                    <div class="import-step-divider"></div>
+                    <div class="import-step" id="import-step-3"><i data-lucide="database" style="width: 16px; height: 16px;"></i><span>3. Save to Database</span></div>
+                </div>
+                
                 <div class="glass-card upload-container">
                     <div class="upload-zone" id="drop-zone">
                         <i data-lucide="upload" class="upload-icon"></i>
@@ -416,6 +428,9 @@
                         </div>
                         <p id="progress-text">0 / 0 rows processed</p>
                         <div id="import-log" class="log-console mt-4"></div>
+                        <div id="import-action-bar" style="margin-top: 1.5rem; display: none; justify-content: flex-end;">
+                            <button class="btn btn-primary" id="btn-import-done"><i data-lucide="check-circle" style="width: 16px; height: 16px; margin-right: 6px;"></i> Done / View Transactions</button>
+                        </div>
                     </div>
                 </div>
             
@@ -735,6 +750,8 @@
                             </div>
                         </div>
                         
+                        <div id="automatch-filter-chips" class="filter-chips"></div>
+
                         <div class="table-container">
                             <table class="data-table" id="automatcher-table">
                                 <thead>
@@ -836,7 +853,7 @@
             <div class="pagination">
                 <button class="btn btn-outline" id="btn-links-prev" disabled>Previous</button>
                 <span id="links-page-info">Page 1</span>
-                <button class="btn btn-outline" id="btn-links-next">Next</button>
+                <button class="btn btn-outline" id="btn-links-next" disabled>Next</button>
             </div>
         </section>
 
@@ -1229,6 +1246,22 @@
             </div>
         </div>
     </div>
+    <!-- Global Command / Search Palette (Ctrl+K) -->
+    <div id="global-search-overlay" class="search-overlay">
+        <div class="search-box">
+            <div style="display: flex; align-items: center; gap: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+                <i data-lucide="search" style="width: 20px; height: 20px; color: var(--text-muted); flex-shrink: 0;"></i>
+                <input type="text" id="global-search-input" placeholder="Search Reference Number or Student ID..." autocomplete="off">
+                <span class="search-shortcut">ESC</span>
+            </div>
+            <div id="global-search-results" class="search-results">
+                <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                    Type at least 2 characters to search across transactions and students.
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         lucide.createIcons();
     </script>

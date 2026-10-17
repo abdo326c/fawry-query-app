@@ -99,6 +99,7 @@ class App {
         this.automatchDistinctMappings = [];
         this.automatchDistinctItems = [];
         this.invalidTx = [];
+        this.currentProfileStudent = null;
         
         this.isImporting = false;
         this.initTheme();
@@ -106,6 +107,8 @@ class App {
         this.fetchUniqueFilters();
 
         this.initNavigation();
+        this.initGlobalSearch();
+        this.updateSidebarBadges();
         this.setupPrintButton();
         this.initImport();
         this.initModals();
@@ -188,6 +191,7 @@ class App {
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
         this.loadTransactions();
+        this.updateSidebarBadges();
         // ERP Export data is loaded when that tab is opened (see initNavigation)
         this.initRealtime();
     }
@@ -217,6 +221,7 @@ class App {
                                 this.loadErpExport();
                             }
                         }
+                        this.updateSidebarBadges();
                     }, 2000); // Wait 2s after last event before refreshing
                 }
             )
@@ -297,26 +302,54 @@ class App {
         const btnMobileMenu = document.getElementById('btn-mobile-menu');
         const btnCloseSidebar = document.getElementById('btn-close-sidebar');
         const sidebar = document.querySelector('.sidebar');
+        const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+
+        const openSidebar = () => {
+            sidebar?.classList.add('open');
+            sidebarBackdrop?.classList.add('active');
+        };
+
+        const closeSidebar = () => {
+            sidebar?.classList.remove('open');
+            sidebarBackdrop?.classList.remove('active');
+        };
 
         if (btnMobileMenu) {
-            btnMobileMenu.addEventListener('click', () => {
-                sidebar.classList.add('open');
-            });
+            btnMobileMenu.addEventListener('click', openSidebar);
         }
         
         if (btnCloseSidebar) {
-            btnCloseSidebar.addEventListener('click', () => {
-                sidebar.classList.remove('open');
-            });
+            btnCloseSidebar.addEventListener('click', closeSidebar);
         }
 
-        
+        if (sidebarBackdrop) {
+            sidebarBackdrop.addEventListener('click', closeSidebar);
+        }
+
         const btnShowImport = document.getElementById('btn-show-import');
         if (btnShowImport) {
             btnShowImport.addEventListener('click', () => {
-                document.getElementById('modal-import').classList.remove('hidden');
+                document.getElementById('modal-import')?.classList.remove('hidden');
+                document.getElementById('import-progress')?.classList.add('hidden');
+                const actionBar = document.getElementById('import-action-bar');
+                if (actionBar) actionBar.style.display = 'none';
+                const s1 = document.getElementById('import-step-1');
+                const s2 = document.getElementById('import-step-2');
+                const s3 = document.getElementById('import-step-3');
+                if (s1 && s2 && s3) {
+                    [s1, s2, s3].forEach(s => s.classList.remove('active', 'done'));
+                    s1.classList.add('active');
+                }
             });
         }
+
+        document.getElementById('btn-import-done')?.addEventListener('click', () => {
+            document.getElementById('modal-import')?.classList.add('hidden');
+            document.getElementById('import-progress')?.classList.add('hidden');
+            document.querySelector('.nav-link[data-tab="transactions"]')?.click();
+            this.loadTransactions();
+            this.updateSidebarBadges();
+        });
         
         const btnShowHistory = document.getElementById('btn-show-history');
         if (btnShowHistory) {
@@ -337,9 +370,7 @@ class App {
                 link.classList.add('active');
                 
                 // Close sidebar on mobile after clicking
-                if (window.innerWidth <= 768) {
-                    sidebar.classList.remove('open');
-                }
+                closeSidebar();
                 
                 // Show view
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -703,6 +734,7 @@ class App {
             
             document.getElementById('stat-valid-pct').textContent = `${validPct}%`;
             document.getElementById('stat-errors').textContent = errorCount.toLocaleString();
+            this.updateSidebarBadges();
             
             if (window.lucide) lucide.createIcons();
 
@@ -767,24 +799,38 @@ class App {
                     summary[statusName] = (summary[statusName] || 0) + 1;
                 });
                 
-                let msg = `IMPORTANT: Skipped ${processor.skippedTransactions.length} transactions due to invalid Payment Status.\n\nSummary:\n`;
+                let skippedHtml = `
+                    <div class="alert alert-warning" style="margin-top: 1rem; border-radius: 8px; padding: 1rem; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); color: #f59e0b;">
+                        <strong>⚠️ Notice: Skipped ${processor.skippedTransactions.length} transaction(s) with non-payable status:</strong>
+                        <ul style="margin: 0.5rem 0 0 1.25rem; font-size: 0.85rem;">
+                `;
                 for (const [status, count] of Object.entries(summary)) {
-                    msg += `- ${status}: ${count} transaction(s)\n`;
+                    skippedHtml += `<li><strong>${escapeHTML(status)}:</strong> ${count} transaction(s)</li>`;
                 }
-                msg += `\nThese transactions were NOT imported.`;
+                skippedHtml += `
+                        </ul>
+                        <div style="font-size: 0.8rem; margin-top: 0.5rem; opacity: 0.9;">These transactions were not imported because only paid transactions are recorded.</div>
+                    </div>
+                `;
                 
-                // Force the user to acknowledge
-                alert(msg);
+                const logEl = document.getElementById('import-log');
+                if (logEl) {
+                    logEl.innerHTML += skippedHtml;
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+            }
+
+            this.invalidateDistinctCache();
+            this.updateSidebarBadges();
+
+            const actionBar = document.getElementById('import-action-bar');
+            if (actionBar) {
+                actionBar.style.display = 'flex';
+                if (window.lucide) lucide.createIcons({ root: actionBar });
             }
 
             if (success) {
-                this.invalidateDistinctCache();
-                // Auto-switch back to transactions tab after 1.5 seconds
-                setTimeout(() => {
-                    document.getElementById('import-progress').classList.add('hidden');
-                    document.querySelector('.nav-link[data-tab="transactions"]').click();
-                    this.loadTransactions();
-                }, 1500);
+                Toast.show("Import completed successfully!", "success");
             } else {
                 Toast.show("Import finished with errors. Please review the log.", "error");
             }
@@ -1369,6 +1415,7 @@ class App {
     initFilters() {
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             this.currentPage = 1;
+            this.renderFilterChips('transactions');
             this.loadTransactions();
         });
         document.getElementById('btn-clear-filters').addEventListener('click', () => {
@@ -1378,6 +1425,7 @@ class App {
             this.headerFilters.transactions = {};
             document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.currentPage = 1;
+            this.renderFilterChips('transactions');
             this.loadTransactions();
         });
 
@@ -1389,6 +1437,7 @@ class App {
             if (toggle) toggle.checked = false;
             this.headerFilters.automatch = {};
             document.querySelectorAll('[data-table="automatch"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
+            this.renderFilterChips('automatch');
             this.runAutoMatcher();
         });
 
@@ -1593,9 +1642,10 @@ class App {
 
         btnClear.addEventListener('click', () => {
             if (!currentWrapper) return;
-            this.headerFilters[currentTable][currentColumn] = [];
+            delete this.headerFilters[currentTable][currentColumn];
             currentWrapper.querySelector('.header-filter-icon').classList.remove('active');
             closePopover();
+            this.renderFilterChips(currentTable);
             if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
             else { this.runAutoMatcher(); }
         });
@@ -1603,12 +1653,16 @@ class App {
         btnApply.addEventListener('click', () => {
             if (!currentWrapper) return;
             const checked = Array.from(listContainer.querySelectorAll('input:checked')).map(cb => cb.value);
-            this.headerFilters[currentTable][currentColumn] = checked;
-            
-            if (checked.length > 0) currentWrapper.querySelector('.header-filter-icon').classList.add('active');
-            else currentWrapper.querySelector('.header-filter-icon').classList.remove('active');
+            if (checked.length > 0) {
+                this.headerFilters[currentTable][currentColumn] = checked;
+                currentWrapper.querySelector('.header-filter-icon').classList.add('active');
+            } else {
+                delete this.headerFilters[currentTable][currentColumn];
+                currentWrapper.querySelector('.header-filter-icon').classList.remove('active');
+            }
             
             closePopover();
+            this.renderFilterChips(currentTable);
             if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
             else { this.runAutoMatcher(); }
         });
@@ -1821,6 +1875,7 @@ class App {
     }
 
     async loadTransactions() {
+        this.renderFilterChips('transactions');
         const requestId = (this.txRequestId = (this.txRequestId || 0) + 1);
         const tbody = document.getElementById('transactions-body');
         tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(10) + '</tr>').join('');
@@ -3296,6 +3351,7 @@ class App {
     }
 
     renderAutoMatcherPage() {
+        this.renderFilterChips('automatch');
         const tbody = document.getElementById('automatcher-table-body');
         if (!tbody) return;
         const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -3534,6 +3590,7 @@ class App {
             this.runAutoMatcher();
             this.loadDashboard();
             this.loadTransactions();
+            this.updateSidebarBadges();
         } catch (err) {
             Toast.show('Error applying fixes: ' + err.message, 'error');
         } finally {
@@ -3803,6 +3860,11 @@ class App {
         const tbody = document.getElementById('links-table-body');
         if (!tbody) return;
         
+        const btnPrev = document.getElementById('btn-links-prev');
+        const btnNext = document.getElementById('btn-links-next');
+        if (btnPrev) btnPrev.disabled = true;
+        if (btnNext) btnNext.disabled = true;
+
         tbody.innerHTML = '<tr><td colspan="6" class="loading-state"><i data-lucide="loader" class="spin"></i> Loading links...</td></tr>';
         if (window.lucide) lucide.createIcons();
 
@@ -3811,7 +3873,12 @@ class App {
             
             if (this.paymentLinksSearch) {
                 const safe = sanitizeForFilter(this.paymentLinksSearch);
-                query = query.or(`name.ilike.%${safe}%,invoice_number.ilike.%${safe}%`);
+                let orFilters = `name.ilike.%${safe}%,invoice_number.ilike.%${safe}%`;
+                const num = parseFloat(this.paymentLinksSearch.replace(/,/g, ''));
+                if (!isNaN(num) && isFinite(num)) {
+                    orFilters += `,amount.eq.${num}`;
+                }
+                query = query.or(orFilters);
             }
             
             const from = (this.paymentLinksPage - 1) * this.pageSize;
@@ -3824,26 +3891,13 @@ class App {
             
             if (!data || data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No payment links found</td></tr>';
-                document.getElementById('btn-links-prev').disabled = true;
-                document.getElementById('btn-links-next').disabled = true;
+                if (btnPrev) btnPrev.disabled = true;
+                if (btnNext) btnNext.disabled = true;
                 document.getElementById('links-page-info').textContent = 'Page 1 of 1';
                 return;
             }
             
-            // Sort data: expired at the bottom, otherwise keep DB sort
             const now = new Date();
-            data.sort((a, b) => {
-                const isAExpired = a.expiry_date && new Date(a.expiry_date) < now;
-                const isBExpired = b.expiry_date && new Date(b.expiry_date) < now;
-                
-                if (isAExpired && !isBExpired) return 1;
-                if (!isAExpired && isBExpired) return -1;
-                
-                // If both have same expiration status, ensure they stay sorted by creation_date DESC
-                const dateA = a.creation_date ? new Date(a.creation_date).getTime() : 0;
-                const dateB = b.creation_date ? new Date(b.creation_date).getTime() : 0;
-                return dateB - dateA;
-            });
 
             tbody.innerHTML = data.map(link => {
                 const isExpired = link.expiry_date && new Date(link.expiry_date) < now;
@@ -4307,14 +4361,23 @@ class App {
                 const printBtnClone = profileContent.querySelector('#btn-print-profile');
                 if (printBtnClone) printBtnClone.remove();
 
-                let name = '-', email = '-', phone = '-', college = '-', program = '-';
-                const row = document.querySelector(`.student-row[data-sid="${CSS.escape(String(this.currentProfileSid))}"]`);
-                if (row && row.children.length >= 6) {
-                    name = row.children[1].innerText;
-                    email = row.children[2].innerText;
-                    phone = row.children[3].innerText;
-                    college = row.children[4].innerText;
-                    program = row.children[5].innerText;
+                const st = this.currentProfileStudent || {};
+                let name = st.full_name || st.name || '-';
+                let email = st.email || '-';
+                let phone = st.mobile || st.phone || '-';
+                let college = st.college || '-';
+                let program = st.program || '-';
+
+                // Fallback to DOM row if metadata wasn't loaded
+                if (name === '-') {
+                    const row = document.querySelector(`.student-row[data-sid="${CSS.escape(String(this.currentProfileSid))}"]`);
+                    if (row && row.children.length >= 6) {
+                        name = row.children[1].innerText || '-';
+                        email = row.children[2].innerText || '-';
+                        phone = row.children[3].innerText || '-';
+                        college = row.children[4].innerText || '-';
+                        program = row.children[5].innerText || '-';
+                    }
                 }
                 const sid = escapeHTML(this.currentProfileSid);
                 [name, email, phone, college, program] = [name, email, phone, college, program].map(v => escapeHTML(v));
@@ -4381,15 +4444,22 @@ class App {
             document.getElementById('student-summary-body').innerHTML = '';
             document.getElementById('student-ledger-body').innerHTML = '';
 
-            // Fetch Transactions (match both unpadded and 0-padded variants of student_id)
             const normSid = this.normalizeStudentId(sid);
             const sidVariants = Array.from(new Set([
                 String(sid).trim(),
                 normSid,
                 /^\d+$/.test(normSid) && normSid.length < 9 ? normSid.padStart(9, '0') : null
             ].filter(Boolean)));
-            const { data: txs, error: tErr } = await supabase.from('transactions').select('*').in('student_id', sidVariants).order('payment_date', { ascending: false });
-            if (tErr) throw tErr;
+
+            // Fetch student profile record from student_master
+            const { data: students } = await supabase.from('student_master')
+                .select('*')
+                .in('student_id', sidVariants)
+                .limit(1);
+            this.currentProfileStudent = (students && students[0]) || null;
+
+            // Fetch Transactions using fetchAll pagination
+            const txs = await fetchAll('transactions', '*', q => q.in('student_id', sidVariants).order('payment_date', { ascending: false }), 'payment_date');
 
             if (!txs || txs.length === 0) {
                 document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem;">No payments found for this student.</td></tr>';
@@ -4397,7 +4467,7 @@ class App {
                 return;
             }
 
-            // Render Ledger
+            // Render Ledger using formatMoney()
             document.getElementById('student-ledger-body').innerHTML = txs.map(t => {
                 return `
                 <tr>
@@ -4405,7 +4475,7 @@ class App {
                     <td>${escapeHTML(t.reference_number)}</td>
                     <td>${escapeHTML(t.item_name)}</td>
                     <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
-                    <td style="text-align: right; font-weight: 500;">${parseFloat(t.item_price || 0).toLocaleString()}</td>
+                    <td style="text-align: right; font-weight: 500;">${formatMoney(t.item_price || 0)}</td>
                 </tr>
             `}).join('');
 
@@ -4414,7 +4484,7 @@ class App {
             let total = 0;
             txs.forEach(t => {
                 const mapKey = t.mapping || 'Unmapped';
-                const amt = parseFloat(t.item_price || 0);
+                const amt = parseFloat(t.item_price || 0) || 0;
                 if (!summary[mapKey]) summary[mapKey] = 0;
                 summary[mapKey] += amt;
                 total += amt;
@@ -4423,14 +4493,14 @@ class App {
             const summaryHtml = Object.keys(summary).sort().map(k => `
                 <tr>
                     <td><strong>${escapeHTML(k)}</strong></td>
-                    <td style="text-align: right;">${summary[k].toLocaleString()}</td>
+                    <td style="text-align: right;">${formatMoney(summary[k])}</td>
                 </tr>
             `).join('');
             
             document.getElementById('student-summary-body').innerHTML = summaryHtml + `
                 <tr style="background-color: var(--bg-secondary);">
                     <td><strong>Grand Total</strong></td>
-                    <td style="text-align: right; font-size: 1.1rem; font-weight: 700;">${total.toLocaleString()} EGP</td>
+                    <td style="text-align: right; font-size: 1.1rem; font-weight: 700;">${formatMoney(total)} EGP</td>
                 </tr>
             `;
 
@@ -4438,6 +4508,262 @@ class App {
             Toast.show('Error loading profile: ' + err.message, 'error');
             document.getElementById('inline-student-profile').classList.add('hidden');
         }
+    }
+
+    renderFilterChips(table) {
+        const containerId = table === 'transactions' ? 'transactions-filter-chips' : 'automatch-filter-chips';
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const filters = this.headerFilters[table] || {};
+        const entries = Object.entries(filters).filter(([col, vals]) => Array.isArray(vals) && vals.length > 0);
+
+        if (entries.length === 0) {
+            container.innerHTML = '';
+            container.style.display = 'none';
+            return;
+        }
+
+        container.style.display = 'flex';
+
+        const labelMap = {
+            reference_number: 'Ref',
+            payment_date: 'Date',
+            student_id: 'Student ID',
+            item_price: 'Price',
+            item_name: 'Item',
+            mapping: 'Mapping',
+            second_mapping: '2nd Mapping',
+            bank: 'Bank',
+            id_status: 'ID Status',
+            is_settled: 'Settled',
+            proposed_fix: 'Match'
+        };
+
+        const chipsHtml = entries.map(([col, vals]) => {
+            const label = labelMap[col] || col.replace(/_/g, ' ');
+            const valStr = vals.length > 2 ? `${vals.slice(0, 2).join(', ')} +${vals.length - 2}` : vals.join(', ');
+            return `
+                <span class="filter-chip">
+                    <span><strong>${escapeHTML(label)}:</strong> ${escapeHTML(valStr)}</span>
+                    <button type="button" class="btn-remove-chip" data-table="${table}" data-column="${col}" title="Remove filter">&times;</button>
+                </span>
+            `;
+        }).join('');
+
+        const clearAllHtml = `
+            <button type="button" class="btn btn-outline" id="btn-clear-all-${table}-chips" style="padding: 0.15rem 0.55rem; font-size: 0.75rem; border-radius: 9999px; height: auto;">
+                Clear All
+            </button>
+        `;
+
+        container.innerHTML = chipsHtml + clearAllHtml;
+
+        container.querySelectorAll('.btn-remove-chip').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const col = btn.getAttribute('data-column');
+                delete this.headerFilters[table][col];
+                const icon = document.querySelector(`.th-filter-wrapper[data-table="${table}"][data-column="${col}"] .header-filter-icon`);
+                if (icon) icon.classList.remove('active');
+                this.renderFilterChips(table);
+                if (table === 'transactions') {
+                    this.currentPage = 1;
+                    this.loadTransactions();
+                } else {
+                    this.runAutoMatcher();
+                }
+            });
+        });
+
+        container.querySelector(`#btn-clear-all-${table}-chips`)?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.headerFilters[table] = {};
+            document.querySelectorAll(`[data-table="${table}"] .header-filter-icon`).forEach(icon => icon.classList.remove('active'));
+            this.renderFilterChips(table);
+            if (table === 'transactions') {
+                this.currentPage = 1;
+                this.loadTransactions();
+            } else {
+                this.runAutoMatcher();
+            }
+        });
+    }
+
+    async updateSidebarBadges() {
+        const badge = document.getElementById('sidebar-automatch-badge');
+        if (!badge) return;
+        try {
+            const { count, error } = await supabase
+                .from('transactions')
+                .select('*', { count: 'exact', head: true })
+                .neq('id_status', 'Valid');
+            if (!error && count !== null) {
+                if (count > 0) {
+                    badge.textContent = count > 999 ? '999+' : count;
+                    badge.style.display = 'inline-flex';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        } catch (err) {
+            console.warn('Could not update sidebar badge:', err);
+        }
+    }
+
+    initGlobalSearch() {
+        const overlay = document.getElementById('global-search-overlay');
+        const input = document.getElementById('global-search-input');
+        const resultsContainer = document.getElementById('global-search-results');
+        if (!overlay || !input || !resultsContainer) return;
+
+        const openSearch = () => {
+            overlay.classList.add('active');
+            input.value = '';
+            resultsContainer.innerHTML = `
+                <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                    Type at least 2 characters to search across transactions and students.
+                </div>
+            `;
+            setTimeout(() => input.focus(), 50);
+        };
+
+        const closeSearch = () => {
+            overlay.classList.remove('active');
+        };
+
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+                e.preventDefault();
+                if (overlay.classList.contains('active')) {
+                    closeSearch();
+                } else {
+                    openSearch();
+                }
+            } else if (e.key === 'Escape') {
+                if (overlay.classList.contains('active')) {
+                    closeSearch();
+                }
+            }
+        });
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeSearch();
+        });
+
+        let searchTimeout;
+        input.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            const query = e.target.value.trim();
+            if (query.length < 2) {
+                resultsContainer.innerHTML = `
+                    <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                        Type at least 2 characters to search across transactions and students.
+                    </div>
+                `;
+                return;
+            }
+
+            resultsContainer.innerHTML = `
+                <div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                    <i data-lucide="loader" class="spin" style="width: 16px; height: 16px; display: inline-block; vertical-align: middle; margin-right: 6px;"></i> Searching...
+                </div>
+            `;
+            if (window.lucide) lucide.createIcons({ root: resultsContainer });
+
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const cleanQ = sanitizeForFilter(query);
+                    if (!cleanQ) return;
+
+                    const [txRes, studentRes] = await Promise.all([
+                        supabase.from('transactions')
+                            .select('id, reference_number, student_id, student_name, item_price, payment_date')
+                            .or(`reference_number.ilike.%${cleanQ}%,student_id.ilike.%${cleanQ}%`)
+                            .order('payment_date', { ascending: false })
+                            .limit(5),
+                        supabase.from('student_master')
+                            .select('student_id, full_name, college, program, email')
+                            .or(`student_id.ilike.%${cleanQ}%,full_name.ilike.%${cleanQ}%`)
+                            .limit(5)
+                    ]);
+
+                    const txs = txRes.data || [];
+                    const students = studentRes.data || [];
+
+                    if (txs.length === 0 && students.length === 0) {
+                        resultsContainer.innerHTML = `
+                            <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                                No transactions or students found matching "${escapeHTML(query)}".
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    let html = '';
+                    if (txs.length > 0) {
+                        html += txs.map(tx => `
+                            <div class="search-result-item" data-type="tx" data-ref="${escapeHTML(tx.reference_number)}">
+                                <span class="result-type">TX</span>
+                                <div class="result-text">
+                                    <strong>${escapeHTML(tx.reference_number)}</strong>
+                                    <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
+                                        ID: ${escapeHTML(tx.student_id || '-')} &bull; EGP ${formatMoney(tx.item_price)} &bull; ${escapeHTML(tx.payment_date || '')}
+                                    </span>
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+
+                    if (students.length > 0) {
+                        html += students.map(st => `
+                            <div class="search-result-item" data-type="student" data-sid="${escapeHTML(st.student_id)}">
+                                <span class="result-type" style="color: var(--success, #10b981);">STUDENT</span>
+                                <div class="result-text">
+                                    <strong>${escapeHTML(st.student_id)}</strong>
+                                    <span style="margin-left: 0.5rem;">${escapeHTML(st.full_name || 'N/A')}</span>
+                                    ${st.college ? `<span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">(${escapeHTML(st.college)})</span>` : ''}
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+
+                    resultsContainer.innerHTML = html;
+
+                    resultsContainer.querySelectorAll('.search-result-item').forEach(item => {
+                        item.addEventListener('click', () => {
+                            const type = item.getAttribute('data-type');
+                            closeSearch();
+                            if (type === 'tx') {
+                                const ref = item.getAttribute('data-ref');
+                                const txNav = document.querySelector('.nav-item[data-view="transactions"]');
+                                if (txNav) txNav.click();
+                                const searchInp = document.getElementById('search-input');
+                                if (searchInp) searchInp.value = ref;
+                                this.currentPage = 1;
+                                this.loadTransactions();
+                            } else if (type === 'student') {
+                                const sid = item.getAttribute('data-sid');
+                                const smNav = document.querySelector('.nav-item[data-view="student-master"]');
+                                if (smNav) smNav.click();
+                                const lookupBtn = document.querySelector('.student-tab-btn[data-target="student-lookup"]');
+                                if (lookupBtn) lookupBtn.click();
+                                const searchInp = document.getElementById('student-search-input');
+                                if (searchInp) searchInp.value = sid;
+                                this.loadStudentProfile(sid);
+                            }
+                        });
+                    });
+
+                } catch (err) {
+                    resultsContainer.innerHTML = `
+                        <div style="padding: 1rem; text-align: center; color: var(--danger); font-size: 0.85rem;">
+                            Error searching: ${escapeHTML(err.message)}
+                        </div>
+                    `;
+                }
+            }, 300);
+        });
     }
 
 }
