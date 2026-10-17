@@ -2659,6 +2659,42 @@ class App {
         }
     }
     
+    normalizeStudentId(val) {
+        if (val === null || val === undefined) return '';
+        const s = String(val).trim();
+        if (/^0+\d{4,}$/.test(s)) {
+            return s.replace(/^0+/, '');
+        }
+        return s;
+    }
+
+    mergeStudentRecord(existing, incoming) {
+        if (!existing) return { ...incoming };
+        const pickLongerName = (a, b) => {
+            if (!a) return b || null;
+            if (!b) return a || null;
+            const aWords = String(a).trim().split(/\s+/).length;
+            const bWords = String(b).trim().split(/\s+/).length;
+            if (bWords > aWords) return b;
+            if (aWords > bWords) return a;
+            return String(b).length >= String(a).length ? b : a;
+        };
+        const isFromStudentDetails = incoming.source === 'StudentDetails';
+        return {
+            student_id: incoming.student_id || existing.student_id,
+            full_name: pickLongerName(existing.full_name, incoming.full_name),
+            arabic_name: incoming.arabic_name || existing.arabic_name || null,
+            national_id: incoming.national_id || existing.national_id || null,
+            email: (isFromStudentDetails ? (incoming.email || existing.email) : (existing.email || incoming.email)) || null,
+            mobile: incoming.mobile || existing.mobile || null,
+            guardian_name: incoming.guardian_name || existing.guardian_name || null,
+            guardian_mobile: incoming.guardian_mobile || existing.guardian_mobile || null,
+            college: (isFromStudentDetails ? (incoming.college || existing.college) : (existing.college || incoming.college)) || null,
+            program: (isFromStudentDetails ? (incoming.program || existing.program) : (existing.program || incoming.program)) || null,
+            source: existing.source && existing.source !== incoming.source ? 'Merged' : (incoming.source || existing.source || null)
+        };
+    }
+
     async handleStudentImport(file) {
         const status = document.getElementById('student-upload-status');
         status.style.display = 'block';
@@ -2670,75 +2706,156 @@ class App {
             const data = await file.arrayBuffer();
             const workbook = XLSX.read(data, { type: 'array' });
             const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: null });
             
             if (!rows || rows.length === 0) throw new Error("File is empty.");
 
-            let headers = rows[0];
-            let dataRows = rows.slice(1);
-
-            if (!headers.includes('Student ID') && !headers.includes('PEOPLE_ID1')) {
-                if (rows.length > 1 && rows[1].includes('Student ID')) {
-                    headers = rows[1];
-                    dataRows = rows.slice(2);
+            // Scan the first 10 rows to find the header row containing 'Student ID' or 'PEOPLE_ID1'
+            let headerRowIdx = -1;
+            for (let i = 0; i < Math.min(10, rows.length); i++) {
+                const rowCells = (rows[i] || []).map(c => c != null ? String(c).trim() : '');
+                if (rowCells.includes('Student ID') || rowCells.includes('PEOPLE_ID1')) {
+                    headerRowIdx = i;
+                    break;
                 }
             }
+            if (headerRowIdx === -1) {
+                throw new Error("Unrecognized Excel format. Expected 'Student ID' or 'PEOPLE_ID1' column.");
+            }
+
+            const headers = rows[headerRowIdx];
+            const dataRows = rows.slice(headerRowIdx + 1);
 
             const headerMap = {};
-            headers.forEach((h, i) => { if (h) headerMap[h.toString().trim()] = i; });
+            headers.forEach((h, i) => { if (h != null && String(h).trim() !== '') headerMap[String(h).trim()] = i; });
 
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing data for upload...`;
-            
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing and normalizing student records...`;
+
+            const cleanText = (val) => {
+                if (val === null || val === undefined) return null;
+                const s = String(val).replace(/\*+$/g, '').replace(/\s+/g, ' ').trim();
+                if (!s || ['N/A', 'NA', 'NONE', 'NULL', '-'].includes(s.toUpperCase())) return null;
+                return s;
+            };
+
+            const cleanPhone = (val) => {
+                const txt = cleanText(val);
+                if (!txt) return null;
+                let digits = txt.replace(/[^0-9+]/g, '');
+                if (!digits || digits.replace(/\D/g, '').length < 7) return null;
+                // Restore leading 0 dropped by Excel numeric formatting on 10-digit Egyptian mobile numbers (10, 11, 12, 15)
+                if (/^1[0125]\d{8}$/.test(digits)) {
+                    digits = '0' + digits;
+                }
+                return digits;
+            };
+
+            const cleanNationalId = (val, rawSid, normSid) => {
+                const txt = cleanText(val);
+                if (!txt) return null;
+                // Ignore dummy National ID values in StudentDetails that just repeat the 6-digit Student ID
+                if (txt === rawSid || txt === normSid || txt.length < 7) return null;
+                return txt;
+            };
+
             const recordsMap = new Map();
+            const paddedLegacyIds = new Set();
+
             for (const row of dataRows) {
                 if (!row || row.length === 0) continue;
-                
-                const cleanPhone = (val) => val ? String(val).replace(/\s+/g, '').trim() : null;
 
-                let student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
+                let rawSid, student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
 
                 if ('PEOPLE_ID1' in headerMap) {
-                    student_id = String(row[headerMap['PEOPLE_ID1']] || '').trim();
-                    full_name = row[headerMap['Full name']] || row[headerMap['FIRST_NAME1']] || '';
-                    arabic_name = row[headerMap['ARABICNAME']];
-                    national_id = row[headerMap['GOVERNMENT_ID1']];
-                    email = row[headerMap['personalEmail']] || row[headerMap['Email1']];
+                    rawSid = String(row[headerMap['PEOPLE_ID1']] || '').trim();
+                    student_id = this.normalizeStudentId(rawSid);
+                    if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
+
+                    const first = cleanText(row[headerMap['FIRST_NAME1']]);
+                    const middle = cleanText(row[headerMap['MIDDLE_NAME1']]);
+                    const last = cleanText(row[headerMap['LAST_NAME1']]);
+                    const rawFull = cleanText(row[headerMap['Full name']]);
+                    const combinedParts = [first, middle, last].filter(Boolean).join(' ');
+                    if (rawFull && last && !rawFull.toLowerCase().includes(last.toLowerCase())) {
+                        full_name = `${rawFull} ${last}`.replace(/\s+/g, ' ').trim();
+                    } else {
+                        full_name = combinedParts || rawFull || first || null;
+                    }
+
+                    arabic_name = cleanText(row[headerMap['ARABICNAME']]);
+                    national_id = cleanNationalId(row[headerMap['GOVERNMENT_ID1']], rawSid, student_id) || cleanText(row[headerMap['PASSPORT_NUMBER1']]);
+                    email = cleanText(row[headerMap['Email1']]) || cleanText(row[headerMap['personalEmail']]);
                     mobile = cleanPhone(row[headerMap['PhoneNumber1']]);
-                    guardian_name = row[headerMap['Guardian_NAME']];
+                    guardian_name = cleanText(row[headerMap['Guardian_NAME']]);
                     guardian_mobile = cleanPhone(row[headerMap['Guardian_Mobile']]);
-                    college = row[headerMap['University1']];
-                    program = row[headerMap['PROGRAM1']];
+                    college = cleanText(row[headerMap['University1']]) || cleanText(row[headerMap['CURRICULUM1']]);
+                    const progParts = [cleanText(row[headerMap['PROGRAM1']]), cleanText(row[headerMap['DEGREE1']]), cleanText(row[headerMap['CURRICULUM1']])].filter(Boolean);
+                    program = [...new Set(progParts)].join(' / ') || null;
                     source = 'ApplicantReport';
                 } else if ('Student ID' in headerMap) {
-                    student_id = String(row[headerMap['Student ID']] || '').trim();
-                    full_name = row[headerMap['Student Name']];
-                    email = row[headerMap['Email']];
-                    mobile = cleanPhone(row[headerMap['Mobile Phone Number']]);
-                    college = row[headerMap['College']];
-                    program = row[headerMap['Program']];
+                    rawSid = String(row[headerMap['Student ID']] || '').trim();
+                    student_id = this.normalizeStudentId(rawSid);
+                    if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
+
+                    full_name = cleanText(row[headerMap['Student Name']]);
+                    arabic_name = null;
+                    national_id = cleanNationalId(row[headerMap['National ID']], rawSid, student_id);
+                    email = cleanText(row[headerMap['Email']]);
+                    mobile = cleanPhone(row[headerMap['Mobile Phone Number']]) || cleanPhone(row[headerMap['Home Phone Number']]);
+                    guardian_name = null;
+                    guardian_mobile = null;
+                    college = cleanText(row[headerMap['College']]);
+                    program = cleanText(row[headerMap['Program']]);
                     source = 'StudentDetails';
-                } else {
-                    throw new Error("Unrecognized Excel format.");
                 }
 
                 if (student_id) {
-                    recordsMap.set(student_id, {
+                    const incoming = {
                         student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
-                    });
+                    };
+                    recordsMap.set(student_id, this.mergeStudentRecord(recordsMap.get(student_id), incoming));
                 }
             }
 
             const records = Array.from(recordsMap.values());
 
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${records.length} records to database...`;
+            // Fetch existing student_master rows (both normalized IDs and any 0-padded legacy IDs) so we merge instead of wiping fields
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Merging with existing database records...`;
+            const lookupIds = [...new Set([...records.map(r => r.student_id), ...paddedLegacyIds])];
+            const existingMap = new Map();
+            const legacyIdsToDelete = [];
+
+            for (let i = 0; i < lookupIds.length; i += 500) {
+                const chunk = lookupIds.slice(i, i + 500);
+                const { data: existingRows, error: exErr } = await supabase.from('student_master').select('*').in('student_id', chunk);
+                if (exErr) throw exErr;
+                for (const ex of (existingRows || [])) {
+                    const normId = this.normalizeStudentId(ex.student_id);
+                    if (ex.student_id !== normId) {
+                        legacyIdsToDelete.push(ex.student_id);
+                    }
+                    existingMap.set(normId, this.mergeStudentRecord(existingMap.get(normId), { ...ex, student_id: normId }));
+                }
+            }
+
+            const mergedRecords = records.map(r => this.mergeStudentRecord(existingMap.get(r.student_id), r));
+
+            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${mergedRecords.length} records to database...`;
             
             let insertedCount = 0;
-            for (let i = 0; i < records.length; i += 1000) {
-                const batch = records.slice(i, i + 1000);
+            for (let i = 0; i < mergedRecords.length; i += 1000) {
+                const batch = mergedRecords.slice(i, i + 1000);
                 const { error } = await supabase.from('student_master').upsert(batch);
                 if (error) throw error;
                 insertedCount += batch.length;
-                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i/records.length)*100)}%`;
+                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i / mergedRecords.length) * 100)}%`;
+            }
+
+            // Clean up any old 0-padded duplicate rows in student_master that have now been merged into their normalized IDs
+            if (legacyIdsToDelete.length > 0) {
+                for (let i = 0; i < legacyIdsToDelete.length; i += 500) {
+                    await supabase.from('student_master').delete().in('student_id', legacyIdsToDelete.slice(i, i + 500));
+                }
             }
 
             if (this.currentUser) {
@@ -2746,14 +2863,14 @@ class App {
                     user_email: this.currentUser.email,
                     file_name: file.name,
                     status: 'success',
-                    records_processed: records.length,
+                    records_processed: mergedRecords.length,
                     records_inserted: insertedCount,
-                    details: { type: 'student_master' }
+                    details: { type: 'student_master', legacy_ids_cleaned: legacyIdsToDelete.length }
                 });
             }
 
             status.className = 'alert alert-success';
-            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported ${records.length} students!`;
+            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length} students!`;
             if (window.lucide) lucide.createIcons();
 
         } catch (err) {
@@ -2913,7 +3030,12 @@ class App {
             
             for (const l of links) {
                 if (l.customer_national_id) requiredIds.add(String(l.customer_national_id).trim());
-                if (l.custom_input_value) requiredIds.add(String(l.custom_input_value).trim());
+                if (l.custom_input_value) {
+                    const rawVal = String(l.custom_input_value).trim();
+                    requiredIds.add(rawVal);
+                    const normVal = this.normalizeStudentId(rawVal);
+                    if (normVal) requiredIds.add(normVal);
+                }
                 if (l.customer_mobile) requiredMobiles.add(String(l.customer_mobile).replace(/[^0-9]/g, '').slice(-10));
                 if (l.customer_email) requiredEmails.add(String(l.customer_email).toLowerCase().trim());
             }
@@ -2978,7 +3100,12 @@ class App {
             const studentNameMap = new Map();
             const studentNationalIdMap = new Map();
             students.forEach(s => {
-                if (s.student_id) studentIdMap.set(String(s.student_id).trim(), s);
+                if (s.student_id) {
+                    const rawSid = String(s.student_id).trim();
+                    studentIdMap.set(rawSid, s);
+                    const normSid = this.normalizeStudentId(rawSid);
+                    if (normSid) studentIdMap.set(normSid, s);
+                }
                 if (s.email) studentEmailMap.set(String(s.email).toLowerCase().trim(), s);
                 if (s.full_name) studentNameMap.set(String(s.full_name).toLowerCase().trim(), s);
                 if (s.national_id) studentNationalIdMap.set(String(s.national_id).trim(), s);
@@ -3024,7 +3151,8 @@ class App {
 
                 // Try 1: ID
                 if (link && link.custom_input_value) {
-                    proposedStudent = studentIdMap.get(String(link.custom_input_value).trim());
+                    const rawInput = String(link.custom_input_value).trim();
+                    proposedStudent = studentIdMap.get(rawInput) || studentIdMap.get(this.normalizeStudentId(rawInput));
                     if (proposedStudent) matchReason = 'Found exact ID in Link Info';
                 }
 
@@ -4163,8 +4291,14 @@ class App {
             document.getElementById('student-summary-body').innerHTML = '';
             document.getElementById('student-ledger-body').innerHTML = '';
 
-            // Fetch Transactions
-            const { data: txs, error: tErr } = await supabase.from('transactions').select('*').eq('student_id', sid).order('payment_date', { ascending: false });
+            // Fetch Transactions (match both unpadded and 0-padded variants of student_id)
+            const normSid = this.normalizeStudentId(sid);
+            const sidVariants = Array.from(new Set([
+                String(sid).trim(),
+                normSid,
+                /^\d+$/.test(normSid) && normSid.length < 9 ? normSid.padStart(9, '0') : null
+            ].filter(Boolean)));
+            const { data: txs, error: tErr } = await supabase.from('transactions').select('*').in('student_id', sidVariants).order('payment_date', { ascending: false });
             if (tErr) throw tErr;
 
             if (!txs || txs.length === 0) {
