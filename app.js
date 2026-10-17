@@ -1012,11 +1012,28 @@ class App {
 
                 await this.logAudit('Single Manual Fix Added', ref, mergedFix);
 
-                // Re-apply all rules to this reference's transactions (empty fields no longer wipe existing mappings)
+                // Re-apply all rules to this reference's transactions
                 const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
-                const result = await this.reapplyRulesTo(rows);
+                const all = await recomputeTransactions(rows, { includeLocked: true });
+                const lockedChanges = all.filter(c => c.diff.locked);
+                let applyToLocked = false;
 
-                Toast.show(`Manual fix saved. ${this.reapplySummary(result)}`, 'success');
+                if (lockedChanges.length > 0) {
+                    applyToLocked = await window.customConfirm(
+                        `Transaction "${ref}" is settled or already recorded in ERP. Changing it here will NOT change what was already posted to ERP. Do you want to apply this fix to the transaction anyway?`,
+                        'Apply Anyway', 'Leave Unchanged'
+                    );
+                }
+
+                const toApply = applyToLocked ? all : all.filter(c => !c.diff.locked);
+                const updated = toApply.length > 0 ? await updateRuleFields(toApply) : 0;
+                if (updated > 0) this.invalidateDistinctCache();
+
+                const lockedSkipped = all.length - toApply.length;
+                let summaryMsg = `${updated} transaction(s) updated.`;
+                if (lockedSkipped > 0) summaryMsg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged.`;
+
+                Toast.show(`Manual fix saved. ${summaryMsg}`, 'success');
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
                 this.loadFixes();
@@ -2373,24 +2390,36 @@ class App {
                     for (const p of this.automatchProposals) {
                         const pfStatus = p.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
                         const visible = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
-                        if (visible && p.proposedStudent && !p.locked) {
+                        if (visible && p.proposedStudent) {
                             p.selected = checked;
                         }
                     }
                 }
-                document.querySelectorAll('.automatch-checkbox:not(:disabled)').forEach(cb => cb.checked = checked);
+                document.querySelectorAll('.automatch-checkbox').forEach(cb => cb.checked = checked);
             });
         }
         const btnApplyMatch = document.getElementById('btn-apply-automatch-fixes');
         if(btnApplyMatch) {
             btnApplyMatch.addEventListener('click', () => {
-                const hasSelectedProposal = Array.isArray(this.automatchProposals) && this.automatchProposals.some(p => p.selected && p.proposedStudent && !p.locked);
-                const checkboxes = document.querySelectorAll('.automatch-checkbox:checked');
-                if (!hasSelectedProposal && checkboxes.length === 0) {
+                const checkedDomValues = new Set(Array.from(document.querySelectorAll('.automatch-checkbox:checked')).map(cb => cb.value));
+                const selected = (this.automatchProposals || []).filter(p =>
+                    p.proposedStudent && (p.selected || checkedDomValues.has(String(p.tx_id)))
+                );
+                if (selected.length === 0) {
                     Toast.show('Please select at least one proposed match to apply.', 'warning');
                     return;
                 }
+                const lockedCount = selected.filter(p => p.locked).length;
+                const msgEl = document.getElementById('automatch-confirm-msg');
+                if (msgEl) {
+                    if (lockedCount > 0) {
+                        msgEl.innerHTML = `<span style="color: var(--warning, #f59e0b); font-weight: 600; display: block; margin-bottom: 0.5rem;"><i data-lucide="alert-triangle" style="width: 16px; height: 16px; display: inline-block; vertical-align: text-bottom;"></i> Warning: ${lockedCount} of the ${selected.length} selected transaction(s) are settled or already recorded in ERP.</span>Changing them will update their student ID, but will <strong>NOT</strong> change what was already posted to ERP.<br><br>Do you want to proceed and apply fixes to all ${selected.length} transaction(s)?`;
+                    } else {
+                        msgEl.innerText = `Are you sure you want to apply fixes to ${selected.length} transaction(s)?`;
+                    }
+                }
                 document.getElementById('modal-automatch-confirm')?.classList.remove('hidden');
+                if (window.lucide) lucide.createIcons();
             });
         }
         
@@ -3279,9 +3308,7 @@ class App {
                 const isNameMatch = proposal.matchReason.includes('Name');
                 html += `
                     <tr>
-                        <td>${proposal.locked
-                            ? `<input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" disabled title="Settled or recorded in ERP – fix it manually if really needed">`
-                            : `<input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" ${proposal.selected ? 'checked' : ''}>`}</td>
+                        <td><input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" ${proposal.selected ? 'checked' : ''}></td>
                         <td>${escapeHTML(proposal.original_ref)}</td>
                         <td>${escapeHTML(proposal.original_date)}</td>
                         <td>${escapeHTML(proposal.original_mapping || '-')}</td>
@@ -3294,7 +3321,7 @@ class App {
                             </span>
                             <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
                         </td>
-                        <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${escapeHTML(proposal.matchReason)}</span>${proposal.locked ? '<div style="font-size:0.8rem; color: var(--warning); margin-top: 2px;">Locked: settled / in ERP</div>' : ''}</td>
+                        <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${escapeHTML(proposal.matchReason)}</span>${proposal.locked ? '<div style="font-size:0.8rem; color: var(--warning); margin-top: 2px;"><i data-lucide="lock" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:2px;"></i>Locked: settled / in ERP</div>' : ''}</td>
                     </tr>
                 `;
             } else {
@@ -3316,7 +3343,7 @@ class App {
 
         tbody.innerHTML = html || '<tr><td colspan="9" class="text-center">No fixable transactions found.</td></tr>';
 
-        tbody.querySelectorAll('.automatch-checkbox:not(:disabled)').forEach(cb => {
+        tbody.querySelectorAll('.automatch-checkbox').forEach(cb => {
             cb.addEventListener('change', (e) => {
                 const p = (this.automatchProposals || []).find(item => String(item.tx_id) === cb.value);
                 if (p) p.selected = e.target.checked;
@@ -3363,7 +3390,7 @@ class App {
     async applyAutoMatches() {
         const checkedDomValues = new Set(Array.from(document.querySelectorAll('.automatch-checkbox:checked')).map(cb => cb.value));
         const selectedProposals = (this.automatchProposals || []).filter(p =>
-            !p.locked && p.proposedStudent && (p.selected || checkedDomValues.has(String(p.tx_id)))
+            p.proposedStudent && (p.selected || checkedDomValues.has(String(p.tx_id)))
         );
 
         if (selectedProposals.length === 0) {
@@ -3428,8 +3455,12 @@ class App {
             }
 
             // Audit Log
+            const lockedCount = selectedProposals.filter(p => p.locked).length;
             if (appliedRefs.length > 0) {
-                await this.logAudit('Applied Auto-Matches', appliedRefs.join(', '), { count: appliedRefs.length });
+                await this.logAudit('Applied Auto-Matches', appliedRefs.join(', '), {
+                    count: appliedRefs.length,
+                    locked_included: lockedCount
+                });
             }
 
             this.invalidateDistinctCache();

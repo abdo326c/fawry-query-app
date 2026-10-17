@@ -20,6 +20,12 @@
     --danger: #ef4444;
     --danger-bg: rgba(239, 68, 68, 0.15);
     
+    --primary-color: var(--primary);
+    --success-color: var(--success);
+    --warning-color: var(--warning);
+    --danger-color: var(--danger);
+    --bg-secondary: rgba(51, 65, 85, 0.5);
+
     --sidebar-width: 220px;
 }
 
@@ -669,6 +675,34 @@ select option {
 .badge.valid { background-color: var(--success-bg); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); }
 .badge.missing { background-color: var(--warning-bg); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
 .badge.error { background-color: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+
+/* Auto-Matcher status badges */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem 0.6rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.status-badge.valid-id {
+    background-color: var(--success-bg);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.status-badge.invalid-id {
+    background-color: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Color utility classes for settlement badges */
+.bg-success { background-color: var(--success) !important; }
+.bg-warning { background-color: var(--warning) !important; }
+.bg-danger { background-color: var(--danger) !important; }
+.text-white { color: #ffffff !important; }
+.text-dark { color: #0f172a !important; }
 
 /* Pagination */
 .pagination {
@@ -1480,6 +1514,12 @@ select option {
     --primary: #0f766e;
     --primary-hover: #0d9488;
     --primary-glow: rgba(15, 118, 110, 0.15);
+    
+    --primary-color: var(--primary);
+    --success-color: var(--success);
+    --warning-color: var(--warning);
+    --danger-color: var(--danger);
+    --bg-secondary: #e7e5e4;
 }
 
 :root.light body {
@@ -1624,6 +1664,18 @@ select option {
     background: rgba(245, 158, 11, 0.1);
     color: #d97706;
     border-color: rgba(245, 158, 11, 0.2);
+}
+
+:root.light .status-badge.valid-id {
+    background: rgba(16, 185, 129, 0.1);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+:root.light .status-badge.invalid-id {
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+    border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
 
