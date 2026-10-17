@@ -1385,6 +1385,8 @@ class App {
             document.getElementById('automatcher-date-from').value = '';
             document.getElementById('automatcher-date-to').value = '';
             document.getElementById('automatcher-search').value = '';
+            const toggle = document.getElementById('automatch-toggle-unmatched');
+            if (toggle) toggle.checked = false;
             this.headerFilters.automatch = {};
             document.querySelectorAll('[data-table="automatch"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.runAutoMatcher();
@@ -2385,9 +2387,11 @@ class App {
         if(selectAllMatcher) {
             selectAllMatcher.addEventListener('change', (e) => {
                 const checked = e.target.checked;
+                const showUnmatched = document.getElementById('automatch-toggle-unmatched')?.checked || false;
                 const pfFilter = (this.headerFilters?.automatch || {})['proposed_fix'];
                 if (Array.isArray(this.automatchProposals)) {
                     for (const p of this.automatchProposals) {
+                        if (!showUnmatched && !p.proposedStudent) continue;
                         const pfStatus = p.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
                         const visible = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
                         if (visible && p.proposedStudent) {
@@ -2396,6 +2400,13 @@ class App {
                     }
                 }
                 document.querySelectorAll('.automatch-checkbox').forEach(cb => cb.checked = checked);
+            });
+        }
+        const toggleUnmatched = document.getElementById('automatch-toggle-unmatched');
+        if (toggleUnmatched) {
+            toggleUnmatched.addEventListener('change', () => {
+                this.automatchPage = 1;
+                this.renderAutoMatcherPage();
             });
         }
         const btnApplyMatch = document.getElementById('btn-apply-automatch-fixes');
@@ -3288,13 +3299,61 @@ class App {
         const tbody = document.getElementById('automatcher-table-body');
         if (!tbody) return;
         const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        
+        // Update summary card stats
+        const totalCount = (this.automatchProposals || []).length;
+        const matchedCount = (this.automatchProposals || []).filter(p => p.proposedStudent).length;
+        const unmatchedCount = totalCount - matchedCount;
+
+        const summaryCard = document.getElementById('automatch-summary-card');
+        if (summaryCard) {
+            if (totalCount > 0) {
+                summaryCard.style.display = 'block';
+                const totalEl = document.getElementById('automatch-stat-total');
+                const matchedEl = document.getElementById('automatch-stat-matched');
+                const unmatchedEl = document.getElementById('automatch-stat-unmatched');
+                if (totalEl) totalEl.innerText = totalCount.toLocaleString();
+                if (matchedEl) matchedEl.innerText = matchedCount.toLocaleString();
+                if (unmatchedEl) unmatchedEl.innerText = unmatchedCount.toLocaleString();
+            } else {
+                summaryCard.style.display = 'none';
+            }
+        }
+
+        const showUnmatched = document.getElementById('automatch-toggle-unmatched')?.checked || false;
         const activeFilters = this.headerFilters?.automatch || {};
         const pfFilter = activeFilters['proposed_fix'];
 
         const filteredProposals = (this.automatchProposals || []).filter(proposal => {
+            if (!showUnmatched && !proposal.proposedStudent) return false;
             const pfStatus = proposal.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
             return !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
         });
+
+        if (filteredProposals.length === 0) {
+            if (totalCount > 0 && !showUnmatched) {
+                tbody.innerHTML = `<tr><td colspan="9" class="text-center" style="padding: 2.5rem 1rem;">
+                    <div style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 0.75rem;">
+                        No proposed matches were found among the ${totalCount.toLocaleString()} scanned transactions.
+                    </div>
+                    <button class="btn btn-outline btn-sm" id="btn-show-unmatched-empty">
+                        <i data-lucide="eye" style="width: 14px; height: 14px; margin-right: 4px;"></i> Show all ${totalCount.toLocaleString()} unmatched transactions
+                    </button>
+                </td></tr>`;
+                document.getElementById('btn-show-unmatched-empty')?.addEventListener('click', () => {
+                    const toggle = document.getElementById('automatch-toggle-unmatched');
+                    if (toggle) toggle.checked = true;
+                    this.automatchPage = 1;
+                    this.renderAutoMatcherPage();
+                });
+            } else {
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center" style="padding: 2rem;">No fixable transactions found.</td></tr>';
+            }
+            const pager = document.getElementById('automatcher-pagination');
+            if (pager) pager.remove();
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
 
         const pageSize = 100;
         const totalPages = Math.max(1, Math.ceil(filteredProposals.length / pageSize));
