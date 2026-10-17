@@ -1,18 +1,19 @@
-const CACHE_NAME = 'fawry-app-cache-v8';
+const CACHE_NAME = 'fawry-app-cache-v9';
 const urlsToCache = [
   '/',
   '/index.html',
-  '/styles.css',
-  '/app.js',
+  '/styles.css?v=2.1.0',
+  '/app.js?v=2.1.0',
   '/rules.js',
   '/csv-processor.js',
-  '/settlement.js',
+  '/settlement.js?v=2.1.0',
   '/supabase.js',
   '/nu-logo.png',
   '/manifest.json'
 ];
 
 self.addEventListener('install', event => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
@@ -27,16 +28,19 @@ self.addEventListener('fetch', event => {
   // Ignore Supabase API requests (we want those fresh)
   if (event.request.url.includes('supabase.co')) return;
 
+  // Network-first strategy: always try network first so code/rule updates apply immediately,
+  // falling back to cache only when offline.
   event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        // Return cached version or fetch from network
-        return response || fetch(event.request).then(fetchRes => {
-            return caches.open(CACHE_NAME).then(cache => {
-                cache.put(event.request, fetchRes.clone());
-                return fetchRes;
-            });
-        });
+    fetch(event.request)
+      .then(fetchRes => {
+        if (fetchRes && fetchRes.ok) {
+          const clone = fetchRes.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return fetchRes;
+      })
+      .catch(() => {
+        return caches.match(event.request).then(res => res || caches.match(event.request, { ignoreSearch: true }));
       })
   );
 });
@@ -52,6 +56,6 @@ self.addEventListener('activate', event => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
 });

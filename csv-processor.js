@@ -7,6 +7,7 @@ import {
     updateRuleFields,
     fetchAll,
     fetchByIn,
+    isLockedTransaction,
     escapeHTML
 } from './rules.js';
 
@@ -91,7 +92,7 @@ export class FawryProcessor {
         // Strip out currencies (like EGP), commas, and spaces, keeping only numbers, decimal, and minus sign
         const cleaned = String(val).replace(/[^\d.-]/g, '');
         const parsed = parseFloat(cleaned);
-        return isNaN(parsed) ? 0 : parsed;
+        return isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
     }
 
     parsePaymentDate(rawDate) {
@@ -328,7 +329,7 @@ export class FawryProcessor {
                             paid_amount: this.parseAmount(this.getVal(row, 'PAID AMOUNT')),
                             payment_reference_number: ref === null || ref === undefined ? '' : String(ref).trim(),
                             customer_national_id: this.getVal(row, 'CUSTOMER NATIONAL ID'),
-                            custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID') || this.getVal(row, 'CUSTOMER NATIONAL ID')
+                            custom_input_value: this.getVal(row, 'CUSTOM INPUT VALUE') || this.getVal(row, 'CUSTOMINPUTVALUE') || this.getVal(row, 'STUDENT ID')
                         };
                     }).filter(r => r.payment_reference_number && r.payment_reference_number !== "null");
 
@@ -449,13 +450,20 @@ export class FawryProcessor {
                     // Extract numbers from Customer Name
                     const custName = this.getVal(row, 'Customer Name');
                     const custNameStr = custName ? String(custName).trim() : '';
+                    const compactCust = custNameStr.replace(/[\s\u00A0]+/g, '');
                     let studentId;
-                    if (/^DIP\d{14}$/i.test(custNameStr)) {
-                        // Diploma IDs keep their DIP prefix
-                        studentId = custNameStr.toUpperCase();
+                    if (/^DIP\d{14}$/i.test(compactCust)) {
+                        // Diploma IDs keep their DIP prefix (even if spaced in the input)
+                        studentId = compactCust.toUpperCase();
                     } else {
-                        studentId = custNameStr.replace(/\D/g, '');
-                        if (!studentId && custNameStr) studentId = custNameStr;
+                        const digitsOnly = custNameStr.replace(/\D/g, '');
+                        // Only extract embedded digits if there are at least 4 digits (or no letters exist);
+                        // otherwise keep the customer name intact for Auto-Matcher Name Matching.
+                        if (digitsOnly.length >= 4 || !/[a-zA-Z\u0600-\u06FF]/.test(custNameStr)) {
+                            studentId = digitsOnly || custNameStr;
+                        } else {
+                            studentId = custNameStr;
+                        }
                     }
 
                     let totalAmount = this.parseAmount(this.getVal(row, 'Total Amount Plus Fees'));
@@ -508,11 +516,11 @@ export class FawryProcessor {
                     });
                 }
 
-                // Deduplicate within the file based on Reference Number, Payment Date, Item Name, Item Price
+                // Deduplicate within the file based on Reference Number, Item Price, and Check Column
                 const uniqueTrans = [];
                 const seenTrans = new Set();
                 for (const t of transformedRows) {
-                    const key = `${t.reference_number}-${t.item_price}-${t.check_column}`;
+                    const key = this.txKey(t);
                     if (!seenTrans.has(key)) {
                         seenTrans.add(key);
                         uniqueTrans.push(t);
@@ -581,9 +589,14 @@ export class FawryProcessor {
         // 3. Find which rows already exist, so a re-import does NOT take ownership of them.
         //    (Otherwise "Revert" on the newer file would delete rows that came from an older import.)
         let existingKeys = new Set();
+        // Settled / ERP-recorded rows must never be silently overwritten (same rule as Re-apply)
+        let lockedKeys = new Set();
         try {
-            const existing = await fetchByIn('transactions', 'id, reference_number, item_price, check_column', 'reference_number', refs);
-            existing.forEach(e => existingKeys.add(this.txKey(e)));
+            const existing = await fetchByIn('transactions', 'id, reference_number, item_price, check_column, is_settled, erp_batch_number', 'reference_number', refs);
+            existing.forEach(e => {
+                existingKeys.add(this.txKey(e));
+                if (isLockedTransaction(e)) lockedKeys.add(this.txKey(e));
+            });
         } catch (err) {
             this.log(`Error: Could not check existing transactions: ${err.message}`);
             return false;
@@ -608,8 +621,13 @@ export class FawryProcessor {
 
         const newRows = [];
         const existingRows = [];
+        let lockedSkipped = 0;
         for (const t of transactions) {
-            if (existingKeys.has(this.txKey(t))) {
+            const key = this.txKey(t);
+            if (lockedKeys.has(key)) {
+                // Settled / posted to ERP – leave the stored row exactly as it is
+                lockedSkipped++;
+            } else if (existingKeys.has(key)) {
                 // Keep the original batch_id / file_name of rows that were imported before
                 const { batch_id, file_name, ...rest } = t;
                 existingRows.push(rest);
@@ -618,13 +636,16 @@ export class FawryProcessor {
             }
         }
         this.log(`${newRows.length} new and ${existingRows.length} already-existing transactions. Saving...`);
+        if (lockedSkipped > 0) {
+            this.log(`${lockedSkipped} already-existing transaction(s) are settled or recorded in ERP and were left unchanged.`);
+        }
 
         // 5. Upsert in chunks (3 concurrent requests max)
         const chunkSize = 1000;
         let saved = 0;
         let hasError = false;
         let lastError = null;
-        const total = transactions.length;
+        const total = newRows.length + existingRows.length;
         const progressFill = document.getElementById('progress-fill');
         const progressText = document.getElementById('progress-text');
 
@@ -658,7 +679,7 @@ export class FawryProcessor {
         const { error: batchUpdateError } = await supabase.from('import_batches').update({
             status: saved === total ? 'success' : (saved > 0 ? 'partial' : 'failed'),
             records_inserted: saved,
-            details: { type: 'transactions', error_message: lastError, new_rows: newRows.length, updated_rows: existingRows.length }
+            details: { type: 'transactions', error_message: lastError, new_rows: newRows.length, updated_rows: existingRows.length, locked_skipped: lockedSkipped }
         }).eq('id', batchId);
 
         if (batchUpdateError) {
@@ -669,7 +690,7 @@ export class FawryProcessor {
     }
 
     txKey(t) {
-        return `${String(t.reference_number)}|${Number(t.item_price)}|${String(t.check_column)}`;
+        return `${String(t.reference_number)}|${Number(t.item_price || 0).toFixed(2)}|${String(t.check_column)}`;
     }
 
     validateID(id) {

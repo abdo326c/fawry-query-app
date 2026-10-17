@@ -9,6 +9,7 @@ import {
     diffTransaction,
     buildMappingLookup,
     originalItemName,
+    isLockedTransaction,
     escapeHTML
 } from './rules.js';
 
@@ -187,7 +188,7 @@ class App {
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
         this.loadTransactions();
-        this.updateErpDropdowns().then(() => this.loadErpExport());
+        // ERP Export data is loaded when that tab is opened (see initNavigation)
         this.initRealtime();
     }
 
@@ -404,6 +405,10 @@ class App {
                 const table = document.getElementById('dashboard-pivot-table');
                 
                 const clone = table.cloneNode(true);
+                // Collapsed daily rows must not end up in the pasted email
+                clone.querySelectorAll('tr').forEach(tr => {
+                    if (tr.style.display === 'none') tr.remove();
+                });
                 const cells = clone.querySelectorAll('th, td');
                 cells.forEach(c => {
                     c.style.border = '1px solid black';
@@ -478,16 +483,30 @@ class App {
         const tfoot = document.getElementById('dashboard-pivot-foot');
         if (!tbody || !tfoot) return;
 
+        const formatMoney = (num) => num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        if (selectedBanks.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="2" style="text-align: center;">No bank selected</td></tr>';
+            tfoot.innerHTML = '<tr><td>Grand Total</td><td>0.00</td></tr>';
+            document.getElementById('stat-total-collections').textContent = 'EGP 0.00';
+            document.getElementById('stat-total-transactions').textContent = '0';
+            document.getElementById('stat-valid-pct').textContent = '0%';
+            document.getElementById('stat-errors').textContent = '0';
+            return;
+        }
+
         tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Loading...</td></tr>';
         tfoot.innerHTML = '';
 
         try {
             let allData = [];
+            let rpcSucceeded = false;
             
             // If grouping by date, we can try the fast RPC method
             if (groupBy === 'date') {
                 const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
-                if (!rpcError && rpcData) {
+                rpcSucceeded = !rpcError && Array.isArray(rpcData);
+                if (rpcSucceeded) {
                     allData = rpcData.map(row => ({
                         payment_date: row.payment_date,
                         bank: row.bank,
@@ -496,15 +515,16 @@ class App {
                 }
             }
             
-            // Fallback or if grouping by mapping/item (which requires full data)
-            if (allData.length === 0) {
+            // Fallback (RPC missing / failed) or grouping by mapping/item (which requires full data)
+            if (!rpcSucceeded) {
                 let fetchMore = true;
                 let from = 0;
                 while (fetchMore) {
                     const { data, error } = await supabase.from('transactions')
-                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name')
+                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name, id_status')
                         .gte('payment_date', dateFrom)
                         .lte('payment_date', dateTo)
+                        .in('bank', selectedBanks)
                         .order('id')
                         .range(from, from + 999);
                     
@@ -516,7 +536,6 @@ class App {
                 }
             }
 
-            const formatMoney = (num) => num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
             let bankTotals = { Total: 0 };
@@ -656,19 +675,26 @@ class App {
             
             document.getElementById('stat-total-collections').textContent = `EGP ${formatMoney(totalCollections)}`;
             
-            // Fetch valid/error counts for the date range
-            let validQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
-                .gte('payment_date', dateFrom).lte('payment_date', dateTo).eq('id_status', 'Valid');
-            let totalQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
-                .gte('payment_date', dateFrom).lte('payment_date', dateTo);
-                
-            // Always filter by the selected banks (no bank selected → zero, consistent with the table)
-            validQuery = validQuery.in('bank', selectedBanks);
-            totalQuery = totalQuery.in('bank', selectedBanks);
+            let validCount = 0;
+            let totalCountAll = 0;
 
-            const [{ count: validCount, error: vErr }, { count: totalCountAll, error: tErr }] = await Promise.all([validQuery, totalQuery]);
-            if (vErr) throw vErr;
-            if (tErr) throw tErr;
+            if (rpcSucceeded) {
+                // RPC only returned daily aggregates, so fetch valid/error counts for the date range
+                const validQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
+                    .gte('payment_date', dateFrom).lte('payment_date', dateTo).eq('id_status', 'Valid').in('bank', selectedBanks);
+                const totalQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
+                    .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', selectedBanks);
+
+                const [{ count: vCnt, error: vErr }, { count: tCnt, error: tErr }] = await Promise.all([validQuery, totalQuery]);
+                if (vErr) throw vErr;
+                if (tErr) throw tErr;
+                validCount = vCnt || 0;
+                totalCountAll = tCnt || 0;
+            } else {
+                // Full rows were already fetched and filtered by selectedBanks – count in memory
+                totalCountAll = allData.length;
+                validCount = allData.reduce((acc, tx) => acc + (tx.id_status === 'Valid' ? 1 : 0), 0);
+            }
             
             document.getElementById('stat-total-transactions').textContent = (totalCountAll || 0).toLocaleString();
             
@@ -688,6 +714,12 @@ class App {
     initImport() {
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
+
+        dropZone.addEventListener('click', (e) => {
+            if (!e.target.closest('button')) {
+                fileInput.click();
+            }
+        });
 
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -746,6 +778,7 @@ class App {
             }
 
             if (success) {
+                this.invalidateDistinctCache();
                 // Auto-switch back to transactions tab after 1.5 seconds
                 setTimeout(() => {
                     document.getElementById('import-progress').classList.add('hidden');
@@ -761,6 +794,10 @@ class App {
         } finally {
             this.isImporting = false;
         }
+    }
+
+    invalidateDistinctCache() {
+        this.distinctCache = {};
     }
 
     // Returns the adjusted names currently stored for these mapping rules (call BEFORE changing the rules,
@@ -789,6 +826,7 @@ class App {
         const all = await recomputeTransactions(rows, { includeLocked: true });
         const open = all.filter(c => !c.diff.locked);
         const updated = open.length > 0 ? await updateRuleFields(open) : 0;
+        if (updated > 0) this.invalidateDistinctCache();
         return { updated, lockedSkipped: all.length - open.length };
     }
 
@@ -945,24 +983,34 @@ class App {
 
             btnSaveFix.disabled = true;
             try {
-                const { data: existing, error: existErr } = await supabase.from('manual_fixes').select('reference_number').eq('reference_number', ref).maybeSingle();
+                const isEditMode = document.getElementById('modal-fix-title').innerText === 'Edit Fix';
+                const { data: existing, error: existErr } = await supabase.from('manual_fixes').select('*').eq('reference_number', ref).maybeSingle();
                 if (existErr) throw existErr;
-                if (existing && document.getElementById('modal-fix-title').innerText !== 'Edit Fix') {
+                if (existing && !isEditMode) {
                     if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`, 'Update', 'Cancel')) {
                         return;
                     }
                 }
 
-                const { error } = await supabase.from('manual_fixes').upsert([{
+                // When adding a partial fix to an existing reference (not full Edit Mode), preserve existing non-empty fields
+                const mergedFix = (existing && !isEditMode) ? {
+                    reference_number: ref,
+                    correct_id: correctId || existing.correct_id || null,
+                    item_name: correctName || existing.item_name || null,
+                    mapping: correctMapping || existing.mapping || null,
+                    second_mapping: correctSecondMapping || existing.second_mapping || null
+                } : {
                     reference_number: ref,
                     correct_id: correctId || null,
                     item_name: correctName || null,
                     mapping: correctMapping || null,
                     second_mapping: correctSecondMapping || null
-                }], { onConflict: 'reference_number', ignoreDuplicates: false });
+                };
+
+                const { error } = await supabase.from('manual_fixes').upsert([mergedFix], { onConflict: 'reference_number', ignoreDuplicates: false });
                 if (error) throw error;
 
-                await this.logAudit('Single Manual Fix Added', ref, { correctId, correctName, correctMapping, correctSecondMapping });
+                await this.logAudit('Single Manual Fix Added', ref, mergedFix);
 
                 // Re-apply all rules to this reference's transactions (empty fields no longer wipe existing mappings)
                 const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
@@ -1067,13 +1115,28 @@ class App {
                     });
                     const fixes = Array.from(byRef.values());
 
-                    const existingRows = await fetchByIn('manual_fixes', 'reference_number', 'reference_number', fixes.map(f => f.reference_number), 'reference_number', 500);
-                    const existingRefs = new Set(existingRows.map(r => String(r.reference_number)));
+                    const existingRows = await fetchByIn('manual_fixes', 'reference_number, correct_id, item_name, mapping, second_mapping', 'reference_number', fixes.map(f => f.reference_number), 'reference_number', 500);
+                    const existingMap = new Map(existingRows.map(r => [String(r.reference_number), r]));
 
                     let fixesToProcess = fixes;
-                    if (existingRefs.size > 0) {
-                        const overwrite = await window.customConfirm(`Found ${existingRefs.size} fixes that already exist in the database. Do you want to overwrite them with the new values?`, 'Overwrite Existing', 'Skip Existing');
-                        if (!overwrite) fixesToProcess = fixes.filter(f => !existingRefs.has(f.reference_number));
+                    if (existingMap.size > 0) {
+                        const overwrite = await window.customConfirm(`Found ${existingMap.size} fixes that already exist in the database. Do you want to overwrite them with the new values?`, 'Overwrite Existing', 'Skip Existing');
+                        if (!overwrite) {
+                            fixesToProcess = fixes.filter(f => !existingMap.has(String(f.reference_number)));
+                        } else {
+                            // Merge blank cells with existing values so partial bulk uploads don't wipe existing fields
+                            fixesToProcess = fixes.map(f => {
+                                const old = existingMap.get(String(f.reference_number));
+                                if (!old) return f;
+                                return {
+                                    reference_number: f.reference_number,
+                                    correct_id: f.correct_id || old.correct_id || null,
+                                    item_name: f.item_name || old.item_name || null,
+                                    mapping: f.mapping || old.mapping || null,
+                                    second_mapping: f.second_mapping || old.second_mapping || null
+                                };
+                            });
+                        }
                     }
 
                     if (fixesToProcess.length === 0) {
@@ -1263,6 +1326,7 @@ class App {
             btn.disabled = true;
             try {
                 const updatedCount = await updateRuleFields(selected.map(p => ({ id: p.tx.id, fields: p.diff.fields })));
+                this.invalidateDistinctCache();
 
                 await this.logAudit('Rules Re-applied', `Batch of ${updatedCount} transactions`, {
                     count: updatedCount,
@@ -1383,6 +1447,40 @@ class App {
             else if (currentColumn === 'bank') {
                 options = ['NUADIB64', 'NUADCB136'];
                 if (searchTerm) options = options.filter(opt => opt.toLowerCase().includes(searchTerm.toLowerCase()));
+            }
+            else if (currentColumn === 'is_settled') {
+                options = ['Yes', 'No'];
+                if (searchTerm) options = options.filter(opt => opt.toLowerCase().includes(searchTerm.toLowerCase()));
+            }
+            else if (currentTable === 'transactions' && ['mapping', 'item_name', 'second_mapping'].includes(currentColumn)) {
+                // Prefer fast server-side DISTINCT via RPC, with fallback to paginated scan + 5-min cache
+                listContainer.innerHTML = '<div style="padding: 1rem; text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</div>';
+                if (window.lucide) lucide.createIcons();
+                try {
+                    this.distinctCache = this.distinctCache || {};
+                    const cached = this.distinctCache[currentColumn];
+                    if (!cached || Date.now() - cached.at > 5 * 60 * 1000) {
+                        let values = null;
+                        if (typeof supabase.rpc === 'function') {
+                            const { data: rpcVals, error: rpcErr } = await supabase.rpc('get_distinct_transaction_values', { col_name: currentColumn });
+                            if (!rpcErr && Array.isArray(rpcVals)) {
+                                values = rpcVals.map(r => r.val ?? r[currentColumn] ?? r).filter(v => v !== null && v !== undefined && v !== '').sort();
+                            }
+                        }
+                        if (!values) {
+                            const rows = await fetchAll('transactions', currentColumn, null, 'id');
+                            values = [...new Set(rows.map(r => r[currentColumn]).filter(v => v !== null && v !== undefined && v !== ''))].sort();
+                        }
+                        this.distinctCache[currentColumn] = {
+                            at: Date.now(),
+                            values
+                        };
+                    }
+                    options = [...this.distinctCache[currentColumn].values];
+                } catch (e) {
+                    console.error('Error fetching distinct filter values', e);
+                }
+                if (searchTerm) options = options.filter(opt => String(opt).toLowerCase().includes(searchTerm.toLowerCase()));
             }
             else {
                 listContainer.innerHTML = '<div style="padding: 1rem; text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</div>';
@@ -1552,6 +1650,11 @@ class App {
                                 if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
                                 if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
                                 if (filters.length > 0) query = query.or(filters.join(','));
+                            } else if (col === 'is_settled') {
+                                const filters = [];
+                                if (values.includes('Yes')) filters.push('is_settled.eq.true');
+                                if (values.includes('No')) filters.push('is_settled.is.null', 'is_settled.eq.false');
+                                if (filters.length > 0) query = query.or(filters.join(','));
                             } else {
                                 query = query.in(col, values);
                             }
@@ -1701,7 +1804,7 @@ class App {
     async loadTransactions() {
         const requestId = (this.txRequestId = (this.txRequestId || 0) + 1);
         const tbody = document.getElementById('transactions-body');
-        tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(9) + '</tr>').join('');
+        tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(10) + '</tr>').join('');
 
         const dateFrom = document.getElementById('filter-date-from')?.value;
         const dateTo = document.getElementById('filter-date-to')?.value;
@@ -1718,6 +1821,11 @@ class App {
                     if (values.includes('Valid')) filters.push('id_status.eq.Valid');
                     if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
                     if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
+                    if (filters.length > 0) query = query.or(filters.join(','));
+                } else if (col === 'is_settled') {
+                    const filters = [];
+                    if (values.includes('Yes')) filters.push('is_settled.eq.true');
+                    if (values.includes('No')) filters.push('is_settled.is.null', 'is_settled.eq.false');
                     if (filters.length > 0) query = query.or(filters.join(','));
                 } else {
                     query = query.in(col, values);
@@ -1792,149 +1900,250 @@ class App {
 
     async loadMappings() {
         const tbody = document.getElementById('mappings-body');
-        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(4) + '</tr>').join('');
+        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
         try {
             const allData = await fetchAll('item_mappings', '*', null, 'item_name');
-
-            if (allData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state"><i data-lucide="git-merge" style="width:48px;height:48px;opacity:0.5;"></i><h3>No mappings yet</h3><p>Click "Add Mapping" to create your first item mapping.</p></div></td></tr>';
-                if (window.lucide) lucide.createIcons();
-                return;
-            }
-
-            tbody.innerHTML = allData.map(m => `
-                <tr>
-                    <td>${escapeHTML(m.item_name)}</td>
-                    <td>${escapeHTML(m.adjusted_item_name) || '-'}</td>
-                    <td>${escapeHTML(m.mapping) || '-'}</td>
-                    <td>${escapeHTML(m.second_mapping) || '-'}</td>
-                    <td>
-                        <button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>
-                        <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>
-                    </td>
-                </tr>
-            `).join('');
-
-            // Wire up Edit buttons
-            tbody.querySelectorAll('[data-edit-mapping]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const itemName = btn.getAttribute('data-edit-mapping');
-                    const mapping = allData.find(m => m.item_name === itemName);
-                    if (mapping) {
-                        document.getElementById('map-original').value = mapping.item_name || '';
-                        document.getElementById('map-adjusted').value = mapping.adjusted_item_name || '';
-                        document.getElementById('map-category').value = mapping.mapping || '';
-                    document.getElementById('map-second-category').value = mapping.second_mapping || '';
-                        document.getElementById('modal-mapping-title').innerText = 'Edit Mapping';
-                        document.getElementById('modal-mapping').classList.remove('hidden');
-                    }
-                });
-            });
-
-            // Wire up Delete buttons
-            tbody.querySelectorAll('[data-delete-mapping]').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const itemName = btn.getAttribute('data-delete-mapping');
-                    if (!await window.customConfirm(`Delete mapping for "${itemName}"?`, 'Delete', 'Cancel')) return;
-                    btn.disabled = true;
-                    try {
-                        // Remember what the rule renamed items to, so those transactions can be found afterwards
-                        const previouslyRenamedTo = await this.getCurrentAdjustedNames([itemName]);
-                        const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
-                        if (error) throw error;
-
-                        await this.logAudit('Mapping Deleted', itemName, { item_name: itemName });
-
-                        // Undo the rule on affected transactions (item name and mappings go back to their original values)
-                        const rows = await this.fetchTransactionsForItemNames([itemName], previouslyRenamedTo);
-                        const result = await this.reapplyRulesTo(rows);
-
-                        this.mappingSuggestCache = null;
-                        Toast.show(`Mapping deleted. ${this.reapplySummary(result)}`, 'success');
-                        this.loadMappings();
-                    } catch (err) {
-                        Toast.show('Error deleting mapping: ' + err.message, 'error');
-                        btn.disabled = false;
-                    }
-                });
-            });
+            this.allMappingsData = allData;
+            this.mappingsPage = 1;
+            this.renderMappingsPage();
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
         }
+    }
+
+    renderMappingsPage() {
+        const tbody = document.getElementById('mappings-body');
+        if (!tbody) return;
+        const allData = this.allMappingsData || [];
+        const pageSize = 100;
+
+        if (allData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i data-lucide="git-merge" style="width:48px;height:48px;opacity:0.5;"></i><h3>No mappings yet</h3><p>Click "Add Mapping" to create your first item mapping.</p></div></td></tr>';
+            document.getElementById('mappings-pagination')?.remove();
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(allData.length / pageSize));
+        if (!this.mappingsPage || this.mappingsPage > totalPages) this.mappingsPage = 1;
+        const startIdx = (this.mappingsPage - 1) * pageSize;
+        const pageData = allData.slice(startIdx, startIdx + pageSize);
+
+        tbody.innerHTML = pageData.map(m => `
+            <tr>
+                <td>${escapeHTML(m.item_name)}</td>
+                <td>${escapeHTML(m.adjusted_item_name) || '-'}</td>
+                <td>${escapeHTML(m.mapping) || '-'}</td>
+                <td>${escapeHTML(m.second_mapping) || '-'}</td>
+                <td>
+                    <button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>
+                    <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+
+        // Wire up Edit buttons
+        tbody.querySelectorAll('[data-edit-mapping]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const itemName = btn.getAttribute('data-edit-mapping');
+                const mapping = allData.find(m => m.item_name === itemName);
+                if (mapping) {
+                    document.getElementById('map-original').value = mapping.item_name || '';
+                    document.getElementById('map-adjusted').value = mapping.adjusted_item_name || '';
+                    document.getElementById('map-category').value = mapping.mapping || '';
+                    document.getElementById('map-second-category').value = mapping.second_mapping || '';
+                    document.getElementById('modal-mapping-title').innerText = 'Edit Mapping';
+                    document.getElementById('modal-mapping').classList.remove('hidden');
+                }
+            });
+        });
+
+        // Wire up Delete buttons
+        tbody.querySelectorAll('[data-delete-mapping]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const itemName = btn.getAttribute('data-delete-mapping');
+                if (!await window.customConfirm(`Delete mapping for "${itemName}"?`, 'Delete', 'Cancel')) return;
+                btn.disabled = true;
+                try {
+                    const previouslyRenamedTo = await this.getCurrentAdjustedNames([itemName]);
+                    const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
+                    if (error) throw error;
+
+                    await this.logAudit('Mapping Deleted', itemName, { item_name: itemName });
+
+                    const rows = await this.fetchTransactionsForItemNames([itemName], previouslyRenamedTo);
+                    const result = await this.reapplyRulesTo(rows);
+
+                    this.mappingSuggestCache = null;
+                    Toast.show(`Mapping deleted. ${this.reapplySummary(result)}`, 'success');
+                    this.loadMappings();
+                } catch (err) {
+                    Toast.show('Error deleting mapping: ' + err.message, 'error');
+                    btn.disabled = false;
+                }
+            });
+        });
+
+        const container = tbody.closest('.table-container');
+        if (container) {
+            let pager = document.getElementById('mappings-pagination');
+            if (allData.length <= pageSize) {
+                if (pager) pager.remove();
+            } else {
+                if (!pager) {
+                    pager = document.createElement('div');
+                    pager.id = 'mappings-pagination';
+                    pager.className = 'pagination';
+                    container.appendChild(pager);
+                }
+                pager.innerHTML = `
+                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, allData.length)} of ${allData.length} mappings</span>
+                    <div class="pagination-controls">
+                        <button class="btn btn-icon" id="btn-mappings-prev" ${this.mappingsPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
+                        <span>Page ${this.mappingsPage} of ${totalPages}</span>
+                        <button class="btn btn-icon" id="btn-mappings-next" ${this.mappingsPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                    </div>
+                `;
+                pager.querySelector('#btn-mappings-prev')?.addEventListener('click', () => {
+                    if (this.mappingsPage > 1) {
+                        this.mappingsPage--;
+                        this.renderMappingsPage();
+                    }
+                });
+                pager.querySelector('#btn-mappings-next')?.addEventListener('click', () => {
+                    if (this.mappingsPage < totalPages) {
+                        this.mappingsPage++;
+                        this.renderMappingsPage();
+                    }
+                });
+            }
+        }
+        if (window.lucide) lucide.createIcons();
     }
 
     async loadFixes() {
         const tbody = document.getElementById('fixes-body');
-        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
+        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
         try {
             const searchVal = document.getElementById('fixes-search')?.value.trim();
             const queryFn = searchVal ? (q) => q.ilike('reference_number', `%${searchVal}%`) : null;
             const allData = await fetchAll('manual_fixes', '*', queryFn, 'reference_number');
-
-            if (allData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
-                if (window.lucide) lucide.createIcons();
-                return;
-            }
-
-            tbody.innerHTML = allData.map(f => `
-                <tr>
-                    <td>${escapeHTML(f.reference_number)}</td>
-                    <td>${escapeHTML(f.correct_id) || '-'}</td>
-                    <td>${escapeHTML(f.item_name) || '-'}</td>
-                    <td>${escapeHTML(f.mapping) || '-'}</td>
-                    <td>${escapeHTML(f.second_mapping) || '-'}</td>
-                    <td>
-                        <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
-                        <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
-                    </td>
-                </tr>
-            `).join('');
-
-            // Wire up Edit buttons
-            tbody.querySelectorAll('[data-edit-fix]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const ref = btn.getAttribute('data-edit-fix');
-                    const fix = allData.find(f => f.reference_number === ref);
-                    if (fix) {
-                        document.getElementById('fix-ref').value = fix.reference_number || '';
-                        document.getElementById('fix-id').value = fix.correct_id || '';
-                        document.getElementById('fix-name').value = fix.item_name || '';
-                        document.getElementById('fix-mapping').value = fix.mapping || '';
-                    document.getElementById('fix-second-mapping').value = fix.second_mapping || '';
-                        document.getElementById('modal-fix-title').innerText = 'Edit Fix';
-                        document.getElementById('modal-fix').classList.remove('hidden');
-                    }
-                });
-            });
-
-            // Wire up Delete buttons
-            tbody.querySelectorAll('[data-delete-fix]').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const ref = btn.getAttribute('data-delete-fix');
-                    if (!await window.customConfirm(`Delete fix for reference "${ref}"?`, 'Delete', 'Cancel')) return;
-                    btn.disabled = true;
-                    try {
-                        const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
-                        if (error) throw error;
-
-                        await this.logAudit('Manual Fix Deleted', ref, { reference_number: ref });
-
-                        // Undo the fix on this reference's transactions (ID, item name and mappings re-derived from the originals)
-                        const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
-                        const result = await this.reapplyRulesTo(rows);
-
-                        Toast.show(`Fix deleted. ${this.reapplySummary(result)}`, 'success');
-                        this.loadFixes();
-                    } catch (err) {
-                        Toast.show('Error deleting fix: ' + err.message, 'error');
-                        btn.disabled = false;
-                    }
-                });
-            });
+            this.allFixesData = allData;
+            this.fixesPage = 1;
+            this.renderFixesPage();
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
         }
+    }
+
+    renderFixesPage() {
+        const tbody = document.getElementById('fixes-body');
+        if (!tbody) return;
+        const allData = this.allFixesData || [];
+        const pageSize = 100;
+
+        if (allData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
+            document.getElementById('fixes-pagination')?.remove();
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(allData.length / pageSize));
+        if (!this.fixesPage || this.fixesPage > totalPages) this.fixesPage = 1;
+        const startIdx = (this.fixesPage - 1) * pageSize;
+        const pageData = allData.slice(startIdx, startIdx + pageSize);
+
+        tbody.innerHTML = pageData.map(f => `
+            <tr>
+                <td>${escapeHTML(f.reference_number)}</td>
+                <td>${escapeHTML(f.correct_id) || '-'}</td>
+                <td>${escapeHTML(f.item_name) || '-'}</td>
+                <td>${escapeHTML(f.mapping) || '-'}</td>
+                <td>${escapeHTML(f.second_mapping) || '-'}</td>
+                <td>
+                    <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
+                    <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+
+        // Wire up Edit buttons
+        tbody.querySelectorAll('[data-edit-fix]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const ref = btn.getAttribute('data-edit-fix');
+                const fix = allData.find(f => f.reference_number === ref);
+                if (fix) {
+                    document.getElementById('fix-ref').value = fix.reference_number || '';
+                    document.getElementById('fix-id').value = fix.correct_id || '';
+                    document.getElementById('fix-name').value = fix.item_name || '';
+                    document.getElementById('fix-mapping').value = fix.mapping || '';
+                    document.getElementById('fix-second-mapping').value = fix.second_mapping || '';
+                    document.getElementById('modal-fix-title').innerText = 'Edit Fix';
+                    document.getElementById('modal-fix').classList.remove('hidden');
+                }
+            });
+        });
+
+        // Wire up Delete buttons
+        tbody.querySelectorAll('[data-delete-fix]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const ref = btn.getAttribute('data-delete-fix');
+                if (!await window.customConfirm(`Delete fix for reference "${ref}"?`, 'Delete', 'Cancel')) return;
+                btn.disabled = true;
+                try {
+                    const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
+                    if (error) throw error;
+
+                    await this.logAudit('Manual Fix Deleted', ref, { reference_number: ref });
+
+                    const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
+                    const result = await this.reapplyRulesTo(rows);
+
+                    Toast.show(`Fix deleted. ${this.reapplySummary(result)}`, 'success');
+                    this.loadFixes();
+                } catch (err) {
+                    Toast.show('Error deleting fix: ' + err.message, 'error');
+                    btn.disabled = false;
+                }
+            });
+        });
+
+        const container = tbody.closest('.table-container');
+        if (container) {
+            let pager = document.getElementById('fixes-pagination');
+            if (allData.length <= pageSize) {
+                if (pager) pager.remove();
+            } else {
+                if (!pager) {
+                    pager = document.createElement('div');
+                    pager.id = 'fixes-pagination';
+                    pager.className = 'pagination';
+                    container.appendChild(pager);
+                }
+                pager.innerHTML = `
+                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, allData.length)} of ${allData.length} fixes</span>
+                    <div class="pagination-controls">
+                        <button class="btn btn-icon" id="btn-fixes-prev" ${this.fixesPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
+                        <span>Page ${this.fixesPage} of ${totalPages}</span>
+                        <button class="btn btn-icon" id="btn-fixes-next" ${this.fixesPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                    </div>
+                `;
+                pager.querySelector('#btn-fixes-prev')?.addEventListener('click', () => {
+                    if (this.fixesPage > 1) {
+                        this.fixesPage--;
+                        this.renderFixesPage();
+                    }
+                });
+                pager.querySelector('#btn-fixes-next')?.addEventListener('click', () => {
+                    if (this.fixesPage < totalPages) {
+                        this.fixesPage++;
+                        this.renderFixesPage();
+                    }
+                });
+            }
+        }
+        if (window.lucide) lucide.createIcons();
     }
 
     initStudentMaster() {
@@ -2009,6 +2218,15 @@ class App {
         }
 
         const btnSearch = document.getElementById('btn-search-students');
+        const searchInput = document.getElementById('student-search-input');
+        if (searchInput && btnSearch) {
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    btnSearch.click();
+                }
+            });
+        }
         if (btnSearch) {
             btnSearch.addEventListener('click', async () => {
                 const term = document.getElementById('student-search-input').value.trim();
@@ -2149,14 +2367,26 @@ class App {
         const selectAllMatcher = document.getElementById('automatcher-select-all');
         if(selectAllMatcher) {
             selectAllMatcher.addEventListener('change', (e) => {
-                document.querySelectorAll('.automatch-checkbox').forEach(cb => cb.checked = e.target.checked);
+                const checked = e.target.checked;
+                const pfFilter = (this.headerFilters?.automatch || {})['proposed_fix'];
+                if (Array.isArray(this.automatchProposals)) {
+                    for (const p of this.automatchProposals) {
+                        const pfStatus = p.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
+                        const visible = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
+                        if (visible && p.proposedStudent && !p.locked) {
+                            p.selected = checked;
+                        }
+                    }
+                }
+                document.querySelectorAll('.automatch-checkbox:not(:disabled)').forEach(cb => cb.checked = checked);
             });
         }
         const btnApplyMatch = document.getElementById('btn-apply-automatch-fixes');
         if(btnApplyMatch) {
             btnApplyMatch.addEventListener('click', () => {
+                const hasSelectedProposal = Array.isArray(this.automatchProposals) && this.automatchProposals.some(p => p.selected && p.proposedStudent && !p.locked);
                 const checkboxes = document.querySelectorAll('.automatch-checkbox:checked');
-                if (checkboxes.length === 0) {
+                if (!hasSelectedProposal && checkboxes.length === 0) {
                     Toast.show('Please select at least one proposed match to apply.', 'warning');
                     return;
                 }
@@ -2220,6 +2450,7 @@ class App {
                         if (error) throw error;
                         deleted += chunk.length;
                     }
+                    this.invalidateDistinctCache();
                     Toast.show(`Successfully deleted ${deleted} duplicate transactions.`, 'success');
                     document.getElementById('modal-detect-duplicates').classList.add('hidden');
                     window.duplicateIdsToDelete = [];
@@ -2277,6 +2508,7 @@ class App {
                         .eq('id', batchId);
                     if (batchError) throw batchError;
 
+                    this.invalidateDistinctCache();
                     const deletedCount = deletedRows ? deletedRows.length : 0;
                     Toast.show(keptCount > 0
                         ? `Reverted ${fileName}: deleted ${deletedCount}, kept ${keptCount} settled/ERP-recorded transaction(s).`
@@ -2370,7 +2602,7 @@ class App {
                 // Same reference + price + ORIGINAL item (check_column), ignoring stray spaces.
                 // (item_name is not used: two different items can share an adjusted name legitimately.)
                 const check = tx.check_column != null ? String(tx.check_column).replace(/\s+/g, ' ').trim() : `${tx.reference_number}-${String(tx.item_name || '').trim()}`;
-                const key = `${tx.reference_number}|${Number(tx.item_price)}|${check}`;
+                const key = `${tx.reference_number}|${Number(tx.item_price || 0).toFixed(2)}|${check}`;
                 if (!grouped[key]) grouped[key] = [];
                 grouped[key].push(tx);
             }
@@ -2612,7 +2844,7 @@ class App {
             }
 
             if (invalidTx.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No invalid IDs found matching criteria.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center">No invalid IDs found matching criteria.</td></tr>';
                 btnApply.style.display = 'none';
                 return;
             }
@@ -2646,7 +2878,7 @@ class App {
             let filteredTx = invalidTx;
             
             if (filteredTx.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No transactions match selected filters.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center">No transactions match selected filters.</td></tr>';
                 btnApply.style.display = 'none';
                 return;
             }
@@ -2864,7 +3096,9 @@ class App {
                     original_second_mapping: tx.second_mapping,
                     original_item: tx.item_name,
                     original_amount: tx.item_price,
-                    original_status: tx.id_status
+                    original_status: tx.id_status,
+                    locked: isLockedTransaction(tx),
+                    selected: false
                 };
 
                 this.automatchProposals.push(proposalTx);
@@ -2877,52 +3111,8 @@ class App {
                 return 0;
             });
 
-            // Generate HTML
-            const pfFilter = activeFilters['proposed_fix'];
-            for (const proposal of this.automatchProposals) {
-                const pfStatus = proposal.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
-                const shouldRender = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
-                
-                if (!shouldRender) continue;
-
-                if (proposal.proposedStudent) {
-                    const isNameMatch = proposal.matchReason.includes('Name');
-                    html += `
-                        <tr>
-                            <td><input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}"></td>
-                            <td>${escapeHTML(proposal.original_ref)}</td>
-                            <td>${escapeHTML(proposal.original_date)}</td>
-                            <td>${escapeHTML(proposal.original_mapping || '-')}</td>
-                            <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
-                            <td>${escapeHTML(proposal.original_item)}</td>
-                            <td>${formatMoney(proposal.original_amount)}</td>
-                            <td>
-                                <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${escapeHTML(proposal.matchReason)}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
-                                    Matched: ${escapeHTML(proposal.proposedStudent.student_id)} ${isNameMatch ? ' (By Name)' : ''}
-                                </span>
-                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
-                            </td>
-                            <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${escapeHTML(proposal.matchReason)}</span></td>
-                        </tr>
-                    `;
-                } else {
-                    html += `
-                        <tr>
-                            <td></td>
-                            <td>${escapeHTML(proposal.original_ref)}</td>
-                            <td>${escapeHTML(proposal.original_date)}</td>
-                            <td>${escapeHTML(proposal.original_mapping || '-')}</td>
-                            <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
-                            <td>${escapeHTML(proposal.original_item)}</td>
-                            <td>${formatMoney(proposal.original_amount)}</td>
-                            <td><span class="status-badge invalid-id">No Match Found</span></td>
-                            <td><span style="color:var(--text-muted)">-</span></td>
-                        </tr>
-                    `;
-                }
-            }
-
-            tbody.innerHTML = html || '<tr><td colspan="8" class="text-center">No fixable transactions found.</td></tr>';
+            this.automatchPage = 1;
+            this.renderAutoMatcherPage();
             btnApply.style.display = this.automatchProposals.filter(p => p.proposedStudent).length > 0 ? 'inline-block' : 'none';
             
             const selectAllMatcher = document.getElementById('automatcher-select-all');
@@ -2937,9 +3127,118 @@ class App {
         }
     }
 
+    renderAutoMatcherPage() {
+        const tbody = document.getElementById('automatcher-table-body');
+        if (!tbody) return;
+        const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const activeFilters = this.headerFilters?.automatch || {};
+        const pfFilter = activeFilters['proposed_fix'];
+
+        const filteredProposals = (this.automatchProposals || []).filter(proposal => {
+            const pfStatus = proposal.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
+            return !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
+        });
+
+        const pageSize = 100;
+        const totalPages = Math.max(1, Math.ceil(filteredProposals.length / pageSize));
+        if (!this.automatchPage || this.automatchPage > totalPages) this.automatchPage = 1;
+        const startIdx = (this.automatchPage - 1) * pageSize;
+        const pageProposals = filteredProposals.slice(startIdx, startIdx + pageSize);
+
+        let html = '';
+        for (const proposal of pageProposals) {
+            if (proposal.proposedStudent) {
+                const isNameMatch = proposal.matchReason.includes('Name');
+                html += `
+                    <tr>
+                        <td>${proposal.locked
+                            ? `<input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" disabled title="Settled or recorded in ERP – fix it manually if really needed">`
+                            : `<input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" ${proposal.selected ? 'checked' : ''}>`}</td>
+                        <td>${escapeHTML(proposal.original_ref)}</td>
+                        <td>${escapeHTML(proposal.original_date)}</td>
+                        <td>${escapeHTML(proposal.original_mapping || '-')}</td>
+                        <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
+                        <td>${escapeHTML(proposal.original_item)}</td>
+                        <td>${formatMoney(proposal.original_amount)}</td>
+                        <td>
+                            <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${escapeHTML(proposal.matchReason)}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
+                                Matched: ${escapeHTML(proposal.proposedStudent.student_id)} ${isNameMatch ? ' (By Name)' : ''}
+                            </span>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
+                        </td>
+                        <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${escapeHTML(proposal.matchReason)}</span>${proposal.locked ? '<div style="font-size:0.8rem; color: var(--warning); margin-top: 2px;">Locked: settled / in ERP</div>' : ''}</td>
+                    </tr>
+                `;
+            } else {
+                html += `
+                    <tr>
+                        <td></td>
+                        <td>${escapeHTML(proposal.original_ref)}</td>
+                        <td>${escapeHTML(proposal.original_date)}</td>
+                        <td>${escapeHTML(proposal.original_mapping || '-')}</td>
+                        <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
+                        <td>${escapeHTML(proposal.original_item)}</td>
+                        <td>${formatMoney(proposal.original_amount)}</td>
+                        <td><span class="status-badge invalid-id">No Match Found</span></td>
+                        <td><span style="color:var(--text-muted)">-</span></td>
+                    </tr>
+                `;
+            }
+        }
+
+        tbody.innerHTML = html || '<tr><td colspan="9" class="text-center">No fixable transactions found.</td></tr>';
+
+        tbody.querySelectorAll('.automatch-checkbox:not(:disabled)').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const p = (this.automatchProposals || []).find(item => String(item.tx_id) === cb.value);
+                if (p) p.selected = e.target.checked;
+            });
+        });
+
+        const container = tbody.closest('.table-container');
+        if (container) {
+            let pager = document.getElementById('automatcher-pagination');
+            if (filteredProposals.length <= pageSize) {
+                if (pager) pager.remove();
+            } else {
+                if (!pager) {
+                    pager = document.createElement('div');
+                    pager.id = 'automatcher-pagination';
+                    pager.className = 'pagination';
+                    container.appendChild(pager);
+                }
+                pager.innerHTML = `
+                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, filteredProposals.length)} of ${filteredProposals.length} rows</span>
+                    <div class="pagination-controls">
+                        <button class="btn btn-icon" id="btn-automatch-prev" ${this.automatchPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
+                        <span>Page ${this.automatchPage} of ${totalPages}</span>
+                        <button class="btn btn-icon" id="btn-automatch-next" ${this.automatchPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                    </div>
+                `;
+                pager.querySelector('#btn-automatch-prev')?.addEventListener('click', () => {
+                    if (this.automatchPage > 1) {
+                        this.automatchPage--;
+                        this.renderAutoMatcherPage();
+                    }
+                });
+                pager.querySelector('#btn-automatch-next')?.addEventListener('click', () => {
+                    if (this.automatchPage < totalPages) {
+                        this.automatchPage++;
+                        this.renderAutoMatcherPage();
+                    }
+                });
+            }
+        }
+        if (window.lucide) lucide.createIcons();
+    }
+
     async applyAutoMatches() {
-        const checkboxes = document.querySelectorAll('.automatch-checkbox:checked');
-        if (checkboxes.length === 0) {
+        const checkedDomValues = new Set(Array.from(document.querySelectorAll('.automatch-checkbox:checked')).map(cb => cb.value));
+        const selectedProposals = (this.automatchProposals || []).filter(p =>
+            !p.locked && p.proposedStudent && (p.selected || checkedDomValues.has(String(p.tx_id)))
+        );
+
+        if (selectedProposals.length === 0) {
             Toast.show('Please select at least one proposed match to apply.', 'warning');
             return;
         }
@@ -2955,27 +3254,23 @@ class App {
         }
 
         try {
-            const fp = new FawryProcessor(this.currentUser?.email || 'System');
             const appliedRefs = [];
             const manualFixesToInsert = [];
 
             const updateGroups = {};
 
-            for (const cb of checkboxes) {
-                const proposal = this.automatchProposals.find(p => String(p.tx_id) === cb.value);
-                const tx_id = proposal ? proposal.tx_id : null;
-                if (proposal) {
-                    const sid = proposal.proposedStudent.student_id;
-                    if (!updateGroups[sid]) updateGroups[sid] = [];
-                    updateGroups[sid].push(tx_id);
-                    
-                    manualFixesToInsert.push({
-                        reference_number: proposal.original_ref,
-                        correct_id: sid
-                    });
+            for (const proposal of selectedProposals) {
+                const tx_id = proposal.tx_id;
+                const sid = proposal.proposedStudent.student_id;
+                if (!updateGroups[sid]) updateGroups[sid] = [];
+                updateGroups[sid].push(tx_id);
+                
+                manualFixesToInsert.push({
+                    reference_number: proposal.original_ref,
+                    correct_id: sid
+                });
 
-                    appliedRefs.push(proposal.original_ref);
-                }
+                appliedRefs.push(proposal.original_ref);
             }
 
             // Execute batched updates
@@ -3009,6 +3304,7 @@ class App {
                 await this.logAudit('Applied Auto-Matches', appliedRefs.join(', '), { count: appliedRefs.length });
             }
 
+            this.invalidateDistinctCache();
             Toast.show(`Successfully applied ${appliedRefs.length} fixes!`, 'success');
             
             // Clear targeted state
@@ -3289,7 +3585,7 @@ class App {
         const tbody = document.getElementById('links-table-body');
         if (!tbody) return;
         
-        tbody.innerHTML = '<tr><td colspan="7" class="loading-state"><i data-lucide="loader" class="spin"></i> Loading links...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="loading-state"><i data-lucide="loader" class="spin"></i> Loading links...</td></tr>';
         if (window.lucide) lucide.createIcons();
 
         try {
@@ -3309,7 +3605,7 @@ class App {
             if (error) throw error;
             
             if (!data || data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No payment links found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No payment links found</td></tr>';
                 document.getElementById('btn-links-prev').disabled = true;
                 document.getElementById('btn-links-next').disabled = true;
                 document.getElementById('links-page-info').textContent = 'Page 1 of 1';
@@ -3331,35 +3627,33 @@ class App {
                 return dateB - dateA;
             });
 
-            tbody.innerHTML = '';
-            
-            data.forEach(link => {
+            tbody.innerHTML = data.map(link => {
                 const isExpired = link.expiry_date && new Date(link.expiry_date) < now;
                 const dateBadge = isExpired ? `<span class="badge error">${new Date(link.expiry_date).toLocaleDateString()}</span>` 
                                           : (link.expiry_date ? new Date(link.expiry_date).toLocaleDateString() : '-');
                                           
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><div class="truncate-text" title="${escapeHTML(link.name || '')}">${escapeHTML(link.name) || '-'}</div></td>
-                    <td><span class="amount">${link.amount ? escapeHTML(formatMoney(link.amount)) + ' EGP' : '-'}</span></td>
-                    <td>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span class="badge badge-gray">${escapeHTML(link.invoice_number || '-')}</span>
-                            ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${escapeHTML(link.invoice_number)}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 14px; height: 14px;"></i></button>` : ''}
-                        </div>
-                    </td>
-                    <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
-                    <td>${dateBadge}</td>
-                    <td>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button class="btn btn-outline copy-link-btn" data-url="${escapeHTML(link.invoice_link || '')}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy Link</button>
-                            <button class="btn btn-outline edit-link-btn" data-id="${escapeHTML(link.id)}">Edit</button>
-                            <button class="btn btn-outline delete-link-btn" style="color: var(--danger);" data-id="${escapeHTML(link.id)}">Delete</button>
-                        </div>
-                    </td>
+                return `
+                    <tr>
+                        <td><div class="truncate-text" title="${escapeHTML(link.name || '')}">${escapeHTML(link.name) || '-'}</div></td>
+                        <td><span class="amount">${link.amount ? escapeHTML(formatMoney(link.amount)) + ' EGP' : '-'}</span></td>
+                        <td>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                <span class="badge badge-gray">${escapeHTML(link.invoice_number || '-')}</span>
+                                ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${escapeHTML(link.invoice_number)}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 14px; height: 14px;"></i></button>` : ''}
+                            </div>
+                        </td>
+                        <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
+                        <td>${dateBadge}</td>
+                        <td>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                <button class="btn btn-outline copy-link-btn" data-url="${escapeHTML(link.invoice_link || '')}" ${isExpired ? 'disabled title="Link Expired"' : ''}>Copy Link</button>
+                                <button class="btn btn-outline edit-link-btn" data-id="${escapeHTML(link.id)}">Edit</button>
+                                <button class="btn btn-outline delete-link-btn" style="color: var(--danger);" data-id="${escapeHTML(link.id)}">Delete</button>
+                            </div>
+                        </td>
+                    </tr>
                 `;
-                tbody.appendChild(tr);
-            });
+            }).join('');
             
             tbody.querySelectorAll('.copy-link-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
@@ -3426,7 +3720,7 @@ class App {
             document.getElementById('btn-links-next').disabled = this.paymentLinksPage === totalPages;
 
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="7" class="empty-state text-danger">Error: ${escapeHTML(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="6" class="empty-state text-danger">Error: ${escapeHTML(err.message)}</td></tr>`;
         }
         
         if (window.lucide) lucide.createIcons();
@@ -3448,32 +3742,33 @@ class App {
             const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
             dateTo.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-            dateFrom.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
-            dateTo.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
+            dateFrom.addEventListener('change', () => this.loadErpExport());
+            dateTo.addEventListener('change', () => this.loadErpExport());
         }
 
         if (bankFilter) {
-            bankFilter.addEventListener('change', () => { this.updateErpDropdowns().then(() => this.loadErpExport()); });
+            bankFilter.addEventListener('change', () => this.loadErpExport());
         }
         
+        // Item / Mapping only narrow the already-loaded rows – no new request
         if (itemNameFilter && window.TomSelect) {
             this.erpItemNameSelect = new TomSelect(itemNameFilter, {
                 plugins: ['remove_button'],
                 placeholder: "All Items",
-                onChange: () => this.loadErpExport()
+                onChange: () => this.loadErpExport({ refresh: false })
             });
         } else if (itemNameFilter) {
-            itemNameFilter.addEventListener('change', () => this.loadErpExport());
+            itemNameFilter.addEventListener('change', () => this.loadErpExport({ refresh: false }));
         }
 
         if (mappingFilter && window.TomSelect) {
             this.erpMappingSelect = new TomSelect(mappingFilter, {
                 plugins: ['remove_button'],
                 placeholder: "All Mappings",
-                onChange: () => this.loadErpExport()
+                onChange: () => this.loadErpExport({ refresh: false })
             });
         } else if (mappingFilter) {
-            mappingFilter.addEventListener('change', () => this.loadErpExport());
+            mappingFilter.addEventListener('change', () => this.loadErpExport({ refresh: false }));
         }
 
         if (btnExport) {
@@ -3485,27 +3780,13 @@ class App {
         }
     }
 
-    async updateErpDropdowns() {
-        const dateFrom = document.getElementById('erp-filter-date-from')?.value;
-        const dateTo = document.getElementById('erp-filter-date-to')?.value;
-        const bank = document.getElementById('erp-filter-bank')?.value;
-
-        if (!dateFrom || !dateTo) return;
-
-        let allData = [];
-        try {
-            allData = await fetchAll('transactions', 'item_name, mapping, second_mapping', q => {
-                q = q.gte('payment_date', dateFrom).lte('payment_date', dateTo);
-                if (bank) q = q.eq('bank', bank);
-                return q;
-            }, 'id');
-        } catch (err) {
-            Toast.show('Error loading ERP filters: ' + err.message, 'error');
-            return;
-        }
-
-        const items = [...new Set(allData.map(d => d.item_name).filter(Boolean))].sort();
-        const mappings = [...new Set(allData.map(d => d.mapping).filter(Boolean))].sort();
+    /**
+     * Fills the Item Name / Mapping dropdowns from rows already loaded for the current
+     * date range + bank (no extra request).
+     */
+    updateErpDropdowns(baseData = this.erpBaseData || []) {
+        const items = [...new Set(baseData.map(d => d.item_name).filter(Boolean))].sort();
+        const mappings = [...new Set(baseData.map(d => d.mapping).filter(Boolean))].sort();
 
         const itemSelect = document.getElementById('erp-filter-item-name');
         const mappingSelect = document.getElementById('erp-filter-mapping');
@@ -3514,7 +3795,7 @@ class App {
             const currentItems = this.erpItemNameSelect.getValue();
             this.erpItemNameSelect.clearOptions();
             items.forEach(i => this.erpItemNameSelect.addOption({value: i, text: i}));
-            this.erpItemNameSelect.setValue(currentItems, true); // silent – caller reloads once
+            this.erpItemNameSelect.setValue(currentItems, true); // silent – caller filters once
         } else if (itemSelect) {
             const currentItem = itemSelect.value;
             itemSelect.innerHTML = items.map(i => `<option value="${escapeHTML(i)}">${escapeHTML(i)}</option>`).join('');
@@ -3533,13 +3814,46 @@ class App {
         }
     }
 
-    async loadErpExport() {
+    /**
+     * @param {{refresh?: boolean}} [opts]
+     *   refresh – re-download the date/bank range from the database (default true).
+     *             Item / Mapping filter changes pass false and just re-filter the loaded rows.
+     */
+    async loadErpExport({ refresh = true } = {}) {
         if (!this.currentUser) return;
         const requestId = (this.erpRequestId = (this.erpRequestId || 0) + 1);
         
         const dateFrom = document.getElementById('erp-filter-date-from').value;
         const dateTo = document.getElementById('erp-filter-date-to').value;
         const bank = document.getElementById('erp-filter-bank').value;
+        const baseKey = `${dateFrom}|${dateTo}|${bank}`;
+
+        if (refresh || !this.erpBaseData || this.erpBaseKey !== baseKey) {
+            let baseData = [];
+            try {
+                baseData = await fetchAll('transactions', '*', q => {
+                    if (dateFrom) q = q.gte('payment_date', dateFrom);
+                    if (dateTo) q = q.lte('payment_date', dateTo);
+                    if (bank) q = q.eq('bank', bank);
+                    return q;
+                }, 'id');
+            } catch (err) {
+                if (requestId !== this.erpRequestId) return;
+                // Never keep partial data – exporting it would silently miss transactions
+                this.erpBaseData = null;
+                this.erpBaseKey = null;
+                this.erpData = [];
+                this.renderErpPreview();
+                Toast.show('Error loading ERP data: ' + err.message, 'error');
+                return;
+            }
+            if (requestId !== this.erpRequestId) return; // a newer filter change is loading
+            this.erpBaseData = baseData;
+            this.erpBaseKey = baseKey;
+            this.updateErpDropdowns(baseData);
+        }
+
+        // Read the item / mapping selection AFTER the dropdowns were refreshed
         const itemNameSelect = document.getElementById('erp-filter-item-name');
         const mappingSelect = document.getElementById('erp-filter-mapping');
         
@@ -3555,27 +3869,12 @@ class App {
             mappings = Array.from(mappingSelect.selectedOptions).map(o => o.value).filter(Boolean);
         }
 
-        let allData = [];
-        try {
-            allData = await fetchAll('transactions', '*', q => {
-                if (dateFrom) q = q.gte('payment_date', dateFrom);
-                if (dateTo) q = q.lte('payment_date', dateTo);
-                if (bank) q = q.eq('bank', bank);
-                if (itemNames.length > 0) q = q.in('item_name', itemNames);
-                if (mappings.length > 0) q = q.in('mapping', mappings);
-                return q;
-            }, 'id');
-        } catch (err) {
-            if (requestId !== this.erpRequestId) return;
-            // Never keep partial data – exporting it would silently miss transactions
-            this.erpData = [];
-            this.renderErpPreview();
-            Toast.show('Error loading ERP data: ' + err.message, 'error');
-            return;
-        }
-
-        if (requestId !== this.erpRequestId) return; // a newer filter change is loading
-        this.erpData = allData;
+        const itemSet = new Set(itemNames);
+        const mappingSet = new Set(mappings);
+        this.erpData = this.erpBaseData.filter(t =>
+            (itemSet.size === 0 || itemSet.has(t.item_name)) &&
+            (mappingSet.size === 0 || mappingSet.has(t.mapping))
+        );
         this.renderErpPreview();
     }
 
@@ -3737,18 +4036,31 @@ class App {
 
             const transactionIds = unexportedRows.map(r => r.id);
             const batchSize = 500;
-            
+            const concurrency = 4;
+            const chunks = [];
             for (let i = 0; i < transactionIds.length; i += batchSize) {
-                const chunk = transactionIds.slice(i, i + batchSize);
-                const { error } = await supabase.from('transactions')
-                    .update({ 
-                        erp_batch_number: batchNum,
-                        erp_voucher: startVoucher
-                    })
-                    .in('id', chunk);
-
-                if (error) throw error;
+                chunks.push(transactionIds.slice(i, i + batchSize));
             }
+
+            for (let i = 0; i < chunks.length; i += concurrency) {
+                const batch = chunks.slice(i, i + concurrency);
+                const results = await Promise.all(batch.map(chunk =>
+                    supabase.from('transactions')
+                        .update({
+                            erp_batch_number: batchNum,
+                            erp_voucher: startVoucher
+                        })
+                        .in('id', chunk)
+                ));
+                const failed = results.find(r => r.error);
+                if (failed) throw failed.error;
+            }
+
+            await this.logAudit('ERP References Recorded', batchNum, {
+                batch_number: batchNum,
+                voucher: startVoucher,
+                count: transactionIds.length
+            });
 
             Toast.show('Successfully saved ERP references', 'success');
             document.getElementById('erp-batch-number').value = '';
@@ -3778,7 +4090,7 @@ class App {
                 if (printBtnClone) printBtnClone.remove();
 
                 let name = '-', email = '-', phone = '-', college = '-', program = '-';
-                const row = document.querySelector(`.student-row[data-sid="${this.currentProfileSid}"]`);
+                const row = document.querySelector(`.student-row[data-sid="${CSS.escape(String(this.currentProfileSid))}"]`);
                 if (row && row.children.length >= 6) {
                     name = row.children[1].innerText;
                     email = row.children[2].innerText;
@@ -3786,12 +4098,18 @@ class App {
                     college = row.children[4].innerText;
                     program = row.children[5].innerText;
                 }
+                const sid = escapeHTML(this.currentProfileSid);
+                [name, email, phone, college, program] = [name, email, phone, college, program].map(v => escapeHTML(v));
 
                 const printWindow = window.open('', '_blank');
+                if (!printWindow) {
+                    Toast.show('Pop-up blocked – allow pop-ups for this site to print.', 'warning');
+                    return;
+                }
                 printWindow.document.write(`
                     <html>
                     <head>
-                        <title>Student Statement of Payments - ${this.currentProfileSid}</title>
+                        <title>Student Statement of Payments - ${sid}</title>
                         <style>
                             @page { margin: 0; }
                             body { font-family: 'Inter', sans-serif; padding: 2rem; color: #111; max-width: 900px; margin: 0 auto; }
@@ -3813,7 +4131,7 @@ class App {
                     <body>
                         <h2>Statement of Payments</h2>
                         <div class="header-info">
-                            <h3 style="margin:0 0 0.5rem 0;">${name} (${this.currentProfileSid})</h3>
+                            <h3 style="margin:0 0 0.5rem 0;">${name} (${sid})</h3>
                             <p style="margin:0; font-size: 0.9rem; color: #444;">${email} | ${phone}</p>
                             <p style="margin:0.25rem 0 0 0; font-size: 0.9rem; color: #444;">${college} / ${program}</p>
                             <p style="margin-top:1rem; font-size:0.8rem; color:#888;">Generated on: ${new Date().toLocaleString()}</p>
@@ -3850,7 +4168,7 @@ class App {
             if (tErr) throw tErr;
 
             if (!txs || txs.length === 0) {
-                document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 2rem;">No payments found for this student.</td></tr>';
+                document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem;">No payments found for this student.</td></tr>';
                 document.getElementById('student-summary-body').innerHTML = '<tr><td colspan="2" style="text-align: center; padding: 1rem;">No data</td></tr>';
                 return;
             }

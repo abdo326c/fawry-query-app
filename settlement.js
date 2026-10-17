@@ -228,7 +228,7 @@ class SettlementProcessor {
                     NETAMOUNT: 0
                 };
             }
-            stlGrouped[ref].NETAMOUNT += (row['NETAMOUNT'] || 0);
+            stlGrouped[ref].NETAMOUNT = Math.round((stlGrouped[ref].NETAMOUNT + (row['NETAMOUNT'] || 0)) * 100) / 100;
         }
 
         const settlementRefs = Object.keys(stlGrouped);
@@ -270,10 +270,10 @@ class SettlementProcessor {
             });
         }
 
-        const bankArray = Array.from(detectedBanks);
+        const bankArray = detectedBanks.size > 0 ? Array.from(detectedBanks) : ['NUADCB136', 'NUADIB64'];
 
         // 2. Fetch by precise payment date range AND detected banks to find "Missing in Settlement"
-        if (minTrxDateStr !== '2099-12-31' && bankArray.length > 0) {
+        if (minTrxDateStr !== '2099-12-31') {
             let dateTx;
             try {
                 // Paginated – a busy period easily has more than 1,000 transactions
@@ -307,7 +307,7 @@ class SettlementProcessor {
                     items: []
                 };
             }
-            dbGrouped[ref].item_price += parseFloat(tx.item_price || 0);
+            dbGrouped[ref].item_price = Math.round((dbGrouped[ref].item_price + (parseFloat(tx.item_price) || 0)) * 100) / 100;
             // A reference counts as settled only when ALL of its items are settled
             dbGrouped[ref].is_settled = dbGrouped[ref].is_settled && !!tx.is_settled;
             dbGrouped[ref].items.push(tx);
@@ -365,11 +365,11 @@ class SettlementProcessor {
             }
         }
 
-                // Check for Missing in Settlement
+        // Check for Missing in Settlement
         for (const ref in dbGrouped) {
             if (!processedRefs.has(ref)) {
                 const dData = dbGrouped[ref];
-                if (!dData.is_settled && dData.payment_date >= minTrxDateStr && dData.payment_date <= maxTrxDateStr) {
+                if (!dData.is_settled && dData.payment_date && dData.payment_date >= minTrxDateStr && dData.payment_date <= maxTrxDateStr) {
                     this.reconciliationResults.push({
                         reference: ref,
                         status: 'Missing in Settlement',
@@ -384,6 +384,15 @@ class SettlementProcessor {
             }
         }
 
+        // Sort: Mismatches/Missing first, then Matched
+        this.reconciliationResults.sort((a, b) => {
+            if (a.status === 'Matched' && b.status !== 'Matched') return 1;
+            if (a.status !== 'Matched' && b.status === 'Matched') return -1;
+            return 0;
+        });
+
+        this.currentPage = 1;
+        this.pageSize = 100;
         this.renderResults();
         const noRefNote = skippedNoRef > 0 ? ` (${skippedNoRef} settlement row(s) without ORDER_REF_NUMBER were ignored)` : '';
         this.setStatus(`<i data-lucide="check-circle"></i> Reconciliation complete! Matches: ${matchCount}, Issues: ${mismatchCount}${noRefNote}`);
@@ -395,14 +404,15 @@ class SettlementProcessor {
         
         document.getElementById('recon-actions').classList.remove('hidden');
 
-        // Sort: Mismatches/Missing first, then Matched
-        this.reconciliationResults.sort((a, b) => {
-            if (a.status === 'Matched' && b.status !== 'Matched') return 1;
-            if (a.status !== 'Matched' && b.status === 'Matched') return -1;
-            return 0;
-        });
+        const pageSize = this.pageSize || 100;
+        const total = this.reconciliationResults.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (!this.currentPage || this.currentPage > totalPages) this.currentPage = 1;
 
-        this.resultsTable.innerHTML = this.reconciliationResults.map(r => {
+        const startIdx = (this.currentPage - 1) * pageSize;
+        const pageItems = this.reconciliationResults.slice(startIdx, startIdx + pageSize);
+
+        this.resultsTable.innerHTML = pageItems.map(r => {
             let statusBadge = 'bg-success text-white';
             if (r.status === 'Amount Mismatch') statusBadge = 'bg-warning text-dark';
             else if (r.status.includes('Missing')) statusBadge = 'bg-danger text-white';
@@ -415,14 +425,45 @@ class SettlementProcessor {
                 <tr>
                     <td>${esc(r.reference)}</td>
                     <td><span class="badge ${statusBadge}" style="padding:0.25rem 0.5rem; border-radius:4px;">${esc(r.status)}</span></td>
-                    <td>${r.sys_amount.toFixed(2)}</td>
-                    <td>${r.stl_amount.toFixed(2)}</td>
+                    <td>${Number(r.sys_amount || 0).toFixed(2)}</td>
+                    <td>${Number(r.stl_amount || 0).toFixed(2)}</td>
                     <td>${esc(r.settlement_no || '-')}</td>
                     <td>${esc(r.payment_date || '-')}</td>
                     <td>${dbSettledBadge}</td>
                 </tr>
             `;
         }).join('');
+
+        // Render or update pagination bar for large settlement batches
+        const tableContainer = this.resultsTable.closest('.table-container');
+        if (tableContainer) {
+            let pager = document.getElementById('settlement-pagination');
+            if (!pager) {
+                pager = document.createElement('div');
+                pager.id = 'settlement-pagination';
+                pager.className = 'pagination';
+                tableContainer.appendChild(pager);
+            }
+            if (total > pageSize) {
+                pager.style.display = 'flex';
+                pager.innerHTML = `
+                    <span style="font-size: 0.85rem; color: var(--text-muted);">Showing ${startIdx + 1}–${Math.min(startIdx + pageSize, total)} of ${total.toLocaleString()} references</span>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <button class="btn btn-outline" id="btn-stl-prev" ${this.currentPage === 1 ? 'disabled' : ''}>Prev</button>
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">Page ${this.currentPage} of ${totalPages}</span>
+                        <button class="btn btn-outline" id="btn-stl-next" ${this.currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+                    </div>
+                `;
+                pager.querySelector('#btn-stl-prev')?.addEventListener('click', () => {
+                    if (this.currentPage > 1) { this.currentPage--; this.renderResults(); }
+                });
+                pager.querySelector('#btn-stl-next')?.addEventListener('click', () => {
+                    if (this.currentPage < totalPages) { this.currentPage++; this.renderResults(); }
+                });
+            } else {
+                pager.style.display = 'none';
+            }
+        }
     }
 
     exportConsolidated() {
@@ -471,22 +512,28 @@ class SettlementProcessor {
                 updatesByBatch[batchKey].push(m.reference);
             }
 
+            const tasks = [];
+            const chunkSize = 200;
             for (const batch in updatesByBatch) {
                 const refs = updatesByBatch[batch];
-                // Supabase limits .in() to somewhat small arrays, so chunk if necessary
-                const chunkSize = 200;
                 for (let i = 0; i < refs.length; i += chunkSize) {
                     const chunk = refs.slice(i, i + chunkSize);
-                    const { error } = await this.supabase
-                        .from('transactions')
-                        .update({
-                            is_settled: true,
-                            settlement_batch: batch || null
-                        })
-                        .in('reference_number', chunk);
-                    
-                    if (error) throw error;
+                    tasks.push(async () => {
+                        const { error } = await this.supabase
+                            .from('transactions')
+                            .update({
+                                is_settled: true,
+                                settlement_batch: batch || null
+                            })
+                            .in('reference_number', chunk);
+                        if (error) throw error;
+                    });
                 }
+            }
+
+            const concurrency = 4;
+            for (let i = 0; i < tasks.length; i += concurrency) {
+                await Promise.all(tasks.slice(i, i + concurrency).map(fn => fn()));
             }
 
             Toast.show(`Successfully marked ${matches.length} references as settled!`, 'success');

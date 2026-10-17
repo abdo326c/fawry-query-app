@@ -51,5 +51,22 @@ test('applyBusinessRules precedence logic', () => {
     expect(res4.itemName).toBe('AdjTuition');
     expect(res4.mapping).toBe('Fin');
     expect(res4.secondMapping).toBe('Sec');
+
+    // Invalid link.custom_input_value (e.g. 14-digit National ID or text note) must NOT overwrite an already-Valid base studentId
+    const res5 = applyBusinessRules(
+        { studentId: '202312345', itemName: 'Tuition' },
+        { link: { custom_input_value: '29901011234567' }, lookupMapping: () => undefined }
+    );
+    expect(res5.studentId).toBe('202312345');
+    expect(res5.idStatus).toBe('Valid');
+
+    // Invalid link.custom_input_value is still used when base studentId is missing or invalid
+    const res6 = applyBusinessRules(
+        { studentId: null, itemName: 'Tuition' },
+        { link: { custom_input_value: '29901011234567' }, lookupMapping: () => undefined }
+    );
+    expect(res6.studentId).toBe('29901011234567');
+    expect(res6.idStatus).toBe('Error: ID Too Long (14 digits)');
 });
+
 

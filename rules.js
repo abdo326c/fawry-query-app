@@ -80,14 +80,26 @@ export function applyBusinessRules(base, { link, fix, lookupMapping }) {
     // Where each final value came from: 'original' | 'link' | 'fix' | 'rule'
     const sources = { studentId: 'original', itemName: 'original', mapping: 'original', secondMapping: 'original' };
 
-    if (link && link.custom_input_value) { studentId = link.custom_input_value; sources.studentId = 'link'; }
+    const compactId = (val) => {
+        if (val === null || val === undefined) return val;
+        const compact = String(val).replace(/[\s\u00A0]+/g, '');
+        return /^(DIP)?\d+$/i.test(compact) ? compact.toUpperCase() : val;
+    };
+
+    const baseIsValid = validateID(compactId(studentId)) === 'Valid';
+
+    if (link && link.custom_input_value) {
+        const linkCompacted = compactId(link.custom_input_value);
+        // Do not overwrite an already-Valid original student ID with an invalid link value (e.g. National ID or text note)
+        if (!baseIsValid || validateID(linkCompacted) === 'Valid') {
+            studentId = link.custom_input_value;
+            sources.studentId = 'link';
+        }
+    }
     if (fix && fix.correct_id) { studentId = fix.correct_id; sources.studentId = 'fix'; }
 
     // Remove stray spaces from ID-like values ("2310 00123" → "231000123"); names are left untouched
-    if (studentId !== null && studentId !== undefined) {
-        const compact = String(studentId).replace(/[\s\u00A0]+/g, '');
-        if (/^(DIP)?\d+$/i.test(compact)) studentId = compact.toUpperCase();
-    }
+    studentId = compactId(studentId);
 
     const fixedName = fix && fix.item_name ? fix.item_name : null;
     if (fixedName) { itemName = fixedName; sources.itemName = 'fix'; }
