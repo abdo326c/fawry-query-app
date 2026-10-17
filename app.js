@@ -4736,7 +4736,7 @@ class App {
                             closeSearch();
                             if (type === 'tx') {
                                 const ref = item.getAttribute('data-ref');
-                                const txNav = document.querySelector('.nav-item[data-view="transactions"]');
+                                const txNav = document.querySelector('.nav-link[data-tab="transactions"]') || document.querySelector('.nav-item[data-view="transactions"]');
                                 if (txNav) txNav.click();
                                 const searchInp = document.getElementById('search-input');
                                 if (searchInp) searchInp.value = ref;
@@ -4744,7 +4744,7 @@ class App {
                                 this.loadTransactions();
                             } else if (type === 'student') {
                                 const sid = item.getAttribute('data-sid');
-                                const smNav = document.querySelector('.nav-item[data-view="student-master"]');
+                                const smNav = document.querySelector('.nav-link[data-tab="student-master"]') || document.querySelector('.nav-item[data-view="student-master"]');
                                 if (smNav) smNav.click();
                                 const lookupBtn = document.querySelector('.student-tab-btn[data-target="student-lookup"]');
                                 if (lookupBtn) lookupBtn.click();
