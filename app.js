@@ -1242,11 +1242,290 @@ class App {
     }
 
     resetFixModal(title = 'Add Fix') {
+        this.editingFixOriginalRef = null;
         ['fix-ref', 'fix-id', 'fix-name', 'fix-mapping', 'fix-second-mapping'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = '';
         });
+        ['fix-duplicate-warning', 'fix-tx-preview', 'fix-id-feedback', 'fix-item-suggestion'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.display = 'none';
+                el.innerHTML = '';
+            }
+        });
         document.getElementById('modal-fix-title').innerText = title;
+        this.populateFixModalDatalists();
+    }
+
+    async populateFixModalDatalists() {
+        try {
+            if (!this.allMappingsData) {
+                this.allMappingsData = await fetchAll('item_mappings', '*', null, 'item_name');
+            }
+            const allData = this.allMappingsData || [];
+            const itemNames = [...new Set(
+                allData.flatMap(m => [m.adjusted_item_name, m.item_name]).map(v => normalizeItemName(v)).filter(Boolean)
+            )].sort();
+            const categories = [...new Set(allData.map(m => m.mapping).filter(Boolean))].sort();
+            const secondCategories = [...new Set(allData.map(m => m.second_mapping).filter(Boolean))].sort();
+
+            const dlItems = document.getElementById('datalist-fix-item-names');
+            if (dlItems) {
+                dlItems.innerHTML = itemNames.map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
+            }
+            const dl1 = document.getElementById('datalist-mapping-categories');
+            if (dl1 && !dl1.innerHTML) {
+                dl1.innerHTML = categories.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
+            }
+            const dl2 = document.getElementById('datalist-second-mapping-categories');
+            if (dl2 && !dl2.innerHTML) {
+                dl2.innerHTML = secondCategories.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
+            }
+        } catch (err) {
+            // Non-blocking autocomplete population
+        }
+    }
+
+    findConflictingFix(refInput, excludeRef = null) {
+        const normRef = String(refInput || '').trim().toLowerCase();
+        if (!normRef) return null;
+        const normExclude = excludeRef ? String(excludeRef).trim().toLowerCase() : null;
+        const list = this.allFixesData || [];
+        for (const f of list) {
+            if (!f || !f.reference_number) continue;
+            const key = String(f.reference_number).trim().toLowerCase();
+            if (normExclude && key === normExclude) continue;
+            if (key === normRef) return f;
+        }
+        return null;
+    }
+
+    openFixModalForEdit(fix, carryOver = null) {
+        if (!fix) return;
+        this.resetFixModal('Edit Fix');
+        this.editingFixOriginalRef = fix.reference_number;
+        document.getElementById('fix-ref').value = fix.reference_number || '';
+        document.getElementById('fix-id').value = (carryOver && carryOver.correct_id) ? carryOver.correct_id : (fix.correct_id || '');
+        document.getElementById('fix-name').value = (carryOver && carryOver.item_name) ? carryOver.item_name : (fix.item_name || '');
+        document.getElementById('fix-mapping').value = (carryOver && carryOver.mapping) ? carryOver.mapping : (fix.mapping || '');
+        document.getElementById('fix-second-mapping').value = (carryOver && carryOver.second_mapping) ? carryOver.second_mapping : (fix.second_mapping || '');
+        document.getElementById('modal-fix').classList.remove('hidden');
+        this.updateFixRefPreview(fix.reference_number);
+        if (document.getElementById('fix-id').value) {
+            this.updateFixIdFeedback(document.getElementById('fix-id').value);
+        }
+    }
+
+    async openQuickFixForRef(refNumber) {
+        const cleanRef = String(refNumber || '').trim();
+        if (!cleanRef) return;
+        try {
+            if (!this.allFixesData) {
+                this.allFixesData = await fetchAll('manual_fixes', '*', null, 'reference_number');
+            }
+        } catch (e) {
+            // ignore
+        }
+        const existing = this.findConflictingFix(cleanRef, null);
+        if (existing) {
+            this.openFixModalForEdit(existing);
+            Toast.show(`Loaded existing manual fix for Reference "${existing.reference_number}"`, 'info');
+        } else {
+            this.resetFixModal('Add Fix');
+            document.getElementById('fix-ref').value = cleanRef;
+            document.getElementById('modal-fix').classList.remove('hidden');
+            this.updateFixRefPreview(cleanRef);
+            setTimeout(() => document.getElementById('fix-id')?.focus(), 50);
+        }
+    }
+
+    async updateFixRefPreview(rawRef) {
+        const ref = String(rawRef || '').trim();
+        const dupWarn = document.getElementById('fix-duplicate-warning');
+        const previewEl = document.getElementById('fix-tx-preview');
+        const reqId = (this.fixPreviewReqId = (this.fixPreviewReqId || 0) + 1);
+
+        if (!ref) {
+            if (dupWarn) dupWarn.style.display = 'none';
+            if (previewEl) previewEl.style.display = 'none';
+            return;
+        }
+
+        try {
+            if (!this.allFixesData) {
+                this.allFixesData = await fetchAll('manual_fixes', '*', null, 'reference_number');
+            }
+        } catch (e) {
+            // ignore
+        }
+        if (reqId !== this.fixPreviewReqId) return;
+
+        // 1. Check duplicate fix in manual_fixes
+        if (dupWarn) {
+            const conflict = this.findConflictingFix(ref, this.editingFixOriginalRef);
+            if (conflict) {
+                dupWarn.innerText = `⚠️ A manual fix for Reference "${conflict.reference_number}" already exists. Click here to edit the existing fix instead.`;
+                dupWarn.style.display = 'block';
+                dupWarn.onclick = () => {
+                    this.openFixModalForEdit(conflict, {
+                        correct_id: document.getElementById('fix-id')?.value.trim() || '',
+                        item_name: normalizeItemName(document.getElementById('fix-name')?.value) || '',
+                        mapping: normalizeItemName(document.getElementById('fix-mapping')?.value) || '',
+                        second_mapping: normalizeItemName(document.getElementById('fix-second-mapping')?.value) || ''
+                    });
+                    Toast.show(`Switched to editing existing fix for "${conflict.reference_number}"`, 'info');
+                };
+            } else {
+                dupWarn.style.display = 'none';
+            }
+        }
+
+        // 2. Live Transaction Lookup in `transactions`
+        if (!previewEl) return;
+        previewEl.style.display = 'block';
+        previewEl.innerHTML = `<span style="color: var(--text-muted);">Looking up transaction "${escapeHTML(ref)}"...</span>`;
+
+        try {
+            const { data: txRows, error } = await supabase
+                .from('transactions')
+                .select('reference_number, payment_date, student_id, id_status, item_name, check_column, item_price, mapping, second_mapping, is_settled')
+                .eq('reference_number', ref)
+                .limit(5);
+            if (reqId !== this.fixPreviewReqId) return;
+            if (error) throw error;
+
+            if (!txRows || txRows.length === 0) {
+                previewEl.innerHTML = `
+                    <div style="color: #f59e0b; display: flex; align-items: center; gap: 0.4rem;">
+                        <span>⚠️ No transaction found in database with Reference Number <strong>${escapeHTML(ref)}</strong>. Verify there are no typos.</span>
+                    </div>
+                `;
+                return;
+            }
+
+            const t = txRows[0];
+            let statusClass = 'valid';
+            if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
+            if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
+            const extraCount = txRows.length > 1 ? ` <span class="text-muted">(+${txRows.length - 1} more row)</span>` : '';
+
+            previewEl.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.35rem;">
+                    <span><strong>Transaction Found</strong>${extraCount} • ${escapeHTML(toDateOnly(t.payment_date) || 'N/A')}</span>
+                    <span class="badge ${statusClass}" style="font-size: 0.72rem;">${escapeHTML(t.id_status || 'Unknown')}</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 0.75rem; color: var(--text-muted); font-size: 0.8rem;">
+                    <div>Current ID: <strong style="color: var(--text-main);">${escapeHTML(t.student_id || 'Empty')}</strong></div>
+                    <div>Amount: <strong style="color: var(--text-main);">EGP ${formatMoney(t.item_price)}</strong></div>
+                    <div style="grid-column: 1 / -1;">Item: <strong style="color: var(--text-main);">${escapeHTML(t.item_name || '-')}</strong></div>
+                    <div>Mapping: <strong style="color: var(--text-main);">${escapeHTML(t.mapping || '-')}</strong></div>
+                    <div>2nd Mapping: <strong style="color: var(--text-main);">${escapeHTML(t.second_mapping || '-')}</strong></div>
+                </div>
+            `;
+        } catch (err) {
+            if (reqId !== this.fixPreviewReqId) return;
+            previewEl.style.display = 'none';
+        }
+    }
+
+    async updateFixIdFeedback(rawId) {
+        const val = String(rawId || '').trim();
+        const fbEl = document.getElementById('fix-id-feedback');
+        const reqId = (this.fixIdReqId = (this.fixIdReqId || 0) + 1);
+        if (!fbEl) return;
+
+        if (!val) {
+            fbEl.style.display = 'none';
+            fbEl.innerHTML = '';
+            return;
+        }
+
+        const status = validateID(val);
+        fbEl.style.display = 'block';
+
+        if (status !== 'Valid') {
+            fbEl.style.background = 'rgba(239, 68, 68, 0.12)';
+            fbEl.style.border = '1px solid rgba(239, 68, 68, 0.35)';
+            fbEl.style.color = '#ef4444';
+            fbEl.innerHTML = `⚠️ <strong>${escapeHTML(status)}</strong> — Saving this ID will mark the transaction as an Error.`;
+            return;
+        }
+
+        fbEl.style.background = 'rgba(16, 185, 129, 0.12)';
+        fbEl.style.border = '1px solid rgba(16, 185, 129, 0.35)';
+        fbEl.style.color = '#10b981';
+        fbEl.innerHTML = `✅ Valid 9-digit Student ID format. Checking Student Master...`;
+
+        try {
+            const { data: student, error } = await supabase
+                .from('student_master')
+                .select('student_id, full_name, faculty, status')
+                .eq('student_id', val)
+                .maybeSingle();
+            if (reqId !== this.fixIdReqId) return;
+            if (!error && student) {
+                const fac = student.faculty ? ` • ${escapeHTML(student.faculty)}` : '';
+                fbEl.innerHTML = `✅ <strong>Valid ID</strong> — ${escapeHTML(student.full_name || 'Student')}${fac}`;
+            } else {
+                fbEl.innerHTML = `✅ <strong>Valid 9-digit ID format</strong> <span style="opacity: 0.85;">(Not found in Student Master list)</span>`;
+            }
+        } catch (err) {
+            if (reqId !== this.fixIdReqId) return;
+            fbEl.innerHTML = `✅ <strong>Valid 9-digit ID format</strong>`;
+        }
+    }
+
+    async updateFixItemSuggestion(rawName) {
+        const query = normalizeItemName(rawName);
+        const suggestEl = document.getElementById('fix-item-suggestion');
+        if (!suggestEl) return;
+        if (!query) {
+            suggestEl.style.display = 'none';
+            return;
+        }
+        try {
+            if (!this.allMappingsData) {
+                this.allMappingsData = await fetchAll('item_mappings', '*', null, 'item_name');
+            }
+        } catch (e) {
+            suggestEl.style.display = 'none';
+            return;
+        }
+        const normQuery = query.toLowerCase();
+        const match = (this.allMappingsData || []).find(m =>
+            (m.item_name && normalizeItemName(m.item_name).toLowerCase() === normQuery) ||
+            (m.adjusted_item_name && normalizeItemName(m.adjusted_item_name).toLowerCase() === normQuery)
+        );
+        if (match && (match.mapping || match.second_mapping)) {
+            const mapInput = document.getElementById('fix-mapping');
+            const secInput = document.getElementById('fix-second-mapping');
+            // Auto-fill if both mapping inputs are currently empty
+            if (mapInput && !mapInput.value.trim() && !secInput?.value.trim()) {
+                mapInput.value = match.mapping || '';
+                if (secInput && match.second_mapping) secInput.value = match.second_mapping;
+                suggestEl.style.display = 'none';
+                Toast.show(`Auto-filled Mapping "${match.mapping}" from Item Mappings`, 'info');
+                return;
+            }
+            const curMap = mapInput?.value.trim() || '';
+            const curSec = secInput?.value.trim() || '';
+            if (curMap !== (match.mapping || '') || curSec !== (match.second_mapping || '')) {
+                const secLabel = match.second_mapping ? ` / "${match.second_mapping}"` : '';
+                suggestEl.innerText = `💡 Click to fill Mapping "${match.mapping || '-'}"${secLabel} from Item Mappings`;
+                suggestEl.style.display = 'block';
+                suggestEl.onclick = () => {
+                    if (mapInput) mapInput.value = match.mapping || '';
+                    if (secInput) secInput.value = match.second_mapping || '';
+                    suggestEl.style.display = 'none';
+                    Toast.show('Applied Mapping from Item Mappings!', 'success');
+                };
+            } else {
+                suggestEl.style.display = 'none';
+            }
+        } else {
+            suggestEl.style.display = 'none';
+        }
     }
 
     initModals() {
@@ -1367,6 +1646,33 @@ class App {
             document.getElementById('modal-fix').classList.remove('hidden');
         });
 
+        // Live Transaction Preview & Duplicate Fix Detection on #fix-ref
+        let fixRefTimeout;
+        document.getElementById('fix-ref')?.addEventListener('input', (e) => {
+            clearTimeout(fixRefTimeout);
+            fixRefTimeout = setTimeout(() => {
+                this.updateFixRefPreview(e.target.value);
+            }, 250);
+        });
+
+        // Live Student ID Validation & Student Master Lookup on #fix-id
+        let fixIdTimeout;
+        document.getElementById('fix-id')?.addEventListener('input', (e) => {
+            clearTimeout(fixIdTimeout);
+            fixIdTimeout = setTimeout(() => {
+                this.updateFixIdFeedback(e.target.value);
+            }, 250);
+        });
+
+        // Smart Item Mapping Auto-Fill on #fix-name
+        let fixNameTimeout;
+        document.getElementById('fix-name')?.addEventListener('input', (e) => {
+            clearTimeout(fixNameTimeout);
+            fixNameTimeout = setTimeout(() => {
+                this.updateFixItemSuggestion(e.target.value);
+            }, 200);
+        });
+
         // Save Mapping (with duplicate & chained-name prevention)
         const btnSaveMapping = document.getElementById('btn-save-mapping');
         btnSaveMapping.addEventListener('click', async () => {
@@ -1463,29 +1769,48 @@ class App {
             }
         });
 
-        // Save Fix
+        // Save Fix (with live ID validation, duplicate protection, and reference rename cleanup)
         const btnSaveFix = document.getElementById('btn-save-fix');
         btnSaveFix.addEventListener('click', async () => {
             const ref = document.getElementById('fix-ref').value.trim();
             const correctId = document.getElementById('fix-id').value.trim();
-            const correctName = document.getElementById('fix-name').value.trim();
-            const correctMapping = document.getElementById('fix-mapping').value.trim();
-            const correctSecondMapping = document.getElementById('fix-second-mapping').value.trim();
+            const correctName = normalizeItemName(document.getElementById('fix-name').value);
+            const correctMapping = normalizeItemName(document.getElementById('fix-mapping').value);
+            const correctSecondMapping = normalizeItemName(document.getElementById('fix-second-mapping').value);
 
             if (!ref) return Toast.show('Reference Number is required', 'warning');
             if (!correctId && !correctName && !correctMapping && !correctSecondMapping) {
                 return Toast.show('Enter at least one value to correct', 'warning');
             }
 
+            if (correctId) {
+                const idStatus = validateID(correctId);
+                if (idStatus !== 'Valid') {
+                    const proceedInvalid = await window.customConfirm(
+                        `The Student ID "${correctId}" is invalid (${idStatus}). Saving this ID will mark the transaction status as Error.\n\nDo you still want to save this ID?`,
+                        'Save Anyway', 'Cancel'
+                    );
+                    if (!proceedInvalid) return;
+                }
+            }
+
             btnSaveFix.disabled = true;
             try {
                 const isEditMode = document.getElementById('modal-fix-title').innerText === 'Edit Fix';
+                const oldEditingRef = this.editingFixOriginalRef;
+                const isRenamingRef = isEditMode && oldEditingRef && oldEditingRef !== ref;
+
                 const { data: existing, error: existErr } = await supabase.from('manual_fixes').select('*').eq('reference_number', ref).maybeSingle();
                 if (existErr) throw existErr;
-                if (existing && !isEditMode) {
-                    if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the old fix?`, 'Update', 'Cancel')) {
+                if (existing && (!isEditMode || isRenamingRef)) {
+                    if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the existing fix?`, 'Update Existing', 'Cancel')) {
                         return;
                     }
+                }
+
+                if (isRenamingRef) {
+                    const { error: delErr } = await supabase.from('manual_fixes').delete().eq('reference_number', oldEditingRef);
+                    if (delErr) throw delErr;
                 }
 
                 // When adding a partial fix to an existing reference (not full Edit Mode), preserve existing non-empty fields
@@ -1506,10 +1831,15 @@ class App {
                 const { error } = await supabase.from('manual_fixes').upsert([mergedFix], { onConflict: 'reference_number', ignoreDuplicates: false });
                 if (error) throw error;
 
-                await this.logAudit('Single Manual Fix Added', ref, mergedFix);
+                await this.logAudit(
+                    isEditMode ? 'Manual Fix Updated' : 'Single Manual Fix Added',
+                    ref,
+                    isRenamingRef ? { ...mergedFix, previous_reference_number: oldEditingRef } : mergedFix
+                );
 
-                // Re-apply all rules to this reference's transactions
-                const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
+                // Re-apply all rules to affected reference number(s)
+                const affectedRefs = isRenamingRef ? [oldEditingRef, ref] : [ref];
+                const rows = await fetchByIn('transactions', '*', 'reference_number', affectedRefs);
                 const all = await recomputeTransactions(rows, { includeLocked: true });
                 const lockedChanges = all.filter(c => c.diff.locked);
                 let applyToLocked = false;
@@ -1533,6 +1863,9 @@ class App {
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
                 this.loadFixes();
+                if (document.getElementById('view-transactions')?.classList.contains('active')) {
+                    this.loadTransactions();
+                }
             } catch (err) {
                 Toast.show('Error saving fix: ' + err.message, 'error');
             } finally {
@@ -1686,33 +2019,53 @@ class App {
                 } else if (type === 'fixes') {
                     const byRef = new Map();
                     data.forEach(row => {
-                        const reference_number = clean(getVal(row, 'Reference Number'));
+                        const rawRef = clean(getVal(row, 'Reference Number'));
+                        const reference_number = rawRef ? String(rawRef).trim() : null;
                         if (!reference_number || reference_number === 'null') return;
-                        byRef.set(reference_number, {
-                            reference_number,
-                            correct_id: clean(getVal(row, 'Correct ID')),
-                            item_name: clean(getVal(row, 'Item Name')),
-                            mapping: clean(getVal(row, 'Mapping')),
-                            second_mapping: clean(getVal(row, '2nd Mapping'))
+                        const key = reference_number.toLowerCase();
+                        const prev = byRef.get(key);
+                        const correct_id = clean(getVal(row, 'Correct ID'));
+                        const item_name = clean(getVal(row, 'Item Name')) ? normalizeItemName(clean(getVal(row, 'Item Name'))) : null;
+                        const mapping = clean(getVal(row, 'Mapping')) ? normalizeItemName(clean(getVal(row, 'Mapping'))) : null;
+                        const second_mapping = clean(getVal(row, '2nd Mapping')) ? normalizeItemName(clean(getVal(row, '2nd Mapping'))) : null;
+
+                        if (!correct_id && !item_name && !mapping && !second_mapping && !prev) return;
+
+                        byRef.set(key, {
+                            reference_number: prev ? prev.reference_number : reference_number,
+                            correct_id: correct_id || (prev ? prev.correct_id : null) || null,
+                            item_name: item_name || (prev ? prev.item_name : null) || null,
+                            mapping: mapping || (prev ? prev.mapping : null) || null,
+                            second_mapping: second_mapping || (prev ? prev.second_mapping : null) || null
                         });
                     });
                     const fixes = Array.from(byRef.values());
 
+                    const invalidIdFixes = fixes.filter(f => f.correct_id && validateID(f.correct_id) !== 'Valid');
+                    if (invalidIdFixes.length > 0) {
+                        const sampleRefs = invalidIdFixes.slice(0, 3).map(f => `${f.reference_number} (${f.correct_id})`).join(', ');
+                        const proceedInvalid = await window.customConfirm(
+                            `${invalidIdFixes.length} row(s) in your upload have an invalid Student ID format (e.g., ${sampleRefs}). Saving invalid IDs will mark those transactions as Error.\n\nDo you want to continue uploading them anyway?`,
+                            'Upload Anyway', 'Cancel Upload'
+                        );
+                        if (!proceedInvalid) return;
+                    }
+
                     const existingRows = await fetchByIn('manual_fixes', 'reference_number, correct_id, item_name, mapping, second_mapping', 'reference_number', fixes.map(f => f.reference_number), 'reference_number', 500);
-                    const existingMap = new Map(existingRows.map(r => [String(r.reference_number), r]));
+                    const existingMap = new Map(existingRows.map(r => [String(r.reference_number).trim().toLowerCase(), r]));
 
                     let fixesToProcess = fixes;
                     if (existingMap.size > 0) {
-                        const overwrite = await window.customConfirm(`Found ${existingMap.size} fixes that already exist in the database. Do you want to overwrite them with the new values?`, 'Overwrite Existing', 'Skip Existing');
+                        const overwrite = await window.customConfirm(`Found ${existingMap.size} fixes that already exist in the database. Do you want to update them with the new values?`, 'Update Existing', 'Skip Existing');
                         if (!overwrite) {
-                            fixesToProcess = fixes.filter(f => !existingMap.has(String(f.reference_number)));
+                            fixesToProcess = fixes.filter(f => !existingMap.has(String(f.reference_number).trim().toLowerCase()));
                         } else {
                             // Merge blank cells with existing values so partial bulk uploads don't wipe existing fields
                             fixesToProcess = fixes.map(f => {
-                                const old = existingMap.get(String(f.reference_number));
+                                const old = existingMap.get(String(f.reference_number).trim().toLowerCase());
                                 if (!old) return f;
                                 return {
-                                    reference_number: f.reference_number,
+                                    reference_number: old.reference_number || f.reference_number,
                                     correct_id: f.correct_id || old.correct_id || null,
                                     item_name: f.item_name || old.item_name || null,
                                     mapping: f.mapping || old.mapping || null,
@@ -1782,13 +2135,60 @@ class App {
             XLSX.writeFile(workbook, "Manual_Fixes_Template.xlsx");
         });
 
+        // Manual Fixes Search, Filters, Deduplicate & Unresolved Transactions Panel
         const fixesSearch = document.getElementById('fixes-search');
         let fixesSearchTimeout;
         fixesSearch?.addEventListener('input', () => {
             clearTimeout(fixesSearchTimeout);
             fixesSearchTimeout = setTimeout(() => {
-                this.loadFixes();
-            }, 500);
+                this.fixesPage = 1;
+                this.renderFixesPage();
+            }, 250);
+        });
+
+        ['fixes-filter-type', 'fixes-filter-category'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', () => {
+                this.fixesPage = 1;
+                this.renderFixesPage();
+            });
+        });
+
+        document.getElementById('btn-clear-fixes-filters')?.addEventListener('click', () => {
+            const s = document.getElementById('fixes-search');
+            const t = document.getElementById('fixes-filter-type');
+            const c = document.getElementById('fixes-filter-category');
+            if (s) s.value = '';
+            if (t) t.value = '';
+            if (c) c.value = '';
+            this.fixesPage = 1;
+            this.renderFixesPage();
+        });
+
+        document.getElementById('btn-dedup-fixes')?.addEventListener('click', async () => {
+            const btn = document.getElementById('btn-dedup-fixes');
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Cleaning...';
+            btn.disabled = true;
+            if (window.lucide) lucide.createIcons({ root: btn });
+            try {
+                await this.deduplicateManualFixes({ silent: false });
+            } finally {
+                btn.innerHTML = origHtml;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons({ root: btn });
+            }
+        });
+
+        document.getElementById('btn-toggle-unresolved-tx-panel')?.addEventListener('click', () => {
+            const panel = document.getElementById('unresolved-tx-panel');
+            if (!panel) return;
+            const willOpen = panel.classList.contains('hidden');
+            panel.classList.toggle('hidden');
+            if (willOpen) this.loadUnresolvedTransactionsSummary();
+        });
+
+        document.getElementById('btn-close-unresolved-tx-panel')?.addEventListener('click', () => {
+            document.getElementById('unresolved-tx-panel')?.classList.add('hidden');
         });
 
         // Item Mappings Search, Filters, Deduplicate & Unmapped Panel
@@ -2547,11 +2947,27 @@ class App {
                     <td style="white-space: nowrap;">${escapeHTML(t.mapping) || '-'}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.second_mapping) || '-'}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.bank)}</td>
-                    <td><span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span></td>
+                    <td>
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
+                            <button type="button" class="btn btn-icon" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}" style="padding: 0.15rem 0.3rem; opacity: ${statusClass === 'valid' ? '0.55' : '1'};">
+                                <i data-lucide="wrench" style="width: 13px; height: 13px;"></i>
+                            </button>
+                        </div>
+                    </td>
                     <td>${t.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;padding:0.2rem 0.4rem;font-size:0.7rem;">Yes</span>' : '<span style="color:var(--text-muted);font-size:0.8rem;">No</span>'}</td>
                 </tr>
             `;
         }).join('');
+
+        tbody.querySelectorAll('[data-quick-fix-ref]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const ref = btn.getAttribute('data-quick-fix-ref');
+                this.openQuickFixForRef(ref);
+            });
+        });
+        if (window.lucide) lucide.createIcons({ root: tbody });
     }
 
     async loadMappings() {
@@ -2816,18 +3232,211 @@ class App {
         if (window.lucide) lucide.createIcons();
     }
 
+    async deduplicateManualFixes({ silent = true } = {}) {
+        try {
+            const allRows = await fetchAll('manual_fixes', '*', null, 'reference_number');
+            if (!allRows || allRows.length === 0) {
+                if (!silent) Toast.show('No manual fixes found to check.', 'info');
+                return { mergedCount: 0, deletedCount: 0 };
+            }
+
+            const byNormRef = new Map();
+            const keysToDelete = [];
+            const rowsToUpsert = [];
+
+            for (const row of allRows) {
+                const rawRef = String(row.reference_number || '');
+                const cleanRef = rawRef.trim();
+                if (!cleanRef) continue;
+                const normKey = cleanRef.toLowerCase();
+
+                const normalizedRow = {
+                    reference_number: cleanRef,
+                    correct_id: row.correct_id ? String(row.correct_id).trim() : null,
+                    item_name: row.item_name ? normalizeItemName(row.item_name) : null,
+                    mapping: row.mapping ? normalizeItemName(row.mapping) : null,
+                    second_mapping: row.second_mapping ? normalizeItemName(row.second_mapping) : null
+                };
+
+                if (!byNormRef.has(normKey)) {
+                    byNormRef.set(normKey, {
+                        canonical: normalizedRow,
+                        rawKeys: [rawRef],
+                        needsSave: rawRef !== cleanRef
+                    });
+                } else {
+                    const group = byNormRef.get(normKey);
+                    group.rawKeys.push(rawRef);
+                    group.canonical = {
+                        reference_number: group.canonical.reference_number,
+                        correct_id: group.canonical.correct_id || normalizedRow.correct_id || null,
+                        item_name: group.canonical.item_name || normalizedRow.item_name || null,
+                        mapping: group.canonical.mapping || normalizedRow.mapping || null,
+                        second_mapping: group.canonical.second_mapping || normalizedRow.second_mapping || null
+                    };
+                    group.needsSave = true;
+                }
+            }
+
+            for (const group of byNormRef.values()) {
+                if (group.rawKeys.length > 1 || group.needsSave) {
+                    rowsToUpsert.push(group.canonical);
+                    for (const k of group.rawKeys) {
+                        if (k !== group.canonical.reference_number) {
+                            keysToDelete.push(k);
+                        }
+                    }
+                }
+            }
+
+            if (keysToDelete.length === 0 && rowsToUpsert.length === 0) {
+                if (!silent) Toast.show('All manual fixes are clean — no duplicate Reference Numbers found!', 'success');
+                return { mergedCount: 0, deletedCount: 0 };
+            }
+
+            if (keysToDelete.length > 0) {
+                for (let i = 0; i < keysToDelete.length; i += 200) {
+                    const chunk = keysToDelete.slice(i, i + 200);
+                    const { error: delErr } = await supabase.from('manual_fixes').delete().in('reference_number', chunk);
+                    if (delErr) throw delErr;
+                }
+            }
+
+            if (rowsToUpsert.length > 0) {
+                for (let i = 0; i < rowsToUpsert.length; i += 200) {
+                    const chunk = rowsToUpsert.slice(i, i + 200);
+                    const { error: upErr } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
+                    if (upErr) throw upErr;
+                }
+            }
+
+            await this.logAudit('Manual Fixes Deduplicated', `${rowsToUpsert.length} merged, ${keysToDelete.length} removed`, {
+                merged: rowsToUpsert.length,
+                deleted_keys: keysToDelete
+            });
+
+            if (!silent) {
+                Toast.show(`Cleaned ${keysToDelete.length} duplicate/whitespace fix row(s)!`, 'success');
+                await this.loadFixes();
+            }
+
+            return { mergedCount: rowsToUpsert.length, deletedCount: keysToDelete.length };
+        } catch (err) {
+            if (!silent) Toast.show('Error deduplicating fixes: ' + err.message, 'error');
+            return { mergedCount: 0, deletedCount: 0 };
+        }
+    }
+
     async loadFixes() {
         const tbody = document.getElementById('fixes-body');
-        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
+        if (tbody) {
+            tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
+        }
         try {
-            const searchVal = document.getElementById('fixes-search')?.value.trim();
-            const queryFn = searchVal ? (q) => q.ilike('reference_number', `%${searchVal}%`) : null;
-            const allData = await fetchAll('manual_fixes', '*', queryFn, 'reference_number');
+            await this.deduplicateManualFixes({ silent: true });
+            const allData = await fetchAll('manual_fixes', '*', null, 'reference_number');
             this.allFixesData = allData;
             this.fixesPage = 1;
+            this.updateFixesStatsAndDropdowns(allData);
             this.renderFixesPage();
+            this.loadUnresolvedTransactionsSummary();
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            }
+        }
+    }
+
+    updateFixesStatsAndDropdowns(allData = this.allFixesData || []) {
+        const idFixesCount = allData.filter(f => f.correct_id && String(f.correct_id).trim() !== '').length;
+        const itemFixesCount = allData.filter(f =>
+            (f.item_name && String(f.item_name).trim() !== '') ||
+            (f.mapping && String(f.mapping).trim() !== '') ||
+            (f.second_mapping && String(f.second_mapping).trim() !== '')
+        ).length;
+        const invalidIdCount = allData.filter(f => f.correct_id && validateID(String(f.correct_id).trim()) !== 'Valid').length;
+        const categories = [...new Set(allData.map(f => f.mapping).filter(Boolean))].sort();
+
+        const elTotal = document.getElementById('fixes-stat-total');
+        const elId = document.getElementById('fixes-stat-id');
+        const elItem = document.getElementById('fixes-stat-item');
+        const elInvalid = document.getElementById('fixes-stat-invalid-id');
+        if (elTotal) elTotal.textContent = allData.length.toLocaleString();
+        if (elId) elId.textContent = idFixesCount.toLocaleString();
+        if (elItem) elItem.textContent = itemFixesCount.toLocaleString();
+        if (elInvalid) elInvalid.textContent = invalidIdCount.toLocaleString();
+
+        const catSelect = document.getElementById('fixes-filter-category');
+        if (catSelect) {
+            const cur = catSelect.value;
+            catSelect.innerHTML = '<option value="">All Mapping Categories</option>' +
+                categories.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+            if (categories.includes(cur)) catSelect.value = cur;
+        }
+    }
+
+    async loadUnresolvedTransactionsSummary() {
+        const statEl = document.getElementById('fixes-stat-unresolved');
+        const tbody = document.getElementById('unresolved-tx-body');
+        try {
+            const badRows = await fetchAll(
+                'transactions',
+                'reference_number, payment_date, student_id, id_status, item_name, item_price',
+                q => q.neq('id_status', 'Valid'),
+                'id'
+            );
+
+            // Group by reference_number so each reference appears once
+            const byRef = new Map();
+            for (const tx of badRows) {
+                if (!tx.reference_number) continue;
+                const key = String(tx.reference_number).trim();
+                if (!byRef.has(key)) {
+                    byRef.set(key, tx);
+                }
+            }
+
+            const items = Array.from(byRef.values());
+            if (statEl) statEl.textContent = items.length.toLocaleString();
+
+            if (!tbody) return;
+            if (items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 1.5rem; color: var(--success);">All transactions in the database currently have a Valid Student ID!</td></tr>';
+                return;
+            }
+
+            const displayItems = items.slice(0, 150);
+            tbody.innerHTML = displayItems.map(t => {
+                const isMissing = t.id_status && t.id_status.includes('Missing');
+                const statusClass = isMissing ? 'missing' : 'error';
+                return `
+                    <tr>
+                        <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
+                        <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
+                        <td>${escapeHTML(t.student_id || '-')}</td>
+                        <td><span class="badge ${statusClass}">${escapeHTML(t.id_status || 'Error')}</span></td>
+                        <td style="max-width: 240px; white-space: normal; font-size: 0.82rem;">${escapeHTML(t.item_name || '-')}</td>
+                        <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
+                        <td>
+                            <button class="btn btn-primary btn-sm" data-fix-unresolved="${escapeHTML(t.reference_number)}">
+                                <i data-lucide="wrench" style="width: 13px; height: 13px;"></i> Fix
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            tbody.querySelectorAll('[data-fix-unresolved]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const ref = btn.getAttribute('data-fix-unresolved');
+                    this.openQuickFixForRef(ref);
+                });
+            });
+            if (window.lucide) lucide.createIcons({ root: tbody });
+        } catch (err) {
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="7" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            }
         }
     }
 
@@ -2837,31 +3446,74 @@ class App {
         const allData = this.allFixesData || [];
         const pageSize = 100;
 
-        if (allData.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>No manual fixes</h3><p>Click "Add Fix" to create a manual correction.</p></div></td></tr>';
+        const searchVal = (document.getElementById('fixes-search')?.value || '').trim().toLowerCase();
+        const typeFilter = document.getElementById('fixes-filter-type')?.value || '';
+        const catFilter = document.getElementById('fixes-filter-category')?.value || '';
+
+        const filteredData = allData.filter(f => {
+            if (searchVal) {
+                const haystack = [
+                    f.reference_number,
+                    f.correct_id,
+                    f.item_name,
+                    f.mapping,
+                    f.second_mapping
+                ].filter(Boolean).join(' ').toLowerCase();
+                if (!haystack.includes(searchVal)) return false;
+            }
+            if (catFilter && (f.mapping || '') !== catFilter) return false;
+
+            const hasId = Boolean(f.correct_id && String(f.correct_id).trim() !== '');
+            const hasItem = Boolean(
+                (f.item_name && String(f.item_name).trim() !== '') ||
+                (f.mapping && String(f.mapping).trim() !== '') ||
+                (f.second_mapping && String(f.second_mapping).trim() !== '')
+            );
+            if (typeFilter === 'id_only' && (!hasId || hasItem)) return false;
+            if (typeFilter === 'item_only' && (!hasItem || hasId)) return false;
+            if (typeFilter === 'both' && (!hasId || !hasItem)) return false;
+            if (typeFilter === 'invalid_id') {
+                if (!hasId || validateID(String(f.correct_id).trim()) === 'Valid') return false;
+            }
+            return true;
+        });
+
+        if (filteredData.length === 0) {
+            const hasActiveFilters = Boolean(searchVal || typeFilter || catFilter);
+            tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i data-lucide="wrench" style="width:48px;height:48px;opacity:0.5;"></i><h3>${hasActiveFilters ? 'No matching manual fixes' : 'No manual fixes'}</h3><p>${hasActiveFilters ? 'Try clearing or adjusting your search filters.' : 'Click "Add Fix" to create a manual correction.'}</p></div></td></tr>`;
             document.getElementById('fixes-pagination')?.remove();
             if (window.lucide) lucide.createIcons();
             return;
         }
 
-        const totalPages = Math.max(1, Math.ceil(allData.length / pageSize));
+        const totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize));
         if (!this.fixesPage || this.fixesPage > totalPages) this.fixesPage = 1;
         const startIdx = (this.fixesPage - 1) * pageSize;
-        const pageData = allData.slice(startIdx, startIdx + pageSize);
+        const pageData = filteredData.slice(startIdx, startIdx + pageSize);
 
-        tbody.innerHTML = pageData.map(f => `
-            <tr>
-                <td>${escapeHTML(f.reference_number)}</td>
-                <td>${escapeHTML(f.correct_id) || '-'}</td>
-                <td>${escapeHTML(f.item_name) || '-'}</td>
-                <td>${escapeHTML(f.mapping) || '-'}</td>
-                <td>${escapeHTML(f.second_mapping) || '-'}</td>
-                <td>
-                    <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
-                    <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
-                </td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = pageData.map(f => {
+            const cid = f.correct_id ? String(f.correct_id).trim() : '';
+            const idStatus = cid ? validateID(cid) : null;
+            const idBadge = cid
+                ? (idStatus === 'Valid'
+                    ? `<strong>${escapeHTML(cid)}</strong>`
+                    : `<span style="display: inline-flex; align-items: center; gap: 0.35rem;"><strong style="color: var(--danger);">${escapeHTML(cid)}</strong> <span class="badge error" title="${escapeHTML(idStatus)}" style="font-size: 0.68rem;">Invalid</span></span>`)
+                : '-';
+
+            return `
+                <tr>
+                    <td><strong>${escapeHTML(f.reference_number)}</strong></td>
+                    <td>${idBadge}</td>
+                    <td>${escapeHTML(f.item_name) || '-'}</td>
+                    <td>${ f.mapping ? `<span class="badge valid" style="background: rgba(16, 185, 129, 0.12); color: #10b981;">${escapeHTML(f.mapping)}</span>` : '-' }</td>
+                    <td>${escapeHTML(f.second_mapping) || '-'}</td>
+                    <td>
+                        <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
+                        <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
 
         // Wire up Edit buttons
         tbody.querySelectorAll('[data-edit-fix]').forEach(btn => {
@@ -2869,13 +3521,7 @@ class App {
                 const ref = btn.getAttribute('data-edit-fix');
                 const fix = allData.find(f => f.reference_number === ref);
                 if (fix) {
-                    document.getElementById('fix-ref').value = fix.reference_number || '';
-                    document.getElementById('fix-id').value = fix.correct_id || '';
-                    document.getElementById('fix-name').value = fix.item_name || '';
-                    document.getElementById('fix-mapping').value = fix.mapping || '';
-                    document.getElementById('fix-second-mapping').value = fix.second_mapping || '';
-                    document.getElementById('modal-fix-title').innerText = 'Edit Fix';
-                    document.getElementById('modal-fix').classList.remove('hidden');
+                    this.openFixModalForEdit(fix);
                 }
             });
         });
@@ -2907,7 +3553,7 @@ class App {
         const container = tbody.closest('.table-container');
         if (container) {
             let pager = document.getElementById('fixes-pagination');
-            if (allData.length <= pageSize) {
+            if (filteredData.length <= pageSize) {
                 if (pager) pager.remove();
             } else {
                 if (!pager) {
@@ -2917,7 +3563,7 @@ class App {
                     container.appendChild(pager);
                 }
                 pager.innerHTML = `
-                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, allData.length)} of ${allData.length} fixes</span>
+                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, filteredData.length)} of ${filteredData.length} fixes</span>
                     <div class="pagination-controls">
                         <button class="btn btn-icon" id="btn-fixes-prev" ${this.fixesPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
                         <span>Page ${this.fixesPage} of ${totalPages}</span>

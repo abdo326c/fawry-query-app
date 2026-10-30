@@ -628,6 +628,9 @@
                 <div class="header">
                     <h1>Manual Fixes</h1>
                     <div class="header-actions">
+                        <button class="btn btn-outline" id="btn-dedup-fixes" title="Scan & merge duplicate Reference Number fixes">
+                            <i data-lucide="sparkles"></i> Fix Duplicates
+                        </button>
                         <button class="btn btn-outline" id="btn-template-fixes" >
                             <i data-lucide="download"></i> Template
                         </button>
@@ -643,10 +646,84 @@
                         </button>
                     </div>
                 </div>
-                <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
-                    <div style="flex: 2; min-width: 200px;">
-                        <input type="text" id="fixes-search" class="input-text" placeholder="Search by Reference Number...">
+
+                <!-- Manual Fixes Summary Bar -->
+                <div id="fixes-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Total Fixes:</span>
+                            <strong id="fixes-stat-total" style="font-size: 1.05rem; color: var(--text-main);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">ID Corrections:</span>
+                            <strong id="fixes-stat-id" style="font-size: 1.05rem; color: var(--primary);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Item / Mapping Overrides:</span>
+                            <strong id="fixes-stat-item" style="font-size: 1.05rem; color: var(--success);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Invalid ID Warnings:</span>
+                            <strong id="fixes-stat-invalid-id" style="font-size: 1.05rem; color: var(--danger);">0</strong>
+                        </div>
                     </div>
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <button class="btn btn-outline btn-sm" id="btn-toggle-unresolved-tx-panel" style="display: flex; align-items: center; gap: 0.4rem;">
+                            <i data-lucide="alert-circle" style="width: 15px; height: 15px; color: var(--warning);"></i>
+                            <span>Unresolved Transactions (<strong id="fixes-stat-unresolved">0</strong>)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Unresolved Transactions Discovery Panel -->
+                <div id="unresolved-tx-panel" class="glass-card hidden" style="margin-bottom: 1.5rem; padding: 1.25rem; border-left: 4px solid var(--warning);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+                        <div>
+                            <h3 style="margin: 0; font-size: 1rem;">Transactions Needing Manual Fix (Missing / Error Student ID)</h3>
+                            <p class="text-muted" style="margin: 0.25rem 0 0 0; font-size: 0.82rem;">Click <strong>Fix</strong> on any transaction below to pre-fill the Manual Fix modal with its Reference Number.</p>
+                        </div>
+                        <button class="btn btn-outline btn-sm" id="btn-close-unresolved-tx-panel">Hide</button>
+                    </div>
+                    <div class="table-container" style="max-height: 280px; overflow-y: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Reference Number</th>
+                                    <th>Payment Date</th>
+                                    <th>Current ID</th>
+                                    <th>Status</th>
+                                    <th>Item Name</th>
+                                    <th>Amount</th>
+                                    <th style="width: 110px;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="unresolved-tx-body">
+                                <tr><td colspan="7" class="text-center text-muted" style="padding: 1rem;">Loading unresolved transactions...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Search & Filter Bar -->
+                <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div style="flex: 2; min-width: 220px;">
+                        <input type="text" id="fixes-search" class="input-text" placeholder="Search Reference Number, Student ID, Item Name, Mapping, or 2nd Mapping...">
+                    </div>
+                    <div style="flex: 1; min-width: 170px;">
+                        <select id="fixes-filter-type" class="input-text">
+                            <option value="">All Fix Types</option>
+                            <option value="id_only">ID Corrections Only</option>
+                            <option value="item_only">Item / Mapping Overrides Only</option>
+                            <option value="both">Both ID &amp; Item Overrides</option>
+                            <option value="invalid_id">Invalid Correct ID</option>
+                        </select>
+                    </div>
+                    <div style="flex: 1; min-width: 170px;">
+                        <select id="fixes-filter-category" class="input-text">
+                            <option value="">All Mapping Categories</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-outline" id="btn-clear-fixes-filters" title="Clear Filters">Clear</button>
                 </div>
 
                 <div class="table-container glass-card">
@@ -1149,8 +1226,8 @@
     </div>
 
     <!-- Fixes Modal -->
-    <div id="modal-fix" class="modal hidden">
-        <div class="modal-content glass-card">
+    <div id="modal-fix" class="modal hidden" style="z-index: 10025;">
+        <div class="modal-content glass-card" style="max-width: 560px;">
             <div class="modal-header">
                 <h2 id="modal-fix-title">Add Fix</h2>
                 <button class="btn-close" onclick="document.getElementById('modal-fix').classList.add('hidden')"><i data-lucide="x"></i></button>
@@ -1158,23 +1235,28 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>Reference Number</label>
-                    <input type="text" id="fix-ref" class="input-text">
+                    <input type="text" id="fix-ref" class="input-text" placeholder="Enter Fawry Reference Number...">
+                    <div id="fix-duplicate-warning" style="display: none; margin-top: 0.5rem; font-size: 0.85rem; color: #f59e0b; cursor: pointer; background: rgba(245, 158, 11, 0.12); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.35);"></div>
+                    <div id="fix-tx-preview" style="display: none; margin-top: 0.5rem; font-size: 0.82rem; padding: 0.6rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.03);"></div>
                 </div>
                 <div class="form-group">
                     <label>Correct Student ID (Optional)</label>
-                    <input type="text" id="fix-id" class="input-text">
+                    <input type="text" id="fix-id" class="input-text" placeholder="e.g. 221001234">
+                    <div id="fix-id-feedback" style="display: none; margin-top: 0.45rem; font-size: 0.82rem; padding: 0.45rem 0.65rem; border-radius: 6px;"></div>
                 </div>
                 <div class="form-group">
                     <label>Correct Item Name (Optional)</label>
-                    <input type="text" id="fix-name" class="input-text">
+                    <input type="text" id="fix-name" class="input-text" list="datalist-fix-item-names" placeholder="Leave blank to keep item name from rules">
+                    <datalist id="datalist-fix-item-names"></datalist>
+                    <div id="fix-item-suggestion" style="display: none; margin-top: 0.45rem; font-size: 0.82rem; color: var(--primary); cursor: pointer; background: rgba(59, 130, 246, 0.1); padding: 0.45rem 0.65rem; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3);"></div>
                 </div>
                 <div class="form-group">
                     <label>Correct Mapping (Optional)</label>
-                    <input type="text" id="fix-mapping" class="input-text">
+                    <input type="text" id="fix-mapping" class="input-text" list="datalist-mapping-categories" placeholder="e.g. Tuition Fees">
                 </div>
                 <div class="form-group">
                     <label>Correct 2nd Mapping (Optional)</label>
-                    <input type="text" id="fix-second-mapping" class="input-text">
+                    <input type="text" id="fix-second-mapping" class="input-text" list="datalist-second-mapping-categories" placeholder="Optional secondary mapping">
                 </div>
                 <div style="display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1rem;">
                     <button class="btn btn-outline" onclick="document.getElementById('modal-fix').classList.add('hidden')">Cancel</button>
