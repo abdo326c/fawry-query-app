@@ -1,15 +1,15 @@
-const CACHE_NAME = 'fawry-app-cache-v9';
+const CACHE_NAME = 'fawry-app-cache-v10';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/styles.css?v=2.1.0',
-  '/app.js?v=2.1.0',
-  '/rules.js',
-  '/csv-processor.js',
-  '/settlement.js?v=2.1.0',
-  '/supabase.js',
-  '/nu-logo.png',
-  '/manifest.json'
+  './',
+  './index.html',
+  './styles.css?v=2.1.0',
+  './app.js?v=2.1.0',
+  './rules.js',
+  './csv-processor.js',
+  './settlement.js?v=2.1.0',
+  './supabase.js',
+  './nu-logo.png',
+  './manifest.json'
 ];
 
 self.addEventListener('install', event => {

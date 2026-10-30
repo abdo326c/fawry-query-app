@@ -128,15 +128,17 @@ export class FawryProcessor {
             return `${y}-${m}-${d}`;
         }
 
-        // 2. If it's an Excel numeric serial date (e.g. 45562)
+        // 2. If it's an Excel numeric serial date (e.g. 45562 or 45870.125 with time)
+        // Strip the fractional time component using Math.floor so time never shifts the date.
         if (typeof rawDate === 'number') {
+            const intSerial = Math.floor(rawDate);
             if (typeof XLSX !== 'undefined' && XLSX.SSF) {
-                const parsed = XLSX.SSF.parse_date_code(rawDate);
+                const parsed = XLSX.SSF.parse_date_code(intSerial);
                 if (parsed && parsed.y && parsed.m && parsed.d) {
                     return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
                 }
             }
-            const dateObj = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
+            const dateObj = new Date(Math.round((intSerial - 25569) * 86400 * 1000));
             if (!isNaN(dateObj.getTime())) {
                 return dateObj.toISOString().split('T')[0];
             }
@@ -225,7 +227,7 @@ export class FawryProcessor {
 
         // 4. Catch string numeric Excel dates before native fallback parses them as year 40000+
         if (/^\d{4,5}(\.\d+)?$/.test(str)) {
-            const numericDate = parseFloat(str);
+            const numericDate = Math.floor(parseFloat(str));
             if (typeof XLSX !== 'undefined' && XLSX.SSF) {
                 const parsed = XLSX.SSF.parse_date_code(numericDate);
                 if (parsed && parsed.y && parsed.m && parsed.d) {

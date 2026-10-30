@@ -15,43 +15,52 @@ CREATE TABLE IF NOT EXISTS import_batches (
 
 -- 2. Main Transactions Table
 CREATE TABLE IF NOT EXISTS transactions (
-  id               BIGSERIAL PRIMARY KEY,
-  reference_number VARCHAR(50) NOT NULL,
-  payment_date     DATE,
-  student_id       VARCHAR(100),
-  raw_student_id   TEXT,
-  customer_mobile  VARCHAR(50),
-  total_amount     DECIMAL(12,2),
-  net_amount       DECIMAL(12,2),
-  fawry_fees       DECIMAL(10,2),
-  payment_status   VARCHAR(50) DEFAULT 'PAID',
-  item_name        VARCHAR(255),
-  item_price       DECIMAL(12,2),
-  mapping          VARCHAR(100),
-  second_mapping   TEXT,
-  merchant_name    VARCHAR(100),
-  bank             VARCHAR(50),
-  check_column     VARCHAR(255),
-  id_status        VARCHAR(100),
-  batch_id         UUID REFERENCES import_batches(id) ON DELETE SET NULL,
-  erp_batch_number VARCHAR(100),
-  erp_voucher      VARCHAR(100),
-  is_settled       BOOLEAN DEFAULT FALSE,
-  settlement_batch VARCHAR(100),
-  import_date      TIMESTAMPTZ DEFAULT NOW(),
+  id                  BIGSERIAL PRIMARY KEY,
+  reference_number    VARCHAR(50) NOT NULL,
+  payment_date        DATE,
+  student_id          VARCHAR(100),
+  original_student_id TEXT,
+  raw_student_id      TEXT,
+  customer_mobile     VARCHAR(50),
+  total_amount        DECIMAL(12,2),
+  net_amount          DECIMAL(12,2),
+  fawry_fees          DECIMAL(10,2),
+  payment_status      VARCHAR(50) DEFAULT 'PAID',
+  item_name           VARCHAR(255),
+  item_price          DECIMAL(12,2),
+  mapping             VARCHAR(100),
+  second_mapping      TEXT,
+  merchant_name       VARCHAR(100),
+  bank                VARCHAR(50),
+  check_column        VARCHAR(255),
+  file_name           VARCHAR(255),
+  id_status           VARCHAR(100),
+  batch_id            UUID REFERENCES import_batches(id) ON DELETE SET NULL,
+  erp_batch_number    VARCHAR(100),
+  erp_voucher         VARCHAR(100),
+  is_settled          BOOLEAN DEFAULT FALSE,
+  settlement_batch    VARCHAR(100),
+  import_date         TIMESTAMPTZ DEFAULT NOW(),
 
   -- Deduplication composite key (Reference Number + Item Price + Original Item Check Column)
   UNIQUE(reference_number, item_price, check_column)
 );
 
 -- Ensure columns exist on existing installations
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS original_student_id TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS raw_student_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS file_name VARCHAR(255);
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS second_mapping TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS batch_id UUID;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS erp_batch_number VARCHAR(100);
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS erp_voucher VARCHAR(100);
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_settled BOOLEAN DEFAULT FALSE;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS settlement_batch VARCHAR(100);
+
+-- Ensure payment_date is strictly DATE (strips any time portion without shifting the calendar date)
+ALTER TABLE transactions
+  ALTER COLUMN payment_date TYPE DATE
+  USING (NULLIF(SPLIT_PART(SPLIT_PART(TRIM(payment_date::TEXT), ' ', 1), 'T', 1), ''))::DATE;
 
 -- Indexes for fast querying
 CREATE INDEX IF NOT EXISTS idx_transactions_payment_date ON transactions(payment_date);
@@ -202,5 +211,49 @@ BEGIN
     'SELECT DISTINCT %I::TEXT AS val FROM transactions WHERE %I IS NOT NULL AND %I::TEXT <> '''' ORDER BY 1',
     col_name, col_name, col_name
   );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_dashboard_pivot_by(start_date DATE, end_date DATE, group_col TEXT)
+RETURNS TABLE (
+  group_key TEXT,
+  bank VARCHAR,
+  total_amount NUMERIC
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+  IF group_col = 'date' THEN
+    RETURN QUERY
+      SELECT t.payment_date::TEXT AS group_key, t.bank, COALESCE(SUM(t.item_price), 0) AS total_amount
+      FROM transactions t
+      WHERE t.payment_date >= start_date AND t.payment_date <= end_date
+      GROUP BY t.payment_date, t.bank
+      ORDER BY t.payment_date, t.bank;
+  ELSIF group_col = 'mapping' THEN
+    RETURN QUERY
+      SELECT COALESCE(NULLIF(t.mapping, ''), 'Unmapped')::TEXT AS group_key, t.bank, COALESCE(SUM(t.item_price), 0) AS total_amount
+      FROM transactions t
+      WHERE t.payment_date >= start_date AND t.payment_date <= end_date
+      GROUP BY 1, t.bank
+      ORDER BY 1, t.bank;
+  ELSIF group_col = 'second_mapping' THEN
+    RETURN QUERY
+      SELECT COALESCE(NULLIF(t.second_mapping, ''), 'Unmapped')::TEXT AS group_key, t.bank, COALESCE(SUM(t.item_price), 0) AS total_amount
+      FROM transactions t
+      WHERE t.payment_date >= start_date AND t.payment_date <= end_date
+      GROUP BY 1, t.bank
+      ORDER BY 1, t.bank;
+  ELSIF group_col = 'item_name' THEN
+    RETURN QUERY
+      SELECT COALESCE(NULLIF(t.item_name, ''), 'Unknown Item')::TEXT AS group_key, t.bank, COALESCE(SUM(t.item_price), 0) AS total_amount
+      FROM transactions t
+      WHERE t.payment_date >= start_date AND t.payment_date <= end_date
+      GROUP BY 1, t.bank
+      ORDER BY 1, t.bank;
+  ELSE
+    RAISE EXCEPTION 'Invalid group_col for dashboard pivot: %', group_col;
+  END IF;
 END;
 $$;

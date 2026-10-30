@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, originalItemName, applyBusinessRules } from '../rules.js';
+import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial } from '../rules.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -68,5 +68,29 @@ test('applyBusinessRules precedence logic', () => {
     expect(res6.studentId).toBe('29901011234567');
     expect(res6.idStatus).toBe('Error: ID Too Long (14 digits)');
 });
+
+test('toDateOnly strips time without shifting calendar date', () => {
+    expect(toDateOnly(null)).toBeNull();
+    expect(toDateOnly('')).toBeNull();
+    expect(toDateOnly('2025-08-01')).toBe('2025-08-01');
+    expect(toDateOnly('2025-08-01T00:00:00.000Z')).toBe('2025-08-01');
+    expect(toDateOnly('2025-08-01T03:00:00+03:00')).toBe('2025-08-01');
+    expect(toDateOnly('2025-08-01 23:59:59')).toBe('2025-08-01');
+    expect(toDateOnly('01/08/2025 3:00:00 AM')).toBe('2025-08-01');
+    expect(toDateOnly('8/15/2025 3:00:00 AM')).toBe('2025-08-15');
+    // Excel serial 45870 = 2025-08-01, 45870.125 = 2025-08-01 3:00:00 AM, 45870.99 = 2025-08-01 late night
+    expect(toDateOnly(45870)).toBe('2025-08-01');
+    expect(toDateOnly(45870.125)).toBe('2025-08-01');
+    expect(toDateOnly(45870.99)).toBe('2025-08-01');
+});
+
+test('dateToExcelSerial returns exact integer serial with zero fractional time', () => {
+    expect(dateToExcelSerial('2025-08-01')).toBe(45870);
+    expect(dateToExcelSerial('2025-08-01T03:00:00.000Z')).toBe(45870);
+    expect(dateToExcelSerial('01/08/2025 3:00:00 AM')).toBe(45870);
+    expect(Number.isInteger(dateToExcelSerial('2025-08-01'))).toBe(true);
+    expect(dateToExcelSerial('')).toBeNull();
+});
+
 
 

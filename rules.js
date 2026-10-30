@@ -347,3 +347,60 @@ export function escapeHTML(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
+
+/**
+ * Strips any time component from a date value without timezone shifting,
+ * returning a pure 'YYYY-MM-DD' string (or null).
+ */
+export function toDateOnly(val) {
+    if (val === null || val === undefined || val === '') return null;
+    if (val instanceof Date && !isNaN(val.getTime())) {
+        const y = val.getFullYear();
+        const m = String(val.getMonth() + 1).padStart(2, '0');
+        const d = String(val.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+    if (typeof val === 'number') {
+        const intSerial = Math.floor(val);
+        const d = new Date(Math.round((intSerial - 25569) * 86400 * 1000));
+        return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+    }
+    const str = String(val).trim();
+    if (!str) return null;
+    const datePart = str.split(/[T ]/)[0];
+    let m = datePart.match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})$/);
+    if (m) {
+        const year = m[1];
+        const p1 = parseInt(m[2], 10);
+        const p2 = parseInt(m[3], 10);
+        let month = p1, day = p2;
+        if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    m = datePart.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+    if (m) {
+        const first = parseInt(m[1], 10);
+        const second = parseInt(m[2], 10);
+        const year = m[3];
+        let day = first, month = second;
+        if (second > 12 && first <= 12) { day = second; month = first; }
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    return datePart;
+}
+
+/**
+ * Converts a date value to an integer Excel serial number (days since 1899-12-30)
+ * with zero time fraction so Excel never displays a time component (e.g. 3:00:00 AM).
+ */
+export function dateToExcelSerial(val) {
+    const clean = toDateOnly(val);
+    if (!clean) return null;
+    const parts = clean.split('-');
+    if (parts.length !== 3) return null;
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    const d = parseInt(parts[2], 10);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+    return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+}

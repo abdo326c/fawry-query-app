@@ -76,9 +76,14 @@
                 <i data-lucide="database" style="width: 24px; height: 24px; color: var(--primary);"></i>
                 <span class="logo-text" style="font-weight: 700;">Fawry Payments Database</span>
             </div>
-            <button id="btn-mobile-menu" class="btn-icon">
-                <i data-lucide="menu" style="width: 24px; height: 24px;"></i>
-            </button>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <button id="btn-mobile-search" class="btn-icon" title="Quick Search (Ctrl+K)">
+                    <i data-lucide="search" style="width: 20px; height: 20px;"></i>
+                </button>
+                <button id="btn-mobile-menu" class="btn-icon">
+                    <i data-lucide="menu" style="width: 24px; height: 24px;"></i>
+                </button>
+            </div>
         </div>
 
         <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
@@ -86,12 +91,18 @@
             <button id="btn-close-sidebar" class="btn-icon" style="display: none; position: absolute; right: 10px; top: 10px;">
                 <i data-lucide="x" style="width: 24px; height: 24px;"></i>
             </button>
-            <div class="logo-container" style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 2.5rem; padding-left: 0.5rem; white-space: normal; word-wrap: break-word; overflow: hidden;">
+            <div class="logo-container" style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.25rem; padding-left: 0.5rem; white-space: normal; word-wrap: break-word; overflow: hidden;">
                 <div style="display: flex; align-items: center; justify-content: center; background: rgba(56, 189, 248, 0.1); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.2); flex-shrink: 0;">
                     <i data-lucide="database" style="width: 24px; height: 24px; color: var(--primary);"></i>
                 </div>
                 <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; line-height: 1.2;">Fawry Payments Database</span>
             </div>
+
+            <button type="button" id="btn-open-global-search" class="sidebar-search-btn" title="Quick Search across Transactions & Students (Ctrl+K)">
+                <i data-lucide="search" style="width: 15px; height: 15px; flex-shrink: 0;"></i>
+                <span style="flex: 1; text-align: left;">Quick Search...</span>
+                <span class="search-shortcut">Ctrl+K</span>
+            </button>
             
             <nav class="nav-menu">
                 <a href="#dashboard" class="nav-link" data-tab="dashboard">
@@ -290,8 +301,8 @@
                     </div>
                 </div>
                 
-                <!-- Filters Bar -->
-                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem;">
+                <!-- Unified Filters & Search Bar -->
+                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem; align-items: flex-end;">
                     <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                         <label style="font-size: 0.75rem">Date From</label>
                         <input type="date" id="filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
@@ -300,16 +311,13 @@
                         <label style="font-size: 0.75rem">Date To</label>
                         <input type="date" id="filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
                     </div>
-
+                    <div class="form-group" style="margin: 0; flex: 2; min-width: 220px;">
+                        <label style="font-size: 0.75rem">Search</label>
+                        <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref, or Item..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem">
+                    </div>
                     <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
                         <button class="btn btn-primary" id="btn-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
                         <button class="btn btn-outline" id="btn-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
-                    </div>
-                </div>
-
-                <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
-                    <div style="flex: 2; min-width: 200px;">
-                        <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref...">
                     </div>
                 </div>
                 
@@ -380,7 +388,9 @@
                             <label for="page-size" style="font-size: 0.85rem; color: var(--text-muted);">Rows per page:</label>
                             <select id="page-size" class="input-text" style="padding: 0.3rem 1.5rem 0.3rem 0.5rem; font-size: 0.85rem;">
                                 <option value="10">10</option>
+                                <option value="25">25</option>
                                 <option value="50">50</option>
+                                <option value="100">100</option>
                             </select>
                         </div>
                         <div style="display: flex; gap: 1rem; align-items: center;">
@@ -796,7 +806,15 @@
                                     </tr>
                                 </thead>
                                 <tbody id="automatcher-table-body">
-                                    <!-- Invalid IDs will be populated here -->
+                                    <tr>
+                                        <td colspan="9">
+                                            <div class="empty-state">
+                                                <i data-lucide="zap" style="width: 48px; height: 48px; opacity: 0.5;"></i>
+                                                <h3>Ready to Match Invalid IDs</h3>
+                                                <p>Set optional date filters above and click <strong>Run Auto-Match</strong> to scan transactions against Student Details and Payment Links.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
@@ -890,6 +908,32 @@
                     <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                         <label style="font-size: 0.75rem">Mapping</label>
                         <select id="erp-filter-mapping" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
+                    </div>
+                </div>
+
+                <!-- ERP Batch Summary Bar -->
+                <div id="erp-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Total Lines:</span>
+                            <strong id="erp-stat-total" style="font-size: 1.05rem; color: var(--text-main);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Total Credit:</span>
+                            <strong id="erp-stat-amount" style="font-size: 1.05rem; color: var(--primary);">EGP 0.00</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span class="status-badge valid-id" style="font-size: 0.75rem;">Valid IDs</span>
+                            <strong id="erp-stat-valid" style="font-size: 1.05rem; color: var(--success);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span class="status-badge invalid-id" style="font-size: 0.75rem;">Invalid IDs</span>
+                            <strong id="erp-stat-invalid" style="font-size: 1.05rem; color: var(--danger);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Already in ERP:</span>
+                            <strong id="erp-stat-recorded" style="font-size: 1.05rem; color: var(--warning);">0</strong>
+                        </div>
                     </div>
                 </div>
 

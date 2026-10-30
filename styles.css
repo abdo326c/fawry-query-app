@@ -2035,3 +2035,43 @@ select option {
     z-index: 50;
 }
 
+.sidebar-search-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    margin-bottom: 1.25rem;
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.sidebar-search-btn:hover {
+    background: rgba(56, 189, 248, 0.08);
+    border-color: var(--primary);
+    color: var(--text-main);
+}
+
+:root.light .sidebar-search-btn {
+    background: #ffffff;
+    border-color: rgba(120, 113, 108, 0.25);
+}
+
+:root.light .sidebar-search-btn:hover {
+    background: rgba(15, 118, 110, 0.06);
+    border-color: var(--primary);
+}
+
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+

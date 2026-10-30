@@ -54,6 +54,7 @@ class SettlementProcessor {
         if (!this.statusDiv) return;
         this.statusDiv.innerHTML = msg;
         this.statusDiv.className = isError ? 'text-danger mt-2' : 'text-primary mt-2';
+        if (window.lucide) lucide.createIcons({ root: this.statusDiv });
     }
 
     async handleFiles(files) {
@@ -63,7 +64,6 @@ class SettlementProcessor {
         }
         this.isProcessing = true;
         this.setStatus('<i data-lucide="loader" class="spin"></i> Processing files...');
-        if (window.lucide) lucide.createIcons();
         this.settlementData = [];
         this.reconciliationResults = [];
         // Each run starts fresh; only duplicates WITHIN the same selection are skipped.
@@ -89,7 +89,6 @@ class SettlementProcessor {
             }
 
             this.setStatus(`<i data-lucide="check-circle"></i> Extracted ${this.settlementData.length} records. Reconciling...`);
-            if (window.lucide) lucide.createIcons();
             
             await this.reconcile();
             
@@ -184,11 +183,10 @@ class SettlementProcessor {
                                 rowData['NETAMOUNT'] = (rowData['NETAMOUNT'] || 0) - rowData['NETAMOUNT_REFUND'];
                             }
                             
-                            // Convert Excel serial dates to local "YYYY-MM-DD HH:MM:SS" text
-                            // (no UTC conversion, so late-evening payments stay on the right day)
+                            // Convert dates to "YYYY-MM-DD" date-only text (strip time component)
                             ['SETTLEMENT_DATE', 'TRXDATE'].forEach(dateCol => {
-                                if (rowData[dateCol] && typeof rowData[dateCol] === 'number') {
-                                    rowData[dateCol] = SettlementProcessor.excelSerialToText(rowData[dateCol]);
+                                if (rowData[dateCol] !== null && rowData[dateCol] !== undefined && rowData[dateCol] !== '') {
+                                    rowData[dateCol] = SettlementProcessor.toDateOnly(rowData[dateCol]) || rowData[dateCol];
                                 }
                             });
 
@@ -566,18 +564,19 @@ class SettlementProcessor {
         return all;
     }
 
-    // Excel serial number → "YYYY-MM-DD HH:MM:SS" (wall-clock time as shown in Excel, no timezone shift)
+    // Excel serial number → "YYYY-MM-DD" (date-only, stripping any fractional time)
     static excelSerialToText(serial) {
+        const intSerial = Math.floor(Number(serial));
         if (typeof XLSX !== 'undefined' && XLSX.SSF && XLSX.SSF.parse_date_code) {
-            const p = XLSX.SSF.parse_date_code(serial);
+            const p = XLSX.SSF.parse_date_code(intSerial);
             if (p && p.y) {
                 const pad = n => String(Math.floor(n)).padStart(2, '0');
-                return `${p.y}-${pad(p.m)}-${pad(p.d)} ${pad(p.H)}:${pad(p.M)}:${pad(p.S)}`;
+                return `${p.y}-${pad(p.m)}-${pad(p.d)}`;
             }
         }
-        // Fallback: treat the serial as UTC and format it in UTC (no local shift)
-        const d = new Date(Math.round((serial - 25569) * 86400 * 1000));
-        return d.toISOString().replace('T', ' ').substring(0, 19);
+        // Fallback: treat the integer serial as UTC date (no local shift)
+        const d = new Date(Math.round((intSerial - 25569) * 86400 * 1000));
+        return d.toISOString().substring(0, 10);
     }
 
     // Any date value from the settlement file → "YYYY-MM-DD" (or null)

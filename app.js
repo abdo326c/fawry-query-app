@@ -10,8 +10,20 @@ import {
     buildMappingLookup,
     originalItemName,
     isLockedTransaction,
-    escapeHTML
+    escapeHTML,
+    toDateOnly,
+    dateToExcelSerial
 } from './rules.js';
+
+// Helper to run async task functions with bounded concurrency
+async function runConcurrent(tasks, concurrency = 4) {
+    const results = [];
+    for (let i = 0; i < tasks.length; i += concurrency) {
+        const batch = await Promise.all(tasks.slice(i, i + concurrency).map(fn => fn()));
+        results.push(...batch);
+    }
+    return results;
+}
 
 // Promise-based confirm dialog using the in-page modal
 window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
@@ -29,13 +41,21 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
             modal.classList.add('hidden');
             btnOk.removeEventListener('click', onOk);
             btnCancel.removeEventListener('click', onCancel);
+            window.removeEventListener('keydown', onKeyDown);
         };
         
         const onOk = () => { cleanup(); resolve(true); };
         const onCancel = () => { cleanup(); resolve(false); };
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                onCancel();
+            }
+        };
         
         btnOk.addEventListener('click', onOk);
         btnCancel.addEventListener('click', onCancel);
+        window.addEventListener('keydown', onKeyDown);
         
         modal.classList.remove('hidden');
     });
@@ -104,11 +124,9 @@ class App {
         this.isImporting = false;
         this.initTheme();
         this.initDatePickers();
-        this.fetchUniqueFilters();
 
         this.initNavigation();
         this.initGlobalSearch();
-        this.updateSidebarBadges();
         this.setupPrintButton();
         this.initImport();
         this.initModals();
@@ -190,10 +208,55 @@ class App {
         document.getElementById('auth-overlay').classList.add('hidden');
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
+        this.fetchUniqueFilters();
         this.loadTransactions();
         this.updateSidebarBadges();
+        this.stripDatabaseTransactionTimes();
         // ERP Export data is loaded when that tab is opened (see initNavigation)
         this.initRealtime();
+    }
+
+    /**
+     * Checks if any database transactions have a time component in payment_date
+     * and strips it in-place to pure YYYY-MM-DD without shifting the calendar date.
+     */
+    async stripDatabaseTransactionTimes() {
+        try {
+            // Only needed if payment_date is stored as text/timestamp with > 10 chars
+            const rows = await fetchAll('transactions', 'id, payment_date', null, 'id');
+            const byDate = new Map();
+            for (const r of rows) {
+                if (!r.payment_date) continue;
+                const raw = String(r.payment_date).trim();
+                const clean = toDateOnly(raw);
+                if (clean && raw !== clean) {
+                    if (!byDate.has(clean)) byDate.set(clean, []);
+                    byDate.get(clean).push(r.id);
+                }
+            }
+            if (byDate.size === 0) return 0;
+
+            const tasks = [];
+            for (const [cleanDate, ids] of byDate.entries()) {
+                for (let i = 0; i < ids.length; i += 200) {
+                    const chunk = ids.slice(i, i + 200);
+                    tasks.push(async () => {
+                        const { error } = await supabase.from('transactions').update({ payment_date: cleanDate }).in('id', chunk);
+                        if (error) throw error;
+                        return chunk.length;
+                    });
+                }
+            }
+            const counts = await runConcurrent(tasks, 4);
+            const totalCleaned = counts.reduce((a, b) => a + b, 0);
+            if (totalCleaned > 0) {
+                this.loadTransactions();
+            }
+            return totalCleaned;
+        } catch (err) {
+            console.warn('Date normalization check skipped:', err.message);
+            return 0;
+        }
     }
 
     initRealtime() {
@@ -533,8 +596,24 @@ class App {
             let allData = [];
             let rpcSucceeded = false;
             
-            // If grouping by date, we can try the fast RPC method
-            if (groupBy === 'date') {
+            // 1. Try fast server-side RPC supporting all Group By modes
+            const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
+                start_date: dateFrom,
+                end_date: dateTo,
+                group_col: groupBy
+            });
+            if (!pivotByErr && Array.isArray(pivotByData)) {
+                rpcSucceeded = true;
+                allData = pivotByData.map(row => ({
+                    payment_date: groupBy === 'date' ? row.group_key : null,
+                    mapping: groupBy === 'mapping' ? row.group_key : null,
+                    second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
+                    item_name: groupBy === 'item_name' ? row.group_key : null,
+                    bank: row.bank,
+                    item_price: row.total_amount
+                }));
+            } else if (groupBy === 'date') {
+                // 2. Fallback to legacy date-only RPC
                 const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
                 rpcSucceeded = !rpcError && Array.isArray(rpcData);
                 if (rpcSucceeded) {
@@ -546,7 +625,7 @@ class App {
                 }
             }
             
-            // Fallback (RPC missing / failed) or grouping by mapping/item (which requires full data)
+            // Fallback (RPC missing / failed)
             if (!rpcSucceeded) {
                 let fetchMore = true;
                 let from = 0;
@@ -578,7 +657,7 @@ class App {
                 const monthlyPivot = {};
                 allData.forEach(tx => {
                     if (!selectedBanks.includes(tx.bank)) return;
-                    const pDate = tx.payment_date;
+                    const pDate = toDateOnly(tx.payment_date);
                     if (!pDate) return;
                     const monthKey = pDate.substring(0, 7); // YYYY-MM
                     
@@ -925,6 +1004,28 @@ class App {
     }
 
     initModals() {
+        // Close modals on backdrop click or Escape key
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.addEventListener('click', (e) => {
+                if (e.target !== modal) return;
+                if (modal.id === 'modal-custom-confirm') {
+                    document.getElementById('btn-custom-confirm-cancel')?.click();
+                } else if (modal.id !== 'modal-import' || !this.isImporting) {
+                    modal.classList.add('hidden');
+                }
+            });
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            const confirmModal = document.getElementById('modal-custom-confirm');
+            if (confirmModal && !confirmModal.classList.contains('hidden')) return; // handled by customConfirm
+            document.querySelectorAll('.modal:not(.hidden)').forEach(modal => {
+                if (modal.id === 'modal-import' && this.isImporting) return;
+                modal.classList.add('hidden');
+            });
+        });
+
         // Open Mapping Modal
         document.getElementById('btn-add-mapping').addEventListener('click', () => {
             this.resetMappingModal('Add Mapping');
@@ -1287,6 +1388,7 @@ class App {
             btn.disabled = true;
 
             try {
+                await this.stripDatabaseTransactionTimes();
                 const [mappings, fixes, links] = await Promise.all([
                     fetchAll('item_mappings', '*', null, 'item_name'),
                     fetchAll('manual_fixes', '*', null, 'reference_number'),
@@ -1738,7 +1840,7 @@ class App {
                         if (/^\d+$/.test(safeSearch)) {
                             query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
                         } else {
-                            query = query.ilike('student_id', `%${safeSearch}%`);
+                            query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%`);
                         }
                     }
 
@@ -1763,18 +1865,13 @@ class App {
                     return;
                 }
 
-                // Format exactly like the original Power Query Excel
+                // Format exactly like the original Power Query Excel (strictly date-only, no time component)
                 const formattedData = allData.map(t => {
-                    let pDate = t.payment_date;
-                    if (pDate) {
-                        const parts = pDate.split('-');
-                        // Use UTC to prevent timezone shifting
-                        pDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
-                    }
+                    const pDateStr = toDateOnly(t.payment_date);
 
                     return {
                         "Reference Number": t.reference_number,
-                        "Payment Date": pDate,
+                        "Payment Date": pDateStr,
                         "Student ID": t.student_id,
                         "Customer Mobile Number": t.customer_mobile,
                         "Total Amount Plus Fees": t.total_amount,
@@ -1784,7 +1881,7 @@ class App {
                         "Item Name": t.item_name,
                         "Item Price": t.item_price,
                         "Mapping": t.mapping,
-"2nd Mapping": t.second_mapping,
+                        "2nd Mapping": t.second_mapping,
                         "Is Settled": t.is_settled ? 'Yes' : 'No',
                         "Settlement Batch": t.settlement_batch || '',
                         "Merchant Name": t.merchant_name,
@@ -1794,7 +1891,15 @@ class App {
                     };
                 });
 
-                const worksheet = XLSX.utils.json_to_sheet(formattedData, { cellDates: true });
+                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                // Write integer Excel date serials (z: 'm/d/yyyy') so Excel shows a true Date with zero time component
+                allData.forEach((t, idx) => {
+                    const serial = dateToExcelSerial(t.payment_date);
+                    if (serial !== null) {
+                        const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 1 });
+                        worksheet[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+                    }
+                });
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
                 
@@ -1911,7 +2016,7 @@ class App {
             if (/^\d+$/.test(safeSearch)) {
                 query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
             } else {
-                query = query.ilike('student_id', `%${safeSearch}%`);
+                query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%`);
             }
         }
 
@@ -1958,7 +2063,7 @@ class App {
             return `
                 <tr>
                     <td style="white-space: nowrap;">${escapeHTML(t.reference_number)}</td>
-                    <td style="white-space: nowrap;">${escapeHTML(t.payment_date)}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date))}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong></td>
                     <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 200px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.item_name)}</td>
@@ -2920,11 +3025,17 @@ class App {
             const existingMap = new Map();
             const legacyIdsToDelete = [];
 
+            const lookupChunks = [];
             for (let i = 0; i < lookupIds.length; i += 500) {
-                const chunk = lookupIds.slice(i, i + 500);
+                lookupChunks.push(lookupIds.slice(i, i + 500));
+            }
+            const existingChunkResults = await runConcurrent(lookupChunks.map(chunk => async () => {
                 const { data: existingRows, error: exErr } = await supabase.from('student_master').select('*').in('student_id', chunk);
                 if (exErr) throw exErr;
-                for (const ex of (existingRows || [])) {
+                return existingRows || [];
+            }), 4);
+            for (const existingRows of existingChunkResults) {
+                for (const ex of existingRows) {
                     const normId = this.normalizeStudentId(ex.student_id);
                     if (ex.student_id !== normId) {
                         legacyIdsToDelete.push(ex.student_id);
@@ -3113,15 +3224,18 @@ class App {
                 }
             }
             
-            // Get links first to extract their PII
+            // Get links first to extract their PII (parallelized chunks)
             const invalidRefs = filteredTx.map(t => String(t.reference_number));
-            let links = [];
+            const refChunks = [];
             for (let i = 0; i < invalidRefs.length; i += 500) {
-                const refChunk = invalidRefs.slice(i, i + 500);
+                refChunks.push(invalidRefs.slice(i, i + 500));
+            }
+            const linkChunkResults = await runConcurrent(refChunks.map(refChunk => async () => {
                 const { data, error } = await supabase.from('links').select('*').in('payment_reference_number', refChunk);
                 if (error) throw error;
-                if (data) links = links.concat(data);
-            }
+                return data || [];
+            }), 4);
+            let links = linkChunkResults.flat();
             
             for (const l of links) {
                 if (l.customer_national_id) requiredIds.add(String(l.customer_national_id).trim());
@@ -3147,35 +3261,46 @@ class App {
                 else sFrom += 1000;
             }
 
-            let students = [];
+            const studentTasks = [];
             const idArr = Array.from(requiredIds);
             for (let i = 0; i < idArr.length; i += 200) {
-                const chunk = idArr.slice(i, i+200);
-                const { data: d1, error: e1 } = await supabase.from('student_master').select('*').in('student_id', chunk);
-                if (e1) throw e1;
-                if (d1) students.push(...d1);
-                const { data: d2, error: e2 } = await supabase.from('student_master').select('*').in('national_id', chunk);
-                if (e2) throw e2;
-                if (d2) students.push(...d2);
+                const chunk = idArr.slice(i, i + 200);
+                studentTasks.push(async () => {
+                    const { data: d1, error: e1 } = await supabase.from('student_master').select('*').in('student_id', chunk);
+                    if (e1) throw e1;
+                    return d1 || [];
+                });
+                studentTasks.push(async () => {
+                    const { data: d2, error: e2 } = await supabase.from('student_master').select('*').in('national_id', chunk);
+                    if (e2) throw e2;
+                    return d2 || [];
+                });
             }
             
             const emailArr = Array.from(requiredEmails);
             for (let i = 0; i < emailArr.length; i += 200) {
-                const { data, error } = await supabase.from('student_master').select('*').in('email', emailArr.slice(i, i+200));
-                if (error) throw error;
-                if (data) students.push(...data);
+                const chunk = emailArr.slice(i, i + 200);
+                studentTasks.push(async () => {
+                    const { data, error } = await supabase.from('student_master').select('*').in('email', chunk);
+                    if (error) throw error;
+                    return data || [];
+                });
             }
 
             const mobileArr = Array.from(requiredMobiles);
             for (let i = 0; i < mobileArr.length; i += 20) {
-                const chunk = mobileArr.slice(i, i+20);
+                const chunk = mobileArr.slice(i, i + 20);
                 const orFilters = chunk.filter(m => m.length >= 7).map(m => `mobile.ilike.%${m}%,guardian_mobile.ilike.%${m}%`).join(',');
                 if (orFilters) {
-                    const { data, error } = await supabase.from('student_master').select('*').or(orFilters);
-                    if (error) throw error;
-                    if (data) students.push(...data);
+                    studentTasks.push(async () => {
+                        const { data, error } = await supabase.from('student_master').select('*').or(orFilters);
+                        if (error) throw error;
+                        return data || [];
+                    });
                 }
             }
+
+            let students = (await runConcurrent(studentTasks, 4)).flat();
 
             // Deduplicate students
             const uniqueStudents = new Map();
@@ -3313,7 +3438,7 @@ class App {
                     proposedStudent: proposedStudent,
                     matchReason: matchReason,
                     original_ref: tx.reference_number,
-                    original_date: tx.payment_date,
+                    original_date: toDateOnly(tx.payment_date),
                     original_bank: tx.bank,
                     original_mapping: tx.mapping,
                     original_second_mapping: tx.second_mapping,
@@ -3559,10 +3684,24 @@ class App {
                 }
             }
 
-            // Insert into manual_fixes
+            // Insert into manual_fixes (preserve existing item_name, mapping, second_mapping if any)
             if (manualFixesToInsert.length > 0) {
                 // De-duplicate by reference (a reference can have several items) – an upsert cannot touch the same row twice
-                const uniqueFixes = Array.from(new Map(manualFixesToInsert.map(f => [String(f.reference_number), f])).values());
+                const uniqueFixesMap = new Map(manualFixesToInsert.map(f => [String(f.reference_number), f]));
+                const existingFixes = await fetchByIn('manual_fixes', 'reference_number', Array.from(uniqueFixesMap.keys()));
+                const existingFixMap = new Map((existingFixes || []).map(ef => [String(ef.reference_number), ef]));
+
+                const uniqueFixes = Array.from(uniqueFixesMap.values()).map(f => {
+                    const ex = existingFixMap.get(String(f.reference_number));
+                    return ex ? {
+                        reference_number: f.reference_number,
+                        correct_id: f.correct_id,
+                        item_name: ex.item_name ?? null,
+                        mapping: ex.mapping ?? null,
+                        second_mapping: ex.second_mapping ?? null
+                    } : f;
+                });
+
                 for (let i = 0; i < uniqueFixes.length; i += 500) {
                     const { error } = await supabase.from('manual_fixes').upsert(uniqueFixes.slice(i, i + 500), { onConflict: 'reference_number', ignoreDuplicates: false });
                     if (error) throw new Error('IDs were updated, but saving them as manual fixes failed: ' + error.message);
@@ -3914,7 +4053,7 @@ class App {
                                 ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${escapeHTML(link.invoice_number)}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 14px; height: 14px;"></i></button>` : ''}
                             </div>
                         </td>
-                        <td>${link.creation_date ? new Date(link.creation_date).toLocaleDateString() : '-'}</td>
+                        <td>${link.creation_date ? escapeHTML(toDateOnly(link.creation_date)) : '-'}</td>
                         <td>${dateBadge}</td>
                         <td>
                             <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -4147,6 +4286,7 @@ class App {
             (itemSet.size === 0 || itemSet.has(t.item_name)) &&
             (mappingSet.size === 0 || mappingSet.has(t.mapping))
         );
+        this.erpPage = 1;
         this.renderErpPreview();
     }
 
@@ -4154,35 +4294,94 @@ class App {
         const tbody = document.getElementById('erp-preview-body');
         if (!tbody) return;
 
+        const rows = this.erpData || [];
+        const summaryCard = document.getElementById('erp-summary-card');
+        if (summaryCard) {
+            if (rows.length > 0) {
+                summaryCard.style.display = 'flex';
+                const totalAmt = rows.reduce((sum, r) => sum + this.erpAmount(r), 0);
+                const validCnt = rows.filter(r => !r.id_status || r.id_status === 'Valid').length;
+                const invalidCnt = rows.length - validCnt;
+                const recordedCnt = rows.filter(r => r.erp_batch_number).length;
+
+                const elTotal = document.getElementById('erp-stat-total');
+                const elAmount = document.getElementById('erp-stat-amount');
+                const elValid = document.getElementById('erp-stat-valid');
+                const elInvalid = document.getElementById('erp-stat-invalid');
+                const elRecorded = document.getElementById('erp-stat-recorded');
+
+                if (elTotal) elTotal.textContent = rows.length.toLocaleString();
+                if (elAmount) elAmount.textContent = `EGP ${formatMoney(totalAmt)}`;
+                if (elValid) elValid.textContent = validCnt.toLocaleString();
+                if (elInvalid) elInvalid.textContent = invalidCnt.toLocaleString();
+                if (elRecorded) elRecorded.textContent = recordedCnt.toLocaleString();
+            } else {
+                summaryCard.style.display = 'none';
+            }
+        }
+
         tbody.innerHTML = '';
-        
-        // Only preview the first 5 transactions so the page doesn't get cluttered
-        const previewData = this.erpData.slice(0, 5);
+        if (rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No transactions match the selected ERP filters.</td></tr>';
+            document.getElementById('erp-pagination')?.remove();
+            return;
+        }
+
+        const pageSize = 100;
+        const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+        if (!this.erpPage || this.erpPage > totalPages) this.erpPage = 1;
+        const startIdx = (this.erpPage - 1) * pageSize;
+        const previewData = rows.slice(startIdx, startIdx + pageSize);
         
         previewData.forEach((row, index) => {
             const paddedAccount = this.erpAccount(row);
             const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${escapeHTML(row.payment_date || '')}</td>
+                <td>${escapeHTML(toDateOnly(row.payment_date))}</td>
                 <td>${escapeHTML(paddedAccount)}</td>
                 <td>${escapeHTML(description)}</td>
                 <td>${escapeHTML(formatMoney(this.erpAmount(row)))}</td>
                 <td>${escapeHTML(row.bank || '')}</td>
-                <td>${index + 1}</td>
+                <td>${startIdx + index + 1}</td>
             `;
             tbody.appendChild(tr);
         });
 
-        // Add a message if there are more transactions
-        if (this.erpData.length > 5) {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 1rem;">
-                    ... and ${this.erpData.length - 5} more transactions ready for export.
-                </td>
-            `;
-            tbody.appendChild(tr);
+        const container = tbody.closest('.table-container');
+        if (container) {
+            let pager = document.getElementById('erp-pagination');
+            if (rows.length <= pageSize) {
+                if (pager) pager.remove();
+            } else {
+                if (!pager) {
+                    pager = document.createElement('div');
+                    pager.id = 'erp-pagination';
+                    pager.className = 'pagination';
+                    container.appendChild(pager);
+                }
+                pager.innerHTML = `
+                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, rows.length)} of ${rows.length.toLocaleString()} lines</span>
+                    <div class="pagination-controls">
+                        <button class="btn btn-icon" id="btn-erp-prev" ${this.erpPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
+                        <span>Page ${this.erpPage} of ${totalPages}</span>
+                        <button class="btn btn-icon" id="btn-erp-next" ${this.erpPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                    </div>
+                `;
+                pager.querySelector('#btn-erp-prev')?.addEventListener('click', () => {
+                    if (this.erpPage > 1) {
+                        this.erpPage--;
+                        this.renderErpPreview();
+                    }
+                });
+                pager.querySelector('#btn-erp-next')?.addEventListener('click', () => {
+                    if (this.erpPage < totalPages) {
+                        this.erpPage++;
+                        this.renderErpPreview();
+                    }
+                });
+                if (window.lucide) lucide.createIcons({ root: pager });
+            }
         }
     }
 
@@ -4246,7 +4445,7 @@ class App {
 
     generateErpExcel(rows = this.erpData) {
         const exportData = rows.map((row, index) => ({
-            'Date': row.payment_date,
+            'Date': toDateOnly(row.payment_date),
             'Voucher': '',
             'Company': 'NU',
             'Account': this.erpAccount(row),
@@ -4264,6 +4463,13 @@ class App {
         }));
 
         const ws = XLSX.utils.json_to_sheet(exportData);
+        rows.forEach((row, idx) => {
+            const serial = dateToExcelSerial(row.payment_date);
+            if (serial !== null) {
+                const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 0 });
+                ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+            }
+        });
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
 
@@ -4471,7 +4677,7 @@ class App {
             document.getElementById('student-ledger-body').innerHTML = txs.map(t => {
                 return `
                 <tr>
-                    <td>${escapeHTML(t.payment_date ? t.payment_date.split('T')[0] : '-')}</td>
+                    <td>${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
                     <td>${escapeHTML(t.reference_number)}</td>
                     <td>${escapeHTML(t.item_name)}</td>
                     <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
@@ -4590,25 +4796,28 @@ class App {
         });
     }
 
-    async updateSidebarBadges() {
-        const badge = document.getElementById('sidebar-automatch-badge');
-        if (!badge) return;
-        try {
-            const { count, error } = await supabase
-                .from('transactions')
-                .select('*', { count: 'exact', head: true })
-                .neq('id_status', 'Valid');
-            if (!error && count !== null) {
-                if (count > 0) {
-                    badge.textContent = count > 999 ? '999+' : count;
-                    badge.style.display = 'inline-flex';
-                } else {
-                    badge.style.display = 'none';
+    updateSidebarBadges() {
+        clearTimeout(this._badgeUpdateTimer);
+        this._badgeUpdateTimer = setTimeout(async () => {
+            const badge = document.getElementById('sidebar-automatch-badge');
+            if (!badge) return;
+            try {
+                const { count, error } = await supabase
+                    .from('transactions')
+                    .select('*', { count: 'exact', head: true })
+                    .neq('id_status', 'Valid');
+                if (!error && count !== null) {
+                    if (count > 0) {
+                        badge.textContent = count > 999 ? '999+' : count;
+                        badge.style.display = 'inline-flex';
+                    } else {
+                        badge.style.display = 'none';
+                    }
                 }
+            } catch (err) {
+                console.warn('Could not update sidebar badge:', err);
             }
-        } catch (err) {
-            console.warn('Could not update sidebar badge:', err);
-        }
+        }, 250);
     }
 
     initGlobalSearch() {
@@ -4631,6 +4840,9 @@ class App {
         const closeSearch = () => {
             overlay.classList.remove('active');
         };
+
+        document.getElementById('btn-open-global-search')?.addEventListener('click', openSearch);
+        document.getElementById('btn-mobile-search')?.addEventListener('click', openSearch);
 
         window.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
@@ -4678,8 +4890,8 @@ class App {
 
                     const [txRes, studentRes] = await Promise.all([
                         supabase.from('transactions')
-                            .select('id, reference_number, student_id, student_name, item_price, payment_date')
-                            .or(`reference_number.ilike.%${cleanQ}%,student_id.ilike.%${cleanQ}%`)
+                            .select('id, reference_number, student_id, item_name, item_price, payment_date')
+                            .or(`reference_number.ilike.%${cleanQ}%,student_id.ilike.%${cleanQ}%,item_name.ilike.%${cleanQ}%`)
                             .order('payment_date', { ascending: false })
                             .limit(5),
                         supabase.from('student_master')
@@ -4708,7 +4920,7 @@ class App {
                                 <div class="result-text">
                                     <strong>${escapeHTML(tx.reference_number)}</strong>
                                     <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
-                                        ID: ${escapeHTML(tx.student_id || '-')} &bull; EGP ${formatMoney(tx.item_price)} &bull; ${escapeHTML(tx.payment_date || '')}
+                                        ID: ${escapeHTML(tx.student_id || '-')} &bull; ${escapeHTML(tx.item_name || '-')} &bull; EGP ${formatMoney(tx.item_price)} &bull; ${escapeHTML(toDateOnly(tx.payment_date))}
                                     </span>
                                 </div>
                             </div>
