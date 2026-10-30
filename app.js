@@ -1604,7 +1604,7 @@ class App {
                         const second_mapping = normalizeItemName(getVal(row, '2nd Mapping')) || null;
 
                         let nk = item_name.toLowerCase();
-                        // If the uploaded Item Name is actually an existing rule's Adjusted Item Name, target the original rule!
+                        // If the uploaded Item Name is actually an existing (or earlier uploaded) rule's Adjusted Item Name, target the original rule!
                         if (!existingByNorm.has(nk) && existingByAdjNorm.has(nk)) {
                             const origRule = existingByAdjNorm.get(nk);
                             adjusted_item_name = adjusted_item_name || item_name;
@@ -1620,12 +1620,16 @@ class App {
                         }
 
                         const prev = byNormKey.get(nk);
-                        byNormKey.set(nk, {
+                        const mergedEntry = {
                             item_name,
                             adjusted_item_name: adjusted_item_name || (prev ? prev.adjusted_item_name : null),
                             mapping: mapping || (prev ? prev.mapping : null),
                             second_mapping: second_mapping || (prev ? prev.second_mapping : null)
-                        });
+                        };
+                        byNormKey.set(nk, mergedEntry);
+                        if (mergedEntry.adjusted_item_name) {
+                            existingByAdjNorm.set(mergedEntry.adjusted_item_name.toLowerCase(), mergedEntry);
+                        }
                     });
 
                     const uploadedMappings = Array.from(byNormKey.values());
