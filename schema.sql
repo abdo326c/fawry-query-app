@@ -354,3 +354,72 @@ CREATE POLICY rbac_delete ON item_mappings FOR DELETE TO authenticated USING (pu
 CREATE POLICY rbac_insert ON manual_fixes FOR INSERT TO authenticated WITH CHECK (public.has_min_role('accountant'));
 CREATE POLICY rbac_update ON manual_fixes FOR UPDATE TO authenticated USING (public.has_min_role('accountant')) WITH CHECK (public.has_min_role('accountant'));
 CREATE POLICY rbac_delete ON manual_fixes FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+-- 12. Auth.Users Sync Function & Trigger
+CREATE OR REPLACE FUNCTION public.sync_auth_users()
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_inserted INTEGER := 0;
+  v_total    INTEGER := 0;
+BEGIN
+  WITH ins AS (
+    INSERT INTO public.user_roles (email, role, updated_by, updated_at)
+    SELECT
+      LOWER(TRIM(u.email)),
+      CASE WHEN LOWER(TRIM(u.email)) = 'ammahmoud@nu.edu.eg' THEN 'admin' ELSE 'viewer' END,
+      'auth.users sync',
+      NOW()
+    FROM auth.users u
+    WHERE u.email IS NOT NULL AND TRIM(u.email) <> ''
+    ON CONFLICT (email) DO NOTHING
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_inserted FROM ins;
+
+  INSERT INTO public.user_roles (email, role, updated_by, updated_at)
+  SELECT DISTINCT LOWER(TRIM(user_email)), 'viewer', 'history sync', NOW()
+  FROM (
+    SELECT user_email FROM public.import_batches WHERE user_email IS NOT NULL AND user_email <> 'System' AND user_email LIKE '%@%'
+    UNION
+    SELECT user_email FROM public.audit_logs WHERE user_email IS NOT NULL AND user_email <> 'System' AND user_email LIKE '%@%'
+  ) h
+  WHERE LOWER(TRIM(user_email)) <> 'ammahmoud@nu.edu.eg'
+  ON CONFLICT (email) DO NOTHING;
+
+  SELECT COUNT(*) INTO v_total FROM public.user_roles;
+  RETURN jsonb_build_object('inserted', v_inserted, 'total', v_total);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.sync_auth_users() TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.email IS NOT NULL AND TRIM(NEW.email) <> '' THEN
+    INSERT INTO public.user_roles (email, role, updated_by, updated_at)
+    VALUES (
+      LOWER(TRIM(NEW.email)),
+      CASE WHEN LOWER(TRIM(NEW.email)) = 'ammahmoud@nu.edu.eg' THEN 'admin' ELSE 'viewer' END,
+      'auth.signup',
+      NOW()
+    )
+    ON CONFLICT (email) DO NOTHING;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_auth_user();

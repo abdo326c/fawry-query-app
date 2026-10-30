@@ -129,6 +129,11 @@ test('All page buttons, filters, modals, and quick-search close button exist in 
     expect(document.getElementById('global-search-overlay')).not.toBeNull();
     expect(document.getElementById('btn-open-global-search')).not.toBeNull();
     expect(document.getElementById('btn-close-global-search')).not.toBeNull();
+
+    // 10. Users & Roles controls
+    expect(document.getElementById('btn-refresh-users-roles')).not.toBeNull();
+    expect(document.getElementById('btn-sync-auth-users')).not.toBeNull();
+    expect(document.getElementById('btn-save-user-role')).not.toBeNull();
 });
 
 test('App initializes and wires interactive buttons, modals, and pivot export logic without errors', async () => {

@@ -254,6 +254,18 @@ class App {
                     this.userRole = r;
                     return r;
                 }
+            } else if (!data) {
+                // User signed in but has no user_roles entry yet: add as viewer so Admin sees them
+                try {
+                    await supabase.from('user_roles').insert({
+                        email,
+                        role: 'viewer',
+                        updated_by: 'User Sign-in',
+                        updated_at: new Date().toISOString()
+                    });
+                } catch (insErr) {
+                    // ignore if concurrent or blocked
+                }
             }
         } catch (err) {
             console.warn('Could not fetch user role, defaulting to viewer:', err.message);
@@ -8671,16 +8683,53 @@ class App {
             btnRefresh.addEventListener('click', () => this.loadUsersAndRoles());
         }
 
+        const btnSyncUsers = document.getElementById('btn-sync-auth-users');
+        if (btnSyncUsers) {
+            btnSyncUsers.addEventListener('click', async () => {
+                if (!this.requireRole('admin', 'sync user accounts')) return;
+                const origHtml = btnSyncUsers.innerHTML;
+                btnSyncUsers.innerHTML = '<i data-lucide="loader" class="spin"></i> Syncing...';
+                btnSyncUsers.disabled = true;
+                if (window.lucide) lucide.createIcons();
+
+                try {
+                    const { data, error } = await supabase.rpc('sync_auth_users');
+                    if (error) throw error;
+                    const inserted = data?.inserted || 0;
+                    const total = data?.total || (this.allUserRoles?.length || 0);
+                    Toast.show(inserted > 0
+                        ? `Synced ${inserted} new user(s) from Supabase Auth (Total: ${total}).`
+                        : `All registered accounts are already in the directory (Total: ${total}).`, 'success');
+                    await this.loadUsersAndRoles({ skipSync: true });
+                } catch (err) {
+                    Toast.show('Sync error: ' + err.message + ' (Run migration 2.3.1_sync_auth_users.sql in Supabase SQL editor)', 'warning');
+                } finally {
+                    btnSyncUsers.innerHTML = origHtml;
+                    btnSyncUsers.disabled = false;
+                    if (window.lucide) lucide.createIcons();
+                }
+            });
+        }
+
         const searchAudit = document.getElementById('audit-log-search');
         if (searchAudit) {
             searchAudit.addEventListener('input', () => this.renderAuditLogsTable());
         }
     }
 
-    async loadUsersAndRoles() {
+    async loadUsersAndRoles({ skipSync = false } = {}) {
         if (!this.hasRole('admin')) {
             Toast.show('Admin permission is required to view Users & Roles.', 'warning');
             return;
+        }
+
+        // Auto-sync missing accounts from auth.users if function is installed
+        if (!skipSync) {
+            try {
+                await supabase.rpc('sync_auth_users');
+            } catch (e) {
+                // Ignore if migration 2.3.1 not yet run in Supabase
+            }
         }
 
         const rolesTbody = document.getElementById('user-roles-table-body');
