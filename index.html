@@ -810,63 +810,119 @@
                 <div class="header">
                     <h1>Students Details</h1>
                     <div class="header-actions">
-                        <button class="btn btn-outline" id="btn-export-students"><i data-lucide="download"></i> Export Master List</button>
+                        <button class="btn btn-outline" id="btn-export-students">
+                            <i data-lucide="download"></i> Export Master List
+                        </button>
+                        <button class="btn btn-outline" id="btn-toggle-student-import">
+                            <i data-lucide="upload"></i> Import Excel
+                        </button>
+                        <button class="btn btn-primary" id="btn-add-student">
+                            <i data-lucide="plus"></i> Add Student
+                        </button>
                     </div>
                 </div>
 
-                <!-- 3 Tabs Navigation -->
-                <div class="glass-card" style="margin-bottom: 1.5rem; padding: 0;">
-                    <div class="student-tabs" style="display: flex; border-bottom: 1px solid var(--border-color);">
-                        <button class="student-tab-btn active" data-target="student-lookup">Lookup Student</button>
-                        <button class="student-tab-btn" data-target="student-import">Import Data</button>
+                <!-- Students Summary KPI Bar -->
+                <div id="students-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Total Students:</span>
+                            <strong id="students-stat-total" style="font-size: 1.05rem; color: var(--text-main);">0</strong>
                         </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Colleges:</span>
+                            <strong id="students-stat-colleges" style="font-size: 1.05rem; color: var(--primary);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">With Phone:</span>
+                            <strong id="students-stat-mobile" style="font-size: 1.05rem; color: var(--success);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">With National ID:</span>
+                            <strong id="students-stat-nat-id" style="font-size: 1.05rem; color: #38bdf8;">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Merged Profiles:</span>
+                            <strong id="students-stat-merged" style="font-size: 1.05rem; color: #a855f7;">0</strong>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Tab 1: Lookup -->
+                <!-- Collapsible Import Student Excel Panel -->
+                <div id="student-import" class="glass-card hidden" style="margin-bottom: 1.5rem; padding: 1.25rem; border-left: 4px solid var(--primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; gap: 0.75rem; flex-wrap: wrap;">
+                        <div>
+                            <h3 style="margin: 0; font-size: 1.05rem;">Import Student Excel Files</h3>
+                            <p style="color: var(--text-muted); margin: 0.25rem 0 0 0; font-size: 0.85rem;">Upload <strong>ApplicantReport</strong> or <strong>StudentDetails</strong> <code>.xlsx</code> files. The system automatically normalizes Student IDs and merges records without wiping existing fields.</p>
+                        </div>
+                        <button class="btn btn-outline btn-sm" id="btn-close-student-import">Hide</button>
+                    </div>
+                    <div class="upload-zone" id="student-upload-zone" style="padding: 1.75rem;">
+                        <i data-lucide="file-spreadsheet" class="upload-icon"></i>
+                        <h3>Drop Excel file here or click to upload</h3>
+                        <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports .xlsx files only</p>
+                        <input type="file" id="student-file-input" accept=".xlsx" class="hidden-input">
+                    </div>
+                    <div id="student-upload-status" class="alert" style="display: none; margin-top: 1rem;"></div>
+                </div>
+
+                <!-- Unified Search & Filter Bar -->
                 <div id="student-lookup" class="student-tab-content active">
-                    <div class="glass-card" style="margin-bottom: 1.5rem;">
-                        <h2>Search Students</h2>
-                        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem;">
-                            <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 250px;">
-                                <label>Search Term</label>
-                                <input type="text" id="student-search-input" class="input-text" placeholder="Name, Phone, Email, ID...">
-                            </div>
-                            <div class="form-group" style="margin-bottom: 0;">
-                                <button class="btn btn-primary" id="btn-search-students"><i data-lucide="search"></i> Search</button>
+                    <div class="glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; align-items: center; flex-wrap: wrap;">
+                        <div style="flex: 2; min-width: 240px;">
+                            <input type="text" id="student-search-input" class="input-text" placeholder="Search Student ID, Full Name, Arabic Name, Phone, Email, National ID, or Program...">
+                        </div>
+                        <div style="flex: 1; min-width: 170px;">
+                            <select id="student-filter-college" class="input-text">
+                                <option value="">All Colleges</option>
+                            </select>
+                        </div>
+                        <div style="flex: 1; min-width: 160px;">
+                            <select id="student-filter-source" class="input-text">
+                                <option value="">All Sources</option>
+                                <option value="StudentDetails">StudentDetails</option>
+                                <option value="ApplicantReport">ApplicantReport</option>
+                                <option value="Merged">Merged</option>
+                                <option value="Manual">Manual</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" id="btn-search-students" title="Search Students">
+                            <i data-lucide="search"></i> Search
+                        </button>
+                        <button class="btn btn-outline" id="btn-clear-student-filters" title="Clear Filters">Clear</button>
+                    </div>
+
+                    <!-- Inline Student Profile & Statement of Payments -->
+                    <div id="inline-student-profile" class="hidden glass-card" style="margin-bottom: 1.5rem; border-left: 4px solid var(--primary);">
+                        <!-- Student Identity Banner -->
+                        <div id="student-profile-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; padding-bottom: 1rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-color);">
+                            <!-- Populated dynamically by loadStudentProfile() -->
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.85rem;">
+                            <h3 style="margin: 0; font-size: 1rem;">Categorized Payment Summary</h3>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                                <button class="btn btn-outline btn-sm" id="btn-edit-profile-student">
+                                    <i data-lucide="edit-2" style="width: 14px; height: 14px;"></i> Edit Student
+                                </button>
+                                <button class="btn btn-outline btn-sm" id="btn-export-student-statement">
+                                    <i data-lucide="file-spreadsheet" style="width: 14px; height: 14px;"></i> Export Statement (Excel)
+                                </button>
+                                <button class="btn btn-outline btn-sm" id="btn-print-profile">
+                                    <i data-lucide="printer" style="width: 14px; height: 14px;"></i> Print / Save PDF
+                                </button>
+                                <button class="btn btn-outline btn-sm" id="btn-close-student-profile">
+                                    <i data-lucide="x" style="width: 14px; height: 14px;"></i> Close
+                                </button>
                             </div>
                         </div>
-                    </div>
-                    <div class="glass-card table-container" style="padding: 0;">
-                        <table class="data-table" id="students-table">
-                            <thead>
-                                <tr>
-                                    <th>Student ID</th>
-                                    <th>Full Name</th>
-                                    <th>Email</th>
-                                    <th>Mobile</th>
-                                    <th>College</th>
-                                    <th>Program</th>
-                                </tr>
-                            </thead>
-                            <tbody id="students-table-body">
-                                <!-- Data will be populated here -->
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    <!-- Inline Student Profile -->
-                    <div id="inline-student-profile" class="hidden glass-card" style="margin-top: 1.5rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                            <h3 style="margin: 0;">Categorized Payment Summary</h3>
-                            <button class="btn btn-outline btn-sm" id="btn-print-profile">
-                                <i data-lucide="printer"></i> Print / Save PDF
-                            </button>
-                        </div>
-                        <div class="table-container" style="margin-bottom: 2rem;">
+
+                        <div class="table-container" style="margin-bottom: 1.5rem;">
                             <table class="data-table">
                                 <thead>
                                     <tr>
                                         <th>Mapping Category</th>
+                                        <th style="width: 140px; text-align: center;">Transactions</th>
                                         <th style="text-align: right;">Total Amount (EGP)</th>
                                     </tr>
                                 </thead>
@@ -876,7 +932,7 @@
                             </table>
                         </div>
 
-                        <h3 style="margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">Statement of Payments (Chronological)</h3>
+                        <h3 style="margin-bottom: 0.85rem; font-size: 1rem;">Statement of Payments (Chronological)</h3>
                         <div class="table-container">
                             <table class="data-table">
                                 <thead>
@@ -885,6 +941,8 @@
                                         <th>Ref Number</th>
                                         <th>Item Name</th>
                                         <th>Mapping</th>
+                                        <th>2nd Mapping</th>
+                                        <th>Bank / Status</th>
                                         <th style="text-align: right;">Amount</th>
                                     </tr>
                                 </thead>
@@ -894,26 +952,27 @@
                             </table>
                         </div>
                     </div>
-                </div>
 
-                <!-- Tab 2: Import -->
-                <div id="student-import" class="student-tab-content" style="display: none;">
-                    <div class="glass-card" style="margin-bottom: 1.5rem;">
-                        <h2>Import Student Excel Files</h2>
-                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Upload ApplicantReport or StudentDetails .xlsx files. The system will automatically parse and merge them.</p>
-                        
-                        <div class="upload-zone" id="student-upload-zone">
-                            <i data-lucide="file-spreadsheet" class="upload-icon"></i>
-                            <h3>Drop Excel file here or click to upload</h3>
-                            <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports .xlsx files only</p>
-                            <input type="file" id="student-file-input" accept=".xlsx" class="hidden-input">
-                        </div>
-                        <div id="student-upload-status" class="alert" style="display: none; margin-top: 1rem;"></div>
+                    <div class="glass-card table-container" style="padding: 0;">
+                        <table class="data-table" id="students-table">
+                            <thead>
+                                <tr>
+                                    <th>Student ID</th>
+                                    <th>Full Name</th>
+                                    <th>Contact (Email &amp; Phone)</th>
+                                    <th>National ID</th>
+                                    <th>College &amp; Program</th>
+                                    <th>Source</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="students-table-body">
+                                <!-- Data will be populated here -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-
-                <!-- Tab 3: Auto-Matcher -->
-                </section>
+            </section>
 
         <section id="view-automatcher" class="view">
 
@@ -1516,6 +1575,65 @@
         </div>
     </div>
 
+
+    <!-- Add/Edit Student Modal -->
+    <div id="modal-student" class="modal hidden" style="z-index: 10025;">
+        <div class="modal-content glass-card" style="max-width: 600px;">
+            <div class="modal-header">
+                <h2 id="modal-student-title">Add Student</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-student').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Student ID *</label>
+                        <input type="text" id="stu-modal-id" class="input-text" placeholder="e.g. 221001234">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>National ID / Passport</label>
+                        <input type="text" id="stu-modal-national-id" class="input-text" placeholder="14-digit National ID">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Full Name (English) *</label>
+                        <input type="text" id="stu-modal-name" class="input-text" placeholder="Student Full Name">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Arabic Name</label>
+                        <input type="text" id="stu-modal-arabic-name" class="input-text" placeholder="الاسم بالعربية">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Email</label>
+                        <input type="email" id="stu-modal-email" class="input-text" placeholder="student@nu.edu.eg">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Mobile Phone</label>
+                        <input type="text" id="stu-modal-mobile" class="input-text" placeholder="010XXXXXXXX">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Guardian Name</label>
+                        <input type="text" id="stu-modal-guardian-name" class="input-text" placeholder="Optional">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Guardian Mobile</label>
+                        <input type="text" id="stu-modal-guardian-mobile" class="input-text" placeholder="010XXXXXXXX">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>College</label>
+                        <input type="text" id="stu-modal-college" class="input-text" list="datalist-student-colleges" placeholder="e.g. Engineering and Applied Sciences">
+                        <datalist id="datalist-student-colleges"></datalist>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Program / Major</label>
+                        <input type="text" id="stu-modal-program" class="input-text" placeholder="e.g. Computer Science">
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.25rem;">
+                    <button type="button" class="btn btn-outline" onclick="document.getElementById('modal-student').classList.add('hidden')">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="btn-save-student">Save Student</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Add/Edit Link Modal -->
     <div id="modal-link" class="modal hidden">
