@@ -485,7 +485,9 @@ class App {
         let savedTheme = null;
         try { savedTheme = localStorage.getItem('fawry-theme'); } catch (e) { /* storage unavailable */ }
         const saveTheme = (t) => { try { localStorage.setItem('fawry-theme', t); } catch (e) { /* ignore */ } };
-        const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+        const prefersLight = typeof window.matchMedia === 'function'
+            ? window.matchMedia('(prefers-color-scheme: light)').matches
+            : false;
 
         if (savedTheme === 'light' || (!savedTheme && prefersLight)) {
             htmlEl.classList.remove('dark');
@@ -864,11 +866,12 @@ class App {
         const selectedBanks = Array.from(checkboxes).map(cb => cb.value);
 
         if (type === 'erp_export') {
-            const erpFrom = document.getElementById('erp-date-from');
-            const erpTo = document.getElementById('erp-date-to');
+            const erpFrom = document.getElementById('erp-filter-date-from');
+            const erpTo = document.getElementById('erp-filter-date-to');
             if (erpFrom && dateFrom) erpFrom.value = dateFrom;
             if (erpTo && dateTo) erpTo.value = dateTo;
             document.querySelector('.nav-link[data-tab="erp-export"]')?.click();
+            this.loadErpExport({ refresh: true });
             return;
         }
 
@@ -2421,6 +2424,9 @@ class App {
                 }
                 if (document.getElementById('view-erp-export')?.classList.contains('active')) {
                     this.loadErpExport({ refresh: true });
+                }
+                if (document.getElementById('view-automatcher')?.classList.contains('active')) {
+                    this.runAutoMatcher();
                 }
             } catch (err) {
                 Toast.show('Error saving fix: ' + err.message, 'error');
@@ -6078,22 +6084,18 @@ class App {
             btn.addEventListener('click', () => {
                 const ref = btn.getAttribute('data-automatch-manual-fix');
                 const proposedSid = btn.getAttribute('data-proposed-sid');
-                const fixesNav = document.querySelector('.nav-item[data-target="fixes"]');
-                if (fixesNav) fixesNav.click();
-                setTimeout(() => {
-                    const btnAddFix = document.getElementById('btn-add-fix');
-                    if (btnAddFix) btnAddFix.click();
-                    const refInput = document.getElementById('fix-ref-num');
-                    const sidInput = document.getElementById('fix-correct-id');
-                    if (refInput && ref) {
-                        refInput.value = ref;
-                        refInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                    if (sidInput && proposedSid) {
-                        sidInput.value = proposedSid;
-                        sidInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                }, 60);
+                this.resetFixModal('Add Fix');
+                const refInput = document.getElementById('fix-ref');
+                const sidInput = document.getElementById('fix-id');
+                if (refInput && ref) {
+                    refInput.value = ref;
+                    refInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                if (sidInput && proposedSid) {
+                    sidInput.value = proposedSid;
+                    sidInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                document.getElementById('modal-fix')?.classList.remove('hidden');
             });
         });
 
@@ -6262,14 +6264,6 @@ class App {
         this.paymentLinksSort = 'created_desc';
         this.allPaymentLinks = null;
         this.filteredPaymentLinks = [];
-
-        document.querySelectorAll('.nav-item').forEach(item => {
-            if (item.getAttribute('data-target') === 'payment-links') {
-                item.addEventListener('click', () => {
-                    this.loadPaymentLinks();
-                });
-            }
-        });
 
         let linksSearchTimeout;
         const searchInput = document.getElementById('links-search');
@@ -7223,7 +7217,7 @@ class App {
         document.getElementById('modal-erp-warning')?.classList.add('hidden');
         const modal = document.getElementById('modal-fix');
         if (!modal) return;
-        document.getElementById('modal-fix-title').textContent = 'Add Manual Fix';
+        this.resetFixModal('Add Manual Fix');
         const refInput = document.getElementById('fix-ref');
         if (refInput) {
             refInput.value = tx.reference_number || '';
@@ -7235,7 +7229,7 @@ class App {
             idInput.value = (tx.id_status === 'Valid' && tx.student_id) ? tx.student_id : '';
             idInput.dispatchEvent(new Event('input'));
         }
-        const itemInput = document.getElementById('fix-item');
+        const itemInput = document.getElementById('fix-name');
         if (itemInput) itemInput.value = '';
         const mapInput = document.getElementById('fix-mapping');
         if (mapInput) mapInput.value = '';
