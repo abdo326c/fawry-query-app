@@ -4149,31 +4149,6 @@ class App {
             this.exportStudentStatement();
         });
 
-        document.getElementById('btn-delete-profile-student')?.addEventListener('click', async () => {
-            const sid = this.currentProfileSid;
-            if (!sid) return;
-            const st = this.currentProfileStudent || (this.allStudentsData || []).find(s => String(s.student_id) === String(sid));
-            const confirmed = await ConfirmModal.show({
-                title: 'Delete Student Record',
-                message: `Are you sure you want to delete student "${st?.full_name || sid}" (${sid}) from the master directory?`,
-                confirmText: 'Delete Student',
-                type: 'danger'
-            });
-            if (!confirmed) return;
-            try {
-                const { error } = await supabase.from('student_master').delete().eq('student_id', sid);
-                if (error) throw error;
-                await this.logAudit('DELETE', 'student_master', sid, st || { student_id: sid }, null);
-                Toast.show(`Deleted student ${sid}`, 'success');
-                document.getElementById('inline-student-profile')?.classList.add('hidden');
-                document.getElementById('student-directory-view')?.classList.remove('hidden');
-                this.currentProfileSid = null;
-                await this.loadStudents({ forceReload: true, skipAutoProfile: true });
-            } catch (err) {
-                Toast.show('Failed to delete student: ' + err.message, 'error');
-            }
-        });
-
         const dropzone = document.getElementById('student-upload-zone');
         const fileInput = document.getElementById('student-file-input');
         if (dropzone && fileInput) {
