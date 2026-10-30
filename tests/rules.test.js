@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial } from '../rules.js';
+import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, normalizeItemName, buildMappingLookup } from '../rules.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -90,6 +90,21 @@ test('dateToExcelSerial returns exact integer serial with zero fractional time',
     expect(dateToExcelSerial('01/08/2025 3:00:00 AM')).toBe(45870);
     expect(Number.isInteger(dateToExcelSerial('2025-08-01'))).toBe(true);
     expect(dateToExcelSerial('')).toBeNull();
+});
+
+test('normalizeItemName and buildMappingLookup handle whitespace, casing, and adjusted item names', () => {
+    expect(normalizeItemName('  Tuition\u00A0  Fees - Fall  ')).toBe('Tuition Fees - Fall');
+    const lookup = buildMappingLookup([
+        { item_name: 'Tuition Fees - Fall', adjusted_item_name: 'Fall Tuition 2025', mapping: 'Tuition', second_mapping: 'Undergrad' }
+    ]);
+    // Exact match
+    expect(lookup('Tuition Fees - Fall')?.mapping).toBe('Tuition');
+    // Case + extra space match
+    expect(lookup('  tuition   fees - fall ')?.mapping).toBe('Tuition');
+    // Reverse lookup via adjusted_item_name
+    expect(lookup('Fall Tuition 2025')?.item_name).toBe('Tuition Fees - Fall');
+    expect(lookup('  fall  tuition 2025 ')?.mapping).toBe('Tuition');
+    expect(lookup('Nonexistent')).toBeUndefined();
 });
 
 

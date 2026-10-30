@@ -129,12 +129,43 @@ export function applyBusinessRules(base, { link, fix, lookupMapping }) {
 }
 
 /**
+ * Normalizes an item name by collapsing multiple/non-breaking spaces and trimming.
+ */
+export function normalizeItemName(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[\s\u00A0]+/g, ' ').trim();
+}
+
+/**
  * Builds a mapping lookup function from item_mappings rows.
+ * Matches by:
+ *   1. Exact trimmed item_name
+ *   2. Whitespace-normalized & case-insensitive item_name
+ *   3. Whitespace-normalized & case-insensitive adjusted_item_name (in case a row already carries the adjusted name)
  */
 export function buildMappingLookup(mappings) {
-    const map = new Map();
-    (mappings || []).forEach(m => map.set(String(m.item_name || '').trim(), m));
-    return (name) => map.get(String(name || '').trim());
+    const exactMap = new Map();
+    const normMap = new Map();
+    const adjustedMap = new Map();
+    (mappings || []).forEach(m => {
+        if (!m || !m.item_name) return;
+        const trimmed = String(m.item_name).trim();
+        const norm = normalizeItemName(m.item_name).toLowerCase();
+        exactMap.set(trimmed, m);
+        if (norm && !normMap.has(norm)) normMap.set(norm, m);
+        if (m.adjusted_item_name) {
+            const adjNorm = normalizeItemName(m.adjusted_item_name).toLowerCase();
+            if (adjNorm && !adjustedMap.has(adjNorm)) adjustedMap.set(adjNorm, m);
+        }
+    });
+    return (name) => {
+        if (name === null || name === undefined) return undefined;
+        const trimmed = String(name).trim();
+        if (!trimmed) return undefined;
+        if (exactMap.has(trimmed)) return exactMap.get(trimmed);
+        const norm = normalizeItemName(trimmed).toLowerCase();
+        return normMap.get(norm) || adjustedMap.get(norm);
+    };
 }
 
 /**

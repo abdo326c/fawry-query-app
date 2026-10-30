@@ -8,6 +8,7 @@ import {
     updateRuleFields,
     diffTransaction,
     buildMappingLookup,
+    normalizeItemName,
     originalItemName,
     isLockedTransaction,
     escapeHTML,
@@ -212,6 +213,7 @@ class App {
         this.loadTransactions();
         this.updateSidebarBadges();
         this.stripDatabaseTransactionTimes();
+        this.deduplicateItemMappings({ silent: true });
         // ERP Export data is loaded when that tab is opened (see initNavigation)
         this.initRealtime();
     }
@@ -256,6 +258,185 @@ class App {
         } catch (err) {
             console.warn('Date normalization check skipped:', err.message);
             return 0;
+        }
+    }
+
+    /**
+     * Scans all item_mappings in the database and fixes:
+     * 1. Whitespace/casing duplicate item_name rows (merges fields and deletes duplicates)
+     * 2. Untrimmed or double-spaced item_name / adjusted_item_name / mapping / second_mapping values
+     * 3. Chained duplicates where a rule's item_name is another rule's adjusted_item_name
+     *    (folds the edits back into the original rule and removes the redundant chained rule)
+     * 4. Self-renames where adjusted_item_name is identical to item_name
+     */
+    async deduplicateItemMappings({ silent = true } = {}) {
+        try {
+            const rawMappings = await fetchAll('item_mappings', '*', null, 'item_name');
+            if (!rawMappings || rawMappings.length === 0) {
+                if (!silent) Toast.show('No item mappings found in database.', 'info');
+                return { mergedCount: 0, chainedCount: 0, txUpdated: 0 };
+            }
+
+            const normKey = (s) => normalizeItemName(s).toLowerCase();
+            const cleanOrNull = (s) => {
+                const c = normalizeItemName(s);
+                return c ? c : null;
+            };
+
+            const keysToDelete = new Set();
+            const rowsToUpsertMap = new Map(); // canonical item_name -> row
+            const affectedItemNames = new Set();
+            const affectedRenamedNames = new Set();
+            let mergedCount = 0;
+            let chainedCount = 0;
+
+            // Pass 1: Group by normalized item_name (catches whitespace/case duplicates)
+            const groups = new Map();
+            for (const row of rawMappings) {
+                const k = normKey(row.item_name);
+                if (!k) continue;
+                if (!groups.has(k)) groups.set(k, []);
+                groups.get(k).push(row);
+            }
+
+            const canonicalByNormKey = new Map();
+            for (const [k, group] of groups.entries()) {
+                // Prefer the row whose item_name is already trimmed and has the most populated fields
+                group.sort((a, b) => {
+                    const aTrimmed = a.item_name === normalizeItemName(a.item_name) ? 1 : 0;
+                    const bTrimmed = b.item_name === normalizeItemName(b.item_name) ? 1 : 0;
+                    if (aTrimmed !== bTrimmed) return bTrimmed - aTrimmed;
+                    const aScore = (a.mapping ? 2 : 0) + (a.second_mapping ? 1 : 0) + (a.adjusted_item_name ? 1 : 0);
+                    const bScore = (b.mapping ? 2 : 0) + (b.second_mapping ? 1 : 0) + (b.adjusted_item_name ? 1 : 0);
+                    return bScore - aScore;
+                });
+
+                const canonicalName = normalizeItemName(group[0].item_name);
+                let mergedAdjusted = null;
+                let mergedMapping = null;
+                let mergedSecond = null;
+
+                for (const r of group) {
+                    if (r.adjusted_item_name) affectedRenamedNames.add(String(r.adjusted_item_name).trim());
+                    const adj = cleanOrNull(r.adjusted_item_name);
+                    if (adj && normKey(adj) !== k && !mergedAdjusted) mergedAdjusted = adj;
+                    const map1 = cleanOrNull(r.mapping);
+                    if (map1 && !mergedMapping) mergedMapping = map1;
+                    const map2 = cleanOrNull(r.second_mapping);
+                    if (map2 && !mergedSecond) mergedSecond = map2;
+                }
+
+                const canonicalRow = {
+                    item_name: canonicalName,
+                    adjusted_item_name: mergedAdjusted,
+                    mapping: mergedMapping,
+                    second_mapping: mergedSecond
+                };
+                canonicalByNormKey.set(k, canonicalRow);
+
+                const primary = group[0];
+                const primaryChanged =
+                    primary.item_name !== canonicalRow.item_name ||
+                    (primary.adjusted_item_name || null) !== canonicalRow.adjusted_item_name ||
+                    (primary.mapping || null) !== canonicalRow.mapping ||
+                    (primary.second_mapping || null) !== canonicalRow.second_mapping;
+
+                if (group.length > 1 || primaryChanged) {
+                    if (group.length > 1) mergedCount += group.length - 1;
+                    else mergedCount += 1;
+                    for (const r of group) {
+                        affectedItemNames.add(r.item_name);
+                        if (r.item_name !== canonicalName) {
+                            keysToDelete.add(r.item_name);
+                        }
+                    }
+                    affectedItemNames.add(canonicalName);
+                    if (mergedAdjusted) affectedRenamedNames.add(mergedAdjusted);
+                    rowsToUpsertMap.set(canonicalName, canonicalRow);
+                }
+            }
+
+            // Pass 2: Detect chained duplicates where Rule B's item_name is Rule A's adjusted_item_name
+            // (happens when an edit was entered for the adjusted item name instead of the original item name)
+            const adjustedOwnerMap = new Map(); // normKey(adjusted_item_name) -> canonicalRow (Rule A)
+            for (const [k, row] of canonicalByNormKey.entries()) {
+                if (row.adjusted_item_name) {
+                    const adjKey = normKey(row.adjusted_item_name);
+                    if (adjKey && adjKey !== k) {
+                        adjustedOwnerMap.set(adjKey, row);
+                    }
+                }
+            }
+
+            for (const [k, rowB] of canonicalByNormKey.entries()) {
+                const ownerA = adjustedOwnerMap.get(k);
+                if (!ownerA || ownerA === rowB) continue;
+
+                // Fold rowB's edits into the original rule ownerA
+                let nextAdjusted = rowB.adjusted_item_name || ownerA.adjusted_item_name;
+                if (nextAdjusted && normKey(nextAdjusted) === normKey(ownerA.item_name)) {
+                    nextAdjusted = null;
+                }
+                const nextMapping = rowB.mapping || ownerA.mapping || null;
+                const nextSecond = rowB.second_mapping || ownerA.second_mapping || null;
+
+                ownerA.adjusted_item_name = nextAdjusted;
+                ownerA.mapping = nextMapping;
+                ownerA.second_mapping = nextSecond;
+
+                rowsToUpsertMap.set(ownerA.item_name, ownerA);
+                rowsToUpsertMap.delete(rowB.item_name);
+                keysToDelete.add(rowB.item_name);
+
+                affectedItemNames.add(ownerA.item_name);
+                affectedItemNames.add(rowB.item_name);
+                affectedRenamedNames.add(rowB.item_name);
+                if (nextAdjusted) affectedRenamedNames.add(nextAdjusted);
+                chainedCount++;
+            }
+
+            const deleteList = Array.from(keysToDelete);
+            const upsertList = Array.from(rowsToUpsertMap.values());
+
+            if (deleteList.length === 0 && upsertList.length === 0) {
+                if (!silent) Toast.show('No duplicate or chained item mappings found – all rules are clean!', 'success');
+                return { mergedCount: 0, chainedCount: 0, txUpdated: 0 };
+            }
+
+            for (let i = 0; i < deleteList.length; i += 200) {
+                const chunk = deleteList.slice(i, i + 200);
+                const { error } = await supabase.from('item_mappings').delete().in('item_name', chunk);
+                if (error) throw error;
+            }
+
+            for (let i = 0; i < upsertList.length; i += 500) {
+                const chunk = upsertList.slice(i, i + 500);
+                const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
+                if (error) throw error;
+            }
+
+            this.mappingSuggestCache = null;
+            const affectedTxRows = await this.fetchTransactionsForItemNames(Array.from(affectedItemNames), Array.from(affectedRenamedNames));
+            const reapplyRes = await this.reapplyRulesTo(affectedTxRows);
+
+            await this.logAudit('Item Mappings Deduplicated', `${mergedCount + chainedCount} rule(s) cleaned`, {
+                duplicates_merged: mergedCount,
+                chained_folded: chainedCount,
+                transactions_updated: reapplyRes.updated
+            });
+
+            if (!silent) {
+                Toast.show(
+                    `Cleaned ${mergedCount + chainedCount} duplicate/chained mapping(s). ${this.reapplySummary(reapplyRes)}`,
+                    'success'
+                );
+                await this.loadMappings();
+            }
+            return { mergedCount, chainedCount, txUpdated: reapplyRes.updated };
+        } catch (err) {
+            if (!silent) Toast.show('Error fixing mapping duplicates: ' + err.message, 'error');
+            else console.warn('Mapping deduplication check skipped:', err.message);
+            return { mergedCount: 0, chainedCount: 0, txUpdated: 0 };
         }
     }
 
@@ -933,14 +1114,35 @@ class App {
     }
 
     // Fetches every transaction affected by a change to the mapping rules for `names`:
-    // rows still carrying the original name, plus rows renamed earlier via `renamedTo`.
+    // rows still carrying the original name, rows renamed earlier via `renamedTo`, or rows whose check_column ends with `-${name}`.
     async fetchTransactionsForItemNames(names, renamedTo = []) {
-        const wanted = new Set(names.map(n => String(n).trim()).filter(Boolean));
-        if (wanted.size === 0) return [];
-        const searchNames = [...new Set([...wanted, ...renamedTo.map(n => String(n).trim()).filter(Boolean)])];
-        const rows = await fetchByIn('transactions', '*', 'item_name', searchNames, 'id', 50);
-        return rows.filter(t =>
-            wanted.has(String(originalItemName(t) || '').trim()) || wanted.has(String(t.item_name || '').trim())
+        const wantedNorm = new Set(names.map(n => normalizeItemName(n).toLowerCase()).filter(Boolean));
+        if (wantedNorm.size === 0) return [];
+        const rawTargets = [...new Set([...names, ...renamedTo].map(n => String(n || '').trim()).filter(Boolean))];
+        const normTargets = [...new Set(rawTargets.map(n => normalizeItemName(n)).filter(Boolean))];
+        const searchNames = [...new Set([...rawTargets, ...normTargets])];
+
+        const byItemName = await fetchByIn('transactions', '*', 'item_name', searchNames, 'id', 50);
+
+        // Also fetch by check_column suffix for single/small batches so previously renamed items are never missed
+        let byCheckCol = [];
+        if (normTargets.length <= 15) {
+            const checkTasks = normTargets.map(name => async () => {
+                const safe = name.replace(/[%_]/g, '\\$&');
+                return await fetchAll('transactions', '*', q => q.ilike('check_column', `%-${safe}`), 'id');
+            });
+            byCheckCol = (await runConcurrent(checkTasks, 4)).flat();
+        }
+
+        const dedup = new Map();
+        for (const r of [...byItemName, ...byCheckCol]) {
+            if (r && r.id != null) dedup.set(r.id, r);
+        }
+
+        const allNormWanted = new Set([...wantedNorm, ...renamedTo.map(n => normalizeItemName(n).toLowerCase()).filter(Boolean)]);
+        return Array.from(dedup.values()).filter(t =>
+            allNormWanted.has(normalizeItemName(originalItemName(t)).toLowerCase()) ||
+            allNormWanted.has(normalizeItemName(t.item_name).toLowerCase())
         );
     }
 
@@ -986,13 +1188,57 @@ class App {
     }
 
     resetMappingModal(title = 'Add Mapping') {
+        this.editingMappingOriginalName = null;
         ['map-original', 'map-adjusted', 'map-category', 'map-second-category'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = '';
         });
         const suggest = document.getElementById('mapping-suggestion');
         if (suggest) suggest.style.display = 'none';
+        const dupWarn = document.getElementById('mapping-duplicate-warning');
+        if (dupWarn) dupWarn.style.display = 'none';
         document.getElementById('modal-mapping-title').innerText = title;
+    }
+
+    openMappingModalForEdit(mapping, carryOver = null) {
+        if (!mapping) return;
+        this.resetMappingModal('Edit Mapping');
+        this.editingMappingOriginalName = mapping.item_name;
+        document.getElementById('map-original').value = mapping.item_name || '';
+        document.getElementById('map-adjusted').value = (carryOver && carryOver.adjusted_item_name != null) ? carryOver.adjusted_item_name : (mapping.adjusted_item_name || '');
+        document.getElementById('map-category').value = (carryOver && carryOver.mapping) ? carryOver.mapping : (mapping.mapping || '');
+        document.getElementById('map-second-category').value = (carryOver && carryOver.second_mapping) ? carryOver.second_mapping : (mapping.second_mapping || '');
+        document.getElementById('modal-mapping').classList.remove('hidden');
+    }
+
+    /**
+     * Checks if `inputName` conflicts with an existing mapping's item_name or adjusted_item_name.
+     * @returns {{ type: 'direct' | 'adjusted', rule: object } | null}
+     */
+    findConflictingMapping(inputName, excludeOriginalName = null) {
+        const normInput = normalizeItemName(inputName).toLowerCase();
+        if (!normInput) return null;
+        const normExclude = excludeOriginalName ? normalizeItemName(excludeOriginalName).toLowerCase() : null;
+        const list = this.allMappingsData || this.mappingSuggestCache || [];
+
+        for (const m of list) {
+            if (!m || !m.item_name) continue;
+            const normKey = normalizeItemName(m.item_name).toLowerCase();
+            if (normExclude && normKey === normExclude) continue;
+            if (normKey === normInput) {
+                return { type: 'direct', rule: m };
+            }
+        }
+        for (const m of list) {
+            if (!m || !m.adjusted_item_name) continue;
+            const normKey = normalizeItemName(m.item_name).toLowerCase();
+            if (normExclude && normKey === normExclude) continue;
+            const normAdj = normalizeItemName(m.adjusted_item_name).toLowerCase();
+            if (normAdj === normInput) {
+                return { type: 'adjusted', rule: m };
+            }
+        }
+        return null;
     }
 
     resetFixModal(title = 'Add Fix') {
@@ -1039,41 +1285,80 @@ class App {
             document.getElementById('modal-mapping').classList.remove('hidden');
         });
 
-        // Smart Mapping Auto-Suggest (mappings are loaded once per modal opening)
+        // Smart Mapping Auto-Suggest & Live Duplicate Detection
         let suggestTimeout;
         document.getElementById('map-original').addEventListener('input', (e) => {
             clearTimeout(suggestTimeout);
             suggestTimeout = setTimeout(async () => {
-                const query = e.target.value.trim();
+                const query = normalizeItemName(e.target.value);
                 const suggestDiv = document.getElementById('mapping-suggestion');
+                const dupWarn = document.getElementById('mapping-duplicate-warning');
+
+                try {
+                    if (!this.allMappingsData) {
+                        this.allMappingsData = await fetchAll('item_mappings', '*', null, 'item_name');
+                    }
+                    if (!this.mappingSuggestCache) {
+                        this.mappingSuggestCache = this.allMappingsData.filter(m => m.mapping);
+                    }
+                } catch (err) {
+                    if (suggestDiv) suggestDiv.style.display = 'none';
+                    if (dupWarn) dupWarn.style.display = 'none';
+                    return;
+                }
+
+                // 1. Live duplicate / adjusted-item check
+                if (dupWarn) {
+                    const conflict = this.findConflictingMapping(query, this.editingMappingOriginalName);
+                    if (conflict) {
+                        const r = conflict.rule;
+                        if (conflict.type === 'direct') {
+                            dupWarn.innerText = `⚠️ "${r.item_name}" already exists in Item Mappings. Click here to edit the original mapping instead.`;
+                        } else {
+                            dupWarn.innerText = `⚠️ "${query}" is already the Adjusted Item Name for original item "${r.item_name}". Click here to edit "${r.item_name}" instead.`;
+                        }
+                        dupWarn.style.display = 'block';
+                        dupWarn.onclick = () => {
+                            const curAdj = normalizeItemName(document.getElementById('map-adjusted').value);
+                            const curCat = normalizeItemName(document.getElementById('map-category').value);
+                            const curSec = normalizeItemName(document.getElementById('map-second-category').value);
+                            this.openMappingModalForEdit(r, {
+                                adjusted_item_name: curAdj || r.adjusted_item_name || '',
+                                mapping: curCat || r.mapping || '',
+                                second_mapping: curSec || r.second_mapping || ''
+                            });
+                            Toast.show(`Switched to editing original mapping "${r.item_name}"`, 'info');
+                        };
+                    } else {
+                        dupWarn.style.display = 'none';
+                    }
+                }
+
+                // 2. Smart Fuzzy Suggestion
                 if (!suggestDiv) return;
                 if (query.length < 3 || typeof Fuse === 'undefined') {
                     suggestDiv.style.display = 'none';
                     return;
                 }
-                try {
-                    if (!this.mappingSuggestCache) {
-                        this.mappingSuggestCache = await fetchAll('item_mappings', 'item_name, mapping', q => q.not('mapping', 'is', null), 'item_name');
-                    }
-                } catch (err) {
-                    suggestDiv.style.display = 'none';
-                    return;
-                }
-                const fuse = new Fuse(this.mappingSuggestCache, { keys: ['item_name'], threshold: 0.3 });
-                const results = fuse.search(query).filter(r => r.item.item_name !== query);
+                const fuse = new Fuse(this.mappingSuggestCache || [], { keys: ['item_name'], threshold: 0.3 });
+                const results = fuse.search(query).filter(r => normalizeItemName(r.item.item_name).toLowerCase() !== query.toLowerCase());
                 if (results.length > 0) {
                     const topMatch = results[0].item;
-                    suggestDiv.innerText = `💡 Smart Suggestion: Click to map to "${topMatch.mapping}" (similar to ${topMatch.item_name})`;
+                    const secLabel = topMatch.second_mapping ? ` / "${topMatch.second_mapping}"` : '';
+                    suggestDiv.innerText = `💡 Smart Suggestion: Click to map to "${topMatch.mapping}"${secLabel} (similar to ${topMatch.item_name})`;
                     suggestDiv.style.display = 'block';
                     suggestDiv.onclick = () => {
-                        document.getElementById('map-category').value = topMatch.mapping;
+                        document.getElementById('map-category').value = topMatch.mapping || '';
+                        if (topMatch.second_mapping && !document.getElementById('map-second-category').value.trim()) {
+                            document.getElementById('map-second-category').value = topMatch.second_mapping;
+                        }
                         suggestDiv.style.display = 'none';
                         Toast.show('Applied Smart Suggestion!', 'success');
                     };
                 } else {
                     suggestDiv.style.display = 'none';
                 }
-            }, 300);
+            }, 250);
         });
 
         // Open Fix Modal
@@ -1082,19 +1367,72 @@ class App {
             document.getElementById('modal-fix').classList.remove('hidden');
         });
 
-        // Save Mapping
+        // Save Mapping (with duplicate & chained-name prevention)
         const btnSaveMapping = document.getElementById('btn-save-mapping');
         btnSaveMapping.addEventListener('click', async () => {
-            const original = document.getElementById('map-original').value.trim();
-            const adjusted = document.getElementById('map-adjusted').value.trim();
-            const category = document.getElementById('map-category').value.trim();
-            const secondCategory = document.getElementById('map-second-category').value.trim();
+            const original = normalizeItemName(document.getElementById('map-original').value);
+            let adjusted = normalizeItemName(document.getElementById('map-adjusted').value);
+            const category = normalizeItemName(document.getElementById('map-category').value);
+            const secondCategory = normalizeItemName(document.getElementById('map-second-category').value);
 
             if (!original) return Toast.show('Original Item Name is required', 'warning');
 
+            // Prevent redundant self-rename
+            if (adjusted && adjusted.toLowerCase() === original.toLowerCase()) {
+                adjusted = '';
+            }
+
             btnSaveMapping.disabled = true;
             try {
-                const previouslyRenamedTo = await this.getCurrentAdjustedNames([original]);
+                if (!this.allMappingsData) {
+                    this.allMappingsData = await fetchAll('item_mappings', '*', null, 'item_name');
+                }
+
+                // Check if original item name conflicts with an existing item_name or adjusted_item_name
+                const conflict = this.findConflictingMapping(original, this.editingMappingOriginalName);
+                if (conflict) {
+                    const r = conflict.rule;
+                    const msg = conflict.type === 'direct'
+                        ? `A mapping for "${r.item_name}" already exists. Duplicate item names are not allowed.\n\nWould you like to edit the original mapping "${r.item_name}" instead?`
+                        : `"${original}" is already the Adjusted Item Name for original item "${r.item_name}".\n\nTo prevent duplicate rules, would you like to edit the original mapping "${r.item_name}" instead?`;
+
+                    const switchToOriginal = await window.customConfirm(msg, 'Edit Original Mapping', 'Cancel');
+                    if (switchToOriginal) {
+                        this.openMappingModalForEdit(r, {
+                            adjusted_item_name: adjusted || r.adjusted_item_name || '',
+                            mapping: category || r.mapping || '',
+                            second_mapping: secondCategory || r.second_mapping || ''
+                        });
+                        Toast.show(`Loaded original mapping "${r.item_name}". Click Save Mapping to confirm your changes.`, 'info');
+                    }
+                    return;
+                }
+
+                // Also check if the user entered an Adjusted Item Name that is itself another rule's Original Item Name
+                if (adjusted) {
+                    const adjConflict = (this.allMappingsData || []).find(m =>
+                        m.item_name !== (this.editingMappingOriginalName || original) &&
+                        normalizeItemName(m.item_name).toLowerCase() === adjusted.toLowerCase()
+                    );
+                    if (adjConflict && (adjConflict.mapping !== (category || null) || adjConflict.second_mapping !== (secondCategory || null))) {
+                        const ok = await window.customConfirm(
+                            `Note: Adjusted Item Name "${adjusted}" also exists as an Original Item Name with category "${adjConflict.mapping || 'None'}". Continue saving?`,
+                            'Save Anyway', 'Cancel'
+                        );
+                        if (!ok) return;
+                    }
+                }
+
+                const oldEditingKey = this.editingMappingOriginalName;
+                const isRenamingKey = oldEditingKey && oldEditingKey !== original;
+                const lookupKeys = isRenamingKey ? [oldEditingKey, original] : [original];
+                const previouslyRenamedTo = await this.getCurrentAdjustedNames(lookupKeys);
+
+                if (isRenamingKey) {
+                    const { error: delErr } = await supabase.from('item_mappings').delete().eq('item_name', oldEditingKey);
+                    if (delErr) throw delErr;
+                }
+
                 const { error } = await supabase.from('item_mappings').upsert([{
                     item_name: original,
                     adjusted_item_name: adjusted || null,
@@ -1103,10 +1441,14 @@ class App {
                 }], { onConflict: 'item_name', ignoreDuplicates: false });
                 if (error) throw error;
 
-                await this.logAudit('Single Mapping Added', original, { original, adjusted, category, secondCategory });
+                await this.logAudit(
+                    oldEditingKey ? 'Mapping Updated' : 'Single Mapping Added',
+                    original,
+                    { previous_item_name: oldEditingKey || undefined, original, adjusted, category, secondCategory }
+                );
 
                 // Re-apply rules to every affected transaction (fetch everything first, then update)
-                const rows = await this.fetchTransactionsForItemNames([original], [...previouslyRenamedTo, adjusted]);
+                const rows = await this.fetchTransactionsForItemNames(lookupKeys, [...previouslyRenamedTo, adjusted]);
                 const result = await this.reapplyRulesTo(rows);
 
                 this.mappingSuggestCache = null; // rules changed – reload suggestions next time
@@ -1240,33 +1582,99 @@ class App {
                 Toast.show('Uploading... please wait.', 'info');
 
                 if (type === 'mappings') {
-                    const byName = new Map();
+                    const existingAll = await fetchAll('item_mappings', '*', null, 'item_name');
+                    const existingByNorm = new Map();
+                    const existingByAdjNorm = new Map();
+                    for (const ex of existingAll) {
+                        const nk = normalizeItemName(ex.item_name).toLowerCase();
+                        if (nk) existingByNorm.set(nk, ex);
+                        if (ex.adjusted_item_name) {
+                            const ak = normalizeItemName(ex.adjusted_item_name).toLowerCase();
+                            if (ak) existingByAdjNorm.set(ak, ex);
+                        }
+                    }
+
+                    const byNormKey = new Map();
+                    let redirectedFromAdjusted = 0;
                     data.forEach(row => {
-                        const item_name = clean(getVal(row, 'Item Name'));
+                        let item_name = normalizeItemName(getVal(row, 'Item Name'));
                         if (!item_name) return;
-                        byName.set(item_name, {
+                        let adjusted_item_name = normalizeItemName(getVal(row, 'Adjusted Item Name')) || null;
+                        const mapping = normalizeItemName(getVal(row, 'Mapping')) || null;
+                        const second_mapping = normalizeItemName(getVal(row, '2nd Mapping')) || null;
+
+                        let nk = item_name.toLowerCase();
+                        // If the uploaded Item Name is actually an existing rule's Adjusted Item Name, target the original rule!
+                        if (!existingByNorm.has(nk) && existingByAdjNorm.has(nk)) {
+                            const origRule = existingByAdjNorm.get(nk);
+                            adjusted_item_name = adjusted_item_name || item_name;
+                            item_name = origRule.item_name;
+                            nk = normalizeItemName(item_name).toLowerCase();
+                            redirectedFromAdjusted++;
+                        } else if (existingByNorm.has(nk)) {
+                            item_name = existingByNorm.get(nk).item_name;
+                        }
+
+                        if (adjusted_item_name && adjusted_item_name.toLowerCase() === nk) {
+                            adjusted_item_name = null;
+                        }
+
+                        const prev = byNormKey.get(nk);
+                        byNormKey.set(nk, {
                             item_name,
-                            adjusted_item_name: clean(getVal(row, 'Adjusted Item Name')),
-                            mapping: clean(getVal(row, 'Mapping')),
-                            second_mapping: clean(getVal(row, '2nd Mapping'))
+                            adjusted_item_name: adjusted_item_name || (prev ? prev.adjusted_item_name : null),
+                            mapping: mapping || (prev ? prev.mapping : null),
+                            second_mapping: second_mapping || (prev ? prev.second_mapping : null)
                         });
                     });
-                    const mappings = Array.from(byName.values());
-                    processed = mappings.length;
-                    const previouslyRenamedTo = await this.getCurrentAdjustedNames(mappings.map(m => m.item_name));
 
-                    for (let i = 0; i < mappings.length; i += chunkSize) {
-                        const chunk = mappings.slice(i, i + chunkSize);
+                    const uploadedMappings = Array.from(byNormKey.values());
+                    const matchingExistingCount = uploadedMappings.filter(m => existingByNorm.has(normalizeItemName(m.item_name).toLowerCase())).length;
+
+                    let mappingsToProcess = uploadedMappings;
+                    if (matchingExistingCount > 0) {
+                        const extraNote = redirectedFromAdjusted > 0 ? ` (${redirectedFromAdjusted} row(s) matched an Adjusted Item Name and were linked to their Original Item Name)` : '';
+                        const overwrite = await window.customConfirm(
+                            `Found ${matchingExistingCount} item mapping(s) that already exist in the database${extraNote}. Do you want to update them with the new values?`,
+                            'Update Existing', 'Skip Existing'
+                        );
+                        if (!overwrite) {
+                            mappingsToProcess = uploadedMappings.filter(m => !existingByNorm.has(normalizeItemName(m.item_name).toLowerCase()));
+                        } else {
+                            // Merge blank cells with existing values so partial bulk uploads don't wipe existing fields
+                            mappingsToProcess = uploadedMappings.map(m => {
+                                const old = existingByNorm.get(normalizeItemName(m.item_name).toLowerCase());
+                                if (!old) return m;
+                                return {
+                                    item_name: old.item_name,
+                                    adjusted_item_name: m.adjusted_item_name || old.adjusted_item_name || null,
+                                    mapping: m.mapping || old.mapping || null,
+                                    second_mapping: m.second_mapping || old.second_mapping || null
+                                };
+                            });
+                        }
+                    }
+
+                    if (mappingsToProcess.length === 0) {
+                        Toast.show('No new item mappings to process.', 'info');
+                        return;
+                    }
+
+                    processed = mappingsToProcess.length;
+                    const previouslyRenamedTo = await this.getCurrentAdjustedNames(mappingsToProcess.map(m => m.item_name));
+
+                    for (let i = 0; i < mappingsToProcess.length; i += chunkSize) {
+                        const chunk = mappingsToProcess.slice(i, i + chunkSize);
                         const { error } = await supabase.from('item_mappings').upsert(chunk, { onConflict: 'item_name', ignoreDuplicates: false });
-                        if (error) throw new Error(`Only ${inserted} of ${mappings.length} mappings saved. ${error.message}`);
+                        if (error) throw new Error(`Only ${inserted} of ${mappingsToProcess.length} mappings saved. ${error.message}`);
                         inserted += chunk.length;
                     }
 
                     // Fetch ALL affected transactions first, then update (no paging while modifying)
-                    const rows = await this.fetchTransactionsForItemNames(mappings.map(m => m.item_name), [...previouslyRenamedTo, ...mappings.map(m => m.adjusted_item_name)]);
+                    const rows = await this.fetchTransactionsForItemNames(mappingsToProcess.map(m => m.item_name), [...previouslyRenamedTo, ...mappingsToProcess.map(m => m.adjusted_item_name)]);
                     const result = await this.reapplyRulesTo(rows);
 
-                    await this.logAudit('Bulk Mappings Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: result.updated, locked_skipped: result.lockedSkipped });
+                    await this.logAudit('Bulk Mappings Uploaded', `Batch of ${inserted} items`, { count: inserted, redirected_from_adjusted: redirectedFromAdjusted, transactions_updated: result.updated, locked_skipped: result.lockedSkipped });
                     this.mappingSuggestCache = null;
                     Toast.show(`Uploaded ${inserted} item mappings. ${this.reapplySummary(result)}`, 'success');
                     this.loadMappings();
@@ -1378,6 +1786,63 @@ class App {
                 this.loadFixes();
             }, 500);
         });
+
+        // Item Mappings Search, Filters, Deduplicate & Unmapped Panel
+        let mappingsSearchTimeout;
+        document.getElementById('mappings-search')?.addEventListener('input', () => {
+            clearTimeout(mappingsSearchTimeout);
+            mappingsSearchTimeout = setTimeout(() => {
+                this.mappingsPage = 1;
+                this.renderMappingsPage();
+            }, 250);
+        });
+
+        ['mappings-filter-category', 'mappings-filter-second-category', 'mappings-filter-type'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', () => {
+                this.mappingsPage = 1;
+                this.renderMappingsPage();
+            });
+        });
+
+        document.getElementById('btn-clear-mappings-filters')?.addEventListener('click', () => {
+            const s = document.getElementById('mappings-search');
+            const c1 = document.getElementById('mappings-filter-category');
+            const c2 = document.getElementById('mappings-filter-second-category');
+            const t = document.getElementById('mappings-filter-type');
+            if (s) s.value = '';
+            if (c1) c1.value = '';
+            if (c2) c2.value = '';
+            if (t) t.value = '';
+            this.mappingsPage = 1;
+            this.renderMappingsPage();
+        });
+
+        document.getElementById('btn-dedup-mappings')?.addEventListener('click', async () => {
+            const btn = document.getElementById('btn-dedup-mappings');
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Cleaning...';
+            btn.disabled = true;
+            if (window.lucide) lucide.createIcons({ root: btn });
+            try {
+                await this.deduplicateItemMappings({ silent: false });
+            } finally {
+                btn.innerHTML = origHtml;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons({ root: btn });
+            }
+        });
+
+        document.getElementById('btn-toggle-unmapped-panel')?.addEventListener('click', () => {
+            const panel = document.getElementById('unmapped-items-panel');
+            if (!panel) return;
+            const willOpen = panel.classList.contains('hidden');
+            panel.classList.toggle('hidden');
+            if (willOpen) this.loadUnmappedItemsSummary();
+        });
+
+        document.getElementById('btn-close-unmapped-panel')?.addEventListener('click', () => {
+            document.getElementById('unmapped-items-panel')?.classList.add('hidden');
+        });
     }
 
     initReapply() {
@@ -1396,6 +1861,7 @@ class App {
 
             try {
                 await this.stripDatabaseTransactionTimes();
+                await this.deduplicateItemMappings({ silent: true });
                 const [mappings, fixes, links] = await Promise.all([
                     fetchAll('item_mappings', '*', null, 'item_name'),
                     fetchAll('manual_fixes', '*', null, 'reference_number'),
@@ -2086,14 +2552,134 @@ class App {
 
     async loadMappings() {
         const tbody = document.getElementById('mappings-body');
-        tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
+        if (tbody) {
+            tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
+        }
         try {
+            await this.deduplicateItemMappings({ silent: true });
             const allData = await fetchAll('item_mappings', '*', null, 'item_name');
             this.allMappingsData = allData;
             this.mappingsPage = 1;
+            this.updateMappingsStatsAndDropdowns(allData);
             this.renderMappingsPage();
+            this.loadUnmappedItemsSummary();
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
+            }
+        }
+    }
+
+    updateMappingsStatsAndDropdowns(allData = this.allMappingsData || []) {
+        const categories = [...new Set(allData.map(m => m.mapping).filter(Boolean))].sort();
+        const secondCategories = [...new Set(allData.map(m => m.second_mapping).filter(Boolean))].sort();
+        const renamedCount = allData.filter(m => m.adjusted_item_name && normalizeItemName(m.adjusted_item_name).toLowerCase() !== normalizeItemName(m.item_name).toLowerCase()).length;
+
+        const elTotal = document.getElementById('mappings-stat-total');
+        const elRenamed = document.getElementById('mappings-stat-renamed');
+        const elCats = document.getElementById('mappings-stat-categories');
+        const elSecCats = document.getElementById('mappings-stat-second-categories');
+        if (elTotal) elTotal.textContent = allData.length.toLocaleString();
+        if (elRenamed) elRenamed.textContent = renamedCount.toLocaleString();
+        if (elCats) elCats.textContent = categories.length.toLocaleString();
+        if (elSecCats) elSecCats.textContent = secondCategories.length.toLocaleString();
+
+        const catSelect = document.getElementById('mappings-filter-category');
+        if (catSelect) {
+            const cur = catSelect.value;
+            catSelect.innerHTML = '<option value="">All Categories</option>' +
+                categories.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+            if (categories.includes(cur)) catSelect.value = cur;
+        }
+
+        const secSelect = document.getElementById('mappings-filter-second-category');
+        if (secSelect) {
+            const cur = secSelect.value;
+            secSelect.innerHTML = '<option value="">All 2nd Categories</option>' +
+                secondCategories.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+            if (secondCategories.includes(cur)) secSelect.value = cur;
+        }
+
+        const dl1 = document.getElementById('datalist-mapping-categories');
+        if (dl1) {
+            dl1.innerHTML = categories.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
+        }
+        const dl2 = document.getElementById('datalist-second-mapping-categories');
+        if (dl2) {
+            dl2.innerHTML = secondCategories.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
+        }
+    }
+
+    async loadUnmappedItemsSummary() {
+        const statEl = document.getElementById('mappings-stat-unmapped');
+        const tbody = document.getElementById('unmapped-items-body');
+        try {
+            const unmappedRows = await fetchAll(
+                'transactions',
+                'reference_number, item_name, check_column, item_price, mapping',
+                q => q.or('mapping.is.null,mapping.eq.'),
+                'id'
+            );
+
+            const byOrigName = new Map();
+            for (const tx of unmappedRows) {
+                if (tx.mapping && String(tx.mapping).trim() !== '') continue;
+                const orig = normalizeItemName(originalItemName(tx)) || normalizeItemName(tx.item_name);
+                if (!orig) continue;
+                const key = orig.toLowerCase();
+                const prev = byOrigName.get(key) || {
+                    originalName: orig,
+                    displayName: normalizeItemName(tx.item_name) || orig,
+                    count: 0,
+                    totalAmount: 0
+                };
+                prev.count += 1;
+                prev.totalAmount += parseFloat(tx.item_price || 0) || 0;
+                byOrigName.set(key, prev);
+            }
+
+            const items = Array.from(byOrigName.values()).sort((a, b) => b.count - a.count || b.totalAmount - a.totalAmount);
+            if (statEl) statEl.textContent = items.length.toLocaleString();
+
+            if (!tbody) return;
+            if (items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem; color: var(--success);">All transaction items in the database have a Mapping Category!</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = items.map(item => `
+                <tr>
+                    <td><strong>${escapeHTML(item.originalName)}</strong></td>
+                    <td>${escapeHTML(item.displayName)}</td>
+                    <td>${item.count.toLocaleString()}</td>
+                    <td>EGP ${formatMoney(item.totalAmount)}</td>
+                    <td>
+                        <button type="button" class="btn btn-primary btn-sm" data-quick-map="${escapeHTML(item.originalName)}">
+                            <i data-lucide="plus" style="width: 12px; height: 12px;"></i> Map Item
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+
+            tbody.querySelectorAll('[data-quick-map]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const targetName = btn.getAttribute('data-quick-map');
+                    const conflict = this.findConflictingMapping(targetName);
+                    if (conflict) {
+                        this.openMappingModalForEdit(conflict.rule);
+                    } else {
+                        this.resetMappingModal('Add Mapping');
+                        document.getElementById('map-original').value = targetName;
+                        document.getElementById('modal-mapping').classList.remove('hidden');
+                        document.getElementById('map-original').dispatchEvent(new Event('input'));
+                        setTimeout(() => document.getElementById('map-category')?.focus(), 50);
+                    }
+                });
+            });
+            if (window.lucide) lucide.createIcons({ root: tbody });
+        } catch (err) {
+            console.warn('Could not load unmapped items summary:', err.message);
+            if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
         }
     }
 
@@ -2110,18 +2696,42 @@ class App {
             return;
         }
 
-        const totalPages = Math.max(1, Math.ceil(allData.length / pageSize));
+        const searchQ = (document.getElementById('mappings-search')?.value || '').trim().toLowerCase();
+        const filterCat = document.getElementById('mappings-filter-category')?.value || '';
+        const filterSec = document.getElementById('mappings-filter-second-category')?.value || '';
+        const filterType = document.getElementById('mappings-filter-type')?.value || '';
+
+        const filteredData = allData.filter(m => {
+            if (filterCat && (m.mapping || '') !== filterCat) return false;
+            if (filterSec && (m.second_mapping || '') !== filterSec) return false;
+            if (filterType === 'renamed' && (!m.adjusted_item_name || normalizeItemName(m.adjusted_item_name).toLowerCase() === normalizeItemName(m.item_name).toLowerCase())) return false;
+            if (filterType === 'incomplete' && m.mapping && String(m.mapping).trim() !== '') return false;
+            if (searchQ) {
+                const hay = `${m.item_name || ''} ${m.adjusted_item_name || ''} ${m.mapping || ''} ${m.second_mapping || ''}`.toLowerCase();
+                if (!hay.includes(searchQ)) return false;
+            }
+            return true;
+        });
+
+        if (filteredData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i data-lucide="search" style="width:40px;height:40px;opacity:0.5;"></i><h3>No matching rules</h3><p>Try adjusting your search or category filters.</p></div></td></tr>';
+            document.getElementById('mappings-pagination')?.remove();
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize));
         if (!this.mappingsPage || this.mappingsPage > totalPages) this.mappingsPage = 1;
         const startIdx = (this.mappingsPage - 1) * pageSize;
-        const pageData = allData.slice(startIdx, startIdx + pageSize);
+        const pageData = filteredData.slice(startIdx, startIdx + pageSize);
 
         tbody.innerHTML = pageData.map(m => `
             <tr>
-                <td>${escapeHTML(m.item_name)}</td>
-                <td>${escapeHTML(m.adjusted_item_name) || '-'}</td>
-                <td>${escapeHTML(m.mapping) || '-'}</td>
+                <td><strong>${escapeHTML(m.item_name)}</strong></td>
+                <td>${m.adjusted_item_name ? `<span style="color: var(--primary);">${escapeHTML(m.adjusted_item_name)}</span>` : '<span style="color: var(--text-muted);">-</span>'}</td>
+                <td>${m.mapping ? `<span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.25);">${escapeHTML(m.mapping)}</span>` : '<span style="color: var(--warning); font-size: 0.8rem;">Unmapped</span>'}</td>
                 <td>${escapeHTML(m.second_mapping) || '-'}</td>
-                <td>
+                <td style="white-space: nowrap;">
                     <button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>
                     <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>
                 </td>
@@ -2134,12 +2744,7 @@ class App {
                 const itemName = btn.getAttribute('data-edit-mapping');
                 const mapping = allData.find(m => m.item_name === itemName);
                 if (mapping) {
-                    document.getElementById('map-original').value = mapping.item_name || '';
-                    document.getElementById('map-adjusted').value = mapping.adjusted_item_name || '';
-                    document.getElementById('map-category').value = mapping.mapping || '';
-                    document.getElementById('map-second-category').value = mapping.second_mapping || '';
-                    document.getElementById('modal-mapping-title').innerText = 'Edit Mapping';
-                    document.getElementById('modal-mapping').classList.remove('hidden');
+                    this.openMappingModalForEdit(mapping);
                 }
             });
         });
@@ -2173,7 +2778,7 @@ class App {
         const container = tbody.closest('.table-container');
         if (container) {
             let pager = document.getElementById('mappings-pagination');
-            if (allData.length <= pageSize) {
+            if (filteredData.length <= pageSize) {
                 if (pager) pager.remove();
             } else {
                 if (!pager) {
@@ -2183,7 +2788,7 @@ class App {
                     container.appendChild(pager);
                 }
                 pager.innerHTML = `
-                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, allData.length)} of ${allData.length} mappings</span>
+                    <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, filteredData.length)} of ${filteredData.length} mappings</span>
                     <div class="pagination-controls">
                         <button class="btn btn-icon" id="btn-mappings-prev" ${this.mappingsPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
                         <span>Page ${this.mappingsPage} of ${totalPages}</span>

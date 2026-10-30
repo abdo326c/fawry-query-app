@@ -55,3 +55,51 @@ BEGIN
   END IF;
 END;
 $$;
+
+
+-- 4. Deduplicate item_mappings (whitespace/case duplicates & chained adjusted_item_name duplicates) and enforce normalized uniqueness
+DO $$
+BEGIN
+  -- Fold chained duplicates (where Rule B.item_name = Rule A.adjusted_item_name) back into Rule A
+  UPDATE public.item_mappings a
+  SET
+    adjusted_item_name = CASE
+      WHEN COALESCE(NULLIF(BTRIM(b.adjusted_item_name), ''), a.adjusted_item_name) = a.item_name THEN NULL
+      ELSE COALESCE(NULLIF(BTRIM(b.adjusted_item_name), ''), a.adjusted_item_name)
+    END,
+    mapping = COALESCE(NULLIF(BTRIM(b.mapping), ''), a.mapping),
+    second_mapping = COALESCE(NULLIF(BTRIM(b.second_mapping), ''), a.second_mapping)
+  FROM public.item_mappings b
+  WHERE a.adjusted_item_name IS NOT NULL
+    AND LOWER(REGEXP_REPLACE(BTRIM(a.adjusted_item_name), '\s+', ' ', 'g')) = LOWER(REGEXP_REPLACE(BTRIM(b.item_name), '\s+', ' ', 'g'))
+    AND LOWER(REGEXP_REPLACE(BTRIM(a.item_name), '\s+', ' ', 'g')) <> LOWER(REGEXP_REPLACE(BTRIM(b.item_name), '\s+', ' ', 'g'));
+
+  DELETE FROM public.item_mappings b
+  USING public.item_mappings a
+  WHERE a.adjusted_item_name IS NOT NULL
+    AND LOWER(REGEXP_REPLACE(BTRIM(a.adjusted_item_name), '\s+', ' ', 'g')) = LOWER(REGEXP_REPLACE(BTRIM(b.item_name), '\s+', ' ', 'g'))
+    AND LOWER(REGEXP_REPLACE(BTRIM(a.item_name), '\s+', ' ', 'g')) <> LOWER(REGEXP_REPLACE(BTRIM(b.item_name), '\s+', ' ', 'g'));
+
+  -- Remove case/whitespace duplicate item_name rows keeping the most complete trimmed row
+  DELETE FROM public.item_mappings m
+  USING (
+    SELECT ctid,
+           ROW_NUMBER() OVER (
+             PARTITION BY LOWER(REGEXP_REPLACE(BTRIM(item_name), '\s+', ' ', 'g'))
+             ORDER BY (mapping IS NOT NULL) DESC, (second_mapping IS NOT NULL) DESC, (adjusted_item_name IS NOT NULL) DESC, (item_name = BTRIM(item_name)) DESC, item_name ASC
+           ) AS rn
+    FROM public.item_mappings
+  ) dup
+  WHERE m.ctid = dup.ctid AND dup.rn > 1;
+
+  -- Trim all remaining item_mappings strings
+  UPDATE public.item_mappings
+  SET
+    item_name = REGEXP_REPLACE(BTRIM(item_name), '\s+', ' ', 'g'),
+    adjusted_item_name = NULLIF(REGEXP_REPLACE(BTRIM(COALESCE(adjusted_item_name, '')), '\s+', ' ', 'g'), ''),
+    mapping = NULLIF(REGEXP_REPLACE(BTRIM(COALESCE(mapping, '')), '\s+', ' ', 'g'), ''),
+    second_mapping = NULLIF(REGEXP_REPLACE(BTRIM(COALESCE(second_mapping, '')), '\s+', ' ', 'g'), '');
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_mappings_norm_unique
+  ON public.item_mappings (LOWER(REGEXP_REPLACE(BTRIM(item_name), '\s+', ' ', 'g')));
