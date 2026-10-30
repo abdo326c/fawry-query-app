@@ -27,7 +27,7 @@
             console.error("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
-    <link rel="stylesheet" href="styles.css?v=2.1.0">
+    <link rel="stylesheet" href="styles.css?v=2.2.0">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@0.294.0"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -405,7 +405,7 @@
             <!-- Import View -->
             
     <!-- Import Modal -->
-    <div id="modal-import" class="modal hidden" style="z-index: 10002;">
+    <div id="modal-import" class="modal hidden" style="z-index: 10010;">
         <div class="modal-content glass-card" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header">
                 <h2>Data Import Processor</h2>
@@ -452,7 +452,7 @@
             <!-- Import History View -->
             
     <!-- History Modal -->
-    <div id="modal-history" class="modal hidden" style="z-index: 10002;">
+    <div id="modal-history" class="modal hidden" style="z-index: 10010;">
         <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header" style="justify-content: space-between; align-items: center; width: 100%; display: flex;">
                 <h2 style="margin:0;">Import History</h2>
@@ -1085,7 +1085,7 @@
     </div>
 
     <!-- Auto-Matcher Confirm Modal -->
-    <div id="modal-automatch-confirm" class="modal hidden">
+    <div id="modal-automatch-confirm" class="modal hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
                 <div style="background: rgba(59, 130, 246, 0.1); color: var(--primary); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
@@ -1104,7 +1104,7 @@
     </div>
     
     <!-- Name Matching Warn Modal -->
-    <div id="modal-name-match-warn" class="modal hidden">
+    <div id="modal-name-match-warn" class="modal hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
                 <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
@@ -1122,7 +1122,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.1.0"></script>
+    <script type="module" src="app.js?v=2.2.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">
         <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
@@ -1207,7 +1207,7 @@
     </div>
 
     <!-- ERP Warning Modal -->
-    <div id="modal-erp-warning" class="modal hidden">
+    <div id="modal-erp-warning" class="modal hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
                 <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
@@ -1241,7 +1241,7 @@
     </div>
 
         <!-- Detect Duplicates Modal -->
-    <div id="modal-detect-duplicates" class="modal hidden">
+    <div id="modal-detect-duplicates" class="modal hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 900px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header">
                 <h2 id="modal-detect-duplicates-title">Duplicate Transactions Found</h2>

@@ -110,7 +110,7 @@ body {
     padding: 1.5rem 1.15rem;
     position: relative;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 10001;
+    z-index: 9999;
 }
 
 .logo-container {
@@ -874,7 +874,7 @@ select option {
     display: flex;
     justify-content: center;
     align-items: center;
-    z-index: 10000;
+    z-index: 10010;
     transition: opacity 0.3s ease, visibility 0.3s ease;
 }
 
@@ -1232,7 +1232,7 @@ select option {
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(2px);
-    z-index: 10000;
+    z-index: 9998;
     opacity: 0;
     transition: opacity 0.3s ease;
 }

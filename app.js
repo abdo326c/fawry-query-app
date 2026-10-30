@@ -1020,10 +1020,17 @@ class App {
             if (e.key !== 'Escape') return;
             const confirmModal = document.getElementById('modal-custom-confirm');
             if (confirmModal && !confirmModal.classList.contains('hidden')) return; // handled by customConfirm
-            document.querySelectorAll('.modal:not(.hidden)').forEach(modal => {
-                if (modal.id === 'modal-import' && this.isImporting) return;
-                modal.classList.add('hidden');
+            const openModals = Array.from(document.querySelectorAll('.modal:not(.hidden)'));
+            if (openModals.length === 0) return;
+            // Close only the topmost open modal (highest z-index, or last in DOM on tie)
+            openModals.sort((a, b) => {
+                const zA = parseInt(window.getComputedStyle(a).zIndex, 10) || 0;
+                const zB = parseInt(window.getComputedStyle(b).zIndex, 10) || 0;
+                return zA - zB;
             });
+            const topModal = openModals[openModals.length - 1];
+            if (topModal.id === 'modal-import' && this.isImporting) return;
+            topModal.classList.add('hidden');
         });
 
         // Open Mapping Modal
