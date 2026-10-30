@@ -8310,6 +8310,7 @@ class App {
 
         document.getElementById('btn-open-global-search')?.addEventListener('click', openSearch);
         document.getElementById('btn-mobile-search')?.addEventListener('click', openSearch);
+        document.getElementById('btn-close-global-search')?.addEventListener('click', closeSearch);
 
         window.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
