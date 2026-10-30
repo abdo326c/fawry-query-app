@@ -932,25 +932,100 @@ class App {
     }
 
     exportDashboardPivotExcel() {
-        if (!this.lastDashboardExportRows || this.lastDashboardExportRows.length === 0) {
+        const table = document.getElementById('dashboard-pivot-table');
+        if (!table) return;
+
+        const tbody = table.querySelector('tbody');
+        const visibleBodyRows = Array.from(tbody ? tbody.querySelectorAll('tr') : []).filter(tr => {
+            if (tr.style.display === 'none') return false;
+            const tds = tr.querySelectorAll('td');
+            if (tds.length <= 1) return false; // Skip "Loading..." or "No data" placeholder row
+            return true;
+        });
+
+        if (visibleBodyRows.length === 0) {
             Toast.show('No pivot data available to export.', 'warning');
             return;
         }
+
         const dateFrom = document.getElementById('dashboard-date-from')?.value || 'Start';
         const dateTo = document.getElementById('dashboard-date-to')?.value || 'End';
         const groupBy = document.getElementById('dashboard-group-by')?.value || 'date';
 
-        if (typeof XLSX !== 'undefined' && XLSX.utils && typeof XLSX.writeFile === 'function') {
-            const ws = XLSX.utils.json_to_sheet(this.lastDashboardExportRows);
-            const keys = Object.keys(this.lastDashboardExportRows[0] || {});
-            ws['!cols'] = keys.map((k, idx) => ({ wch: idx === 0 ? 28 : 18 }));
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'Pivot Summary');
-            XLSX.writeFile(wb, `Fawry_Pivot_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
-            Toast.show('Pivot exported to Excel!', 'success');
-        } else {
+        if (typeof XLSX === 'undefined' || !XLSX.utils || typeof XLSX.writeFile !== 'function') {
             Toast.show('Excel library not loaded.', 'error');
+            return;
         }
+
+        // Extract column headers from the 2nd thead row (e.g. Date, NUADCB136, NUADIB64, Grand Total, % Share)
+        const headerRows = table.querySelectorAll('thead tr');
+        const titleText = (headerRows[0]?.textContent || 'Total Fawry Collection').trim();
+        const colHeaderCells = Array.from((headerRows[1] || headerRows[0])?.querySelectorAll('th') || []);
+        const colHeaders = colHeaderCells.map(th => th.textContent.trim());
+        const numCols = colHeaders.length || 4;
+
+        // Build AOAs (Array of Arrays) mimicking the exact visible Pivot Table
+        const aoa = [];
+        // Row 0: Title banner row ("Total Fawry Collection")
+        const titleRow = new Array(numCols).fill('');
+        titleRow[0] = titleText;
+        aoa.push(titleRow);
+
+        // Row 1: Column Headers
+        aoa.push(colHeaders);
+
+        const parseCellVal = (td, colIdx) => {
+            const raw = (td.textContent || '').trim();
+            if (colIdx === 0) {
+                return raw;
+            }
+            if (td.classList.contains('pivot-share-col') || raw.endsWith('%')) {
+                return raw;
+            }
+            const cleaned = raw.replace(/,/g, '');
+            const num = Number(cleaned);
+            return (!isNaN(num) && cleaned !== '') ? num : raw;
+        };
+
+        // Visible Body Rows (if months are collapsed, only month rows are visible; if expanded, month + its visible day rows)
+        visibleBodyRows.forEach(tr => {
+            const tds = Array.from(tr.querySelectorAll('td'));
+            const rowVals = tds.map((td, idx) => parseCellVal(td, idx));
+            aoa.push(rowVals);
+        });
+
+        // Footer Row ("Grand Total")
+        const tfootRows = Array.from(table.querySelectorAll('tfoot tr')).filter(tr => tr.style.display !== 'none');
+        tfootRows.forEach(tr => {
+            const tds = Array.from(tr.querySelectorAll('td'));
+            if (tds.length > 1) {
+                aoa.push(tds.map((td, idx) => parseCellVal(td, idx)));
+            }
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+        // Merge top title row across all columns
+        if (numCols > 1) {
+            ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } }];
+        }
+
+        // Format numeric currency cells as #,##0.00 so Excel displays exact pivot formatting
+        for (let r = 2; r < aoa.length; r++) {
+            for (let c = 1; c < numCols; c++) {
+                const cellRef = XLSX.utils.encode_cell({ r, c });
+                if (ws[cellRef] && typeof ws[cellRef].v === 'number') {
+                    ws[cellRef].z = '#,##0.00';
+                }
+            }
+        }
+
+        ws['!cols'] = colHeaders.map((_, idx) => ({ wch: idx === 0 ? 26 : 18 }));
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Total Fawry Collection');
+        XLSX.writeFile(wb, `Fawry_Pivot_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
+        Toast.show('Pivot exported to Excel!', 'success');
     }
 
     async loadDashboard() {
