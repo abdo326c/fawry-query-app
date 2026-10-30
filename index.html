@@ -168,40 +168,99 @@
             <!-- Dashboard View -->
             <section id="view-dashboard" class="view">
                 <div class="header">
-                    <h1>Pivot Dashboard</h1>
-                    <button class="btn btn-primary" id="btn-copy-pivot">
-                        <i data-lucide="copy"></i> Copy for Email
-                    </button>
+                    <div>
+                        <h1>Pivot Dashboard</h1>
+                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;" id="dashboard-period-subtitle">Collection analytics, bank split, settlement &amp; ERP posting overview</p>
+                    </div>
+                    <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                        <button class="btn btn-outline hidden" id="btn-dashboard-toggle-months" title="Expand or Collapse all monthly rows">
+                            <i data-lucide="chevrons-down-up"></i> <span id="dashboard-toggle-months-label">Expand All Months</span>
+                        </button>
+                        <button class="btn btn-outline" id="btn-refresh-dashboard" title="Refresh Dashboard">
+                            <i data-lucide="refresh-cw"></i> Refresh
+                        </button>
+                        <button class="btn btn-outline" id="btn-export-pivot" title="Export current Pivot Table to Excel">
+                            <i data-lucide="download"></i> Export Excel
+                        </button>
+                        <button class="btn btn-primary" id="btn-copy-pivot" title="Copy formatted table for Outlook / Gmail">
+                            <i data-lucide="copy"></i> Copy for Email
+                        </button>
+                    </div>
                 </div>
-                <!-- Summary Stat Cards -->
-                <div class="stat-cards-row" id="dashboard-stats-row">
-                    <div class="stat-card">
+
+                <!-- Summary Stat Cards (6 Operational Cards with Drill-Down) -->
+                <div class="stat-cards-row" id="dashboard-stats-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 0.85rem; margin-bottom: 1rem;">
+                    <div class="stat-card" data-dash-drill="all_tx" style="cursor: pointer;" title="Click to view transactions in Orders Transactions">
                         <div class="stat-card-header">
                             <span class="stat-label">Total Collections</span>
                             <i data-lucide="trending-up" class="stat-icon" style="color: var(--primary);"></i>
                         </div>
-                        <div class="stat-value" id="stat-total-collections">EGP 0.00</div>
+                        <div class="stat-value" id="stat-total-collections" style="font-size: 1.3rem;">EGP 0.00</div>
+                        <div id="stat-avg-tx" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Avg: EGP 0.00 / tx</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card" data-dash-drill="all_tx" style="cursor: pointer;" title="Click to view all matching transactions">
                         <div class="stat-card-header">
                             <span class="stat-label">Transactions</span>
                             <i data-lucide="layers" class="stat-icon" style="color: var(--primary);"></i>
                         </div>
-                        <div class="stat-value" id="stat-total-transactions">0</div>
+                        <div class="stat-value" id="stat-total-transactions" style="font-size: 1.3rem;">0</div>
+                        <div id="stat-active-days" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 active days</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card" data-dash-drill="valid_tx" style="cursor: pointer;" title="Click to view transactions with Valid Student IDs">
                         <div class="stat-card-header">
                             <span class="stat-label">Valid IDs</span>
                             <i data-lucide="check-circle" class="stat-icon" style="color: var(--success);"></i>
                         </div>
-                        <div class="stat-value" style="color: var(--success);" id="stat-valid-pct">0%</div>
+                        <div class="stat-value" style="color: var(--success); font-size: 1.3rem;" id="stat-valid-pct">0%</div>
+                        <div id="stat-valid-count" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 valid transactions</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card" data-dash-drill="invalid_tx" style="cursor: pointer;" title="Click to resolve Invalid / Missing Student IDs in Auto Matcher">
                         <div class="stat-card-header">
-                            <span class="stat-label">Errors</span>
+                            <span class="stat-label">Invalid / Missing IDs</span>
                             <i data-lucide="alert-triangle" class="stat-icon" style="color: var(--danger);"></i>
                         </div>
-                        <div class="stat-value" style="color: var(--danger);" id="stat-errors">0</div>
+                        <div class="stat-value" style="color: var(--danger); font-size: 1.3rem;" id="stat-errors">0</div>
+                        <div id="stat-unmapped-count" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 unmapped items</div>
+                    </div>
+                    <div class="stat-card" data-dash-drill="unsettled_tx" style="cursor: pointer;" title="Click to view unsettled transactions in Orders Transactions">
+                        <div class="stat-card-header">
+                            <span class="stat-label">Fawry Settled</span>
+                            <i data-lucide="shield-check" class="stat-icon" style="color: #38bdf8;"></i>
+                        </div>
+                        <div class="stat-value" style="color: #38bdf8; font-size: 1.3rem;" id="stat-settled-pct">0%</div>
+                        <div id="stat-settled-sub" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 settled • 0 unsettled</div>
+                    </div>
+                    <div class="stat-card" data-dash-drill="erp_export" style="cursor: pointer;" title="Click to open ERP Export for this date range">
+                        <div class="stat-card-header">
+                            <span class="stat-label">ERP Recorded</span>
+                            <i data-lucide="download-cloud" class="stat-icon" style="color: #a78bfa;"></i>
+                        </div>
+                        <div class="stat-value" style="color: #a78bfa; font-size: 1.3rem;" id="stat-erp-pct">0%</div>
+                        <div id="stat-erp-sub" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 posted • 0 unposted</div>
+                    </div>
+                </div>
+
+                <!-- Bank Split & Top Categories Insights Bar -->
+                <div class="glass-card" id="dashboard-insights-bar" style="padding: 0.85rem 1.25rem; margin-bottom: 1rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; align-items: center;">
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; margin-bottom: 0.35rem;">
+                            <span style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Bank Collection Split</span>
+                            <span id="dashboard-bank-split-label" style="color: var(--text-muted); font-size: 0.76rem;">NUADCB136: 0% • NUADIB64: 0%</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; display: flex;">
+                            <div id="dashboard-bar-cb136" style="width: 50%; height: 100%; background: var(--primary); transition: width 0.3s ease;" title="NUADCB136"></div>
+                            <div id="dashboard-bar-ib64" style="width: 50%; height: 100%; background: #f59e0b; transition: width 0.3s ease;" title="NUADIB64"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);">
+                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-right: 4px;"></span>NUADCB136: <strong id="dashboard-split-cb136-val" style="color: var(--text-main);">EGP 0.00</strong></span>
+                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; margin-right: 4px;"></span>NUADIB64: <strong id="dashboard-split-ib64-val" style="color: var(--text-main);">EGP 0.00</strong></span>
+                        </div>
+                    </div>
+                    <div style="border-left: 1px solid var(--border-color); padding-left: 1.25rem;">
+                        <div style="font-size: 0.78rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.4rem;">Top Categories (Selected Period)</div>
+                        <div id="dashboard-top-categories" style="display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; font-size: 0.78rem; color: var(--text-muted);">
+                            <span>Loading categories...</span>
+                        </div>
                     </div>
                 </div>
 
@@ -211,13 +270,14 @@
                         <table class="pivot-table" id="dashboard-pivot-table">
                             <thead>
                                 <tr>
-                                    <th colspan="4" class="pivot-title">Total Fawry Collection</th>
+                                    <th colspan="5" class="pivot-title">Total Fawry Collection</th>
                                 </tr>
                                 <tr>
                                     <th class="pivot-row-label">Date</th>
                                     <th class="pivot-col-label">NUADCB136</th>
                                     <th class="pivot-col-label highlight-col">NUADIB64</th>
                                     <th class="pivot-col-label">Grand Total</th>
+                                    <th class="pivot-col-label pivot-share-col">% Share</th>
                                 </tr>
                             </thead>
                             <tbody id="dashboard-pivot-body">
@@ -230,49 +290,91 @@
                     </div>
 
                     <!-- Filters Area -->
-                    <div style="width: 300px; display: flex; flex-direction: column; gap: 1rem;">
-                        <!-- View Settings -->
+                    <div style="width: 310px; display: flex; flex-direction: column; gap: 1rem; flex-shrink: 0;">
+                        <!-- View & Sort Settings -->
                         <div class="glass-card filter-box">
                             <div class="filter-header">
-                                <h3>View By</h3>
+                                <h3>View &amp; Sort</h3>
                             </div>
-                            <div class="filter-body">
-                                <label style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">Group Rows By</label>
-                                <select id="dashboard-group-by" class="input-select" style="width: 100%;">
-                                    <option value="date">Date</option>
-                                    <option value="mapping">Mapping</option>
-                                    <option value="second_mapping">2nd Mapping</option>
-                                    <option value="item_name">Item Name</option>
-                                </select>
+                            <div class="filter-body" style="display: flex; flex-direction: column; gap: 0.65rem;">
+                                <div>
+                                    <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">Group Rows By</label>
+                                    <select id="dashboard-group-by" class="input-select" style="width: 100%;">
+                                        <option value="date">Date</option>
+                                        <option value="mapping">Mapping</option>
+                                        <option value="second_mapping">2nd Mapping</option>
+                                        <option value="item_name">Item Name</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">Sort Rows By</label>
+                                    <select id="dashboard-sort-by" class="input-select" style="width: 100%;">
+                                        <option value="default">Default (Chronological / A–Z)</option>
+                                        <option value="total_desc">Grand Total (High → Low)</option>
+                                        <option value="total_asc">Grand Total (Low → High)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; display: block;">Transaction Subset</label>
+                                    <select id="dashboard-status-filter" class="input-select" style="width: 100%;">
+                                        <option value="all">All Transactions</option>
+                                        <option value="valid">Valid Student IDs Only</option>
+                                        <option value="invalid">Invalid / Missing IDs Only</option>
+                                        <option value="settled">Fawry Settled Only</option>
+                                        <option value="unsettled">Unsettled Only</option>
+                                        <option value="erp_recorded">ERP Recorded Only</option>
+                                        <option value="erp_unposted">ERP Unposted Only</option>
+                                    </select>
+                                </div>
+                                <label class="checkbox-label" style="font-size: 0.82rem; margin-top: 0.15rem; cursor: pointer;">
+                                    <input type="checkbox" id="dashboard-show-share" checked>
+                                    Show % of Total column
+                                </label>
                             </div>
                         </div>
 
                         <!-- Payment Date Filter -->
                         <div class="glass-card filter-box">
-                            <div class="filter-header">
+                            <div class="filter-header" style="display: flex; justify-content: space-between; align-items: center;">
                                 <h3>Payment Date</h3>
+                                <button type="button" class="btn btn-outline btn-sm" data-dash-preset="this_month" style="padding: 0.1rem 0.45rem; font-size: 0.7rem;" title="Reset to This Month">Reset</button>
                             </div>
                             <div class="filter-body">
-                                <label style="font-size: 0.85rem; color: #a1a1aa; margin-bottom: 0.25rem; display: block;">Date From</label>
-                                <input type="date" id="dashboard-date-from" class="input-text" style="width: 100%; margin-bottom: 0.75rem;">
-                                <label style="font-size: 0.85rem; color: #a1a1aa; margin-bottom: 0.25rem; display: block;">Date To</label>
-                                <input type="date" id="dashboard-date-to" class="input-text" style="width: 100%;">
+                                <label style="font-size: 0.8rem; color: #a1a1aa; margin-bottom: 0.2rem; display: block;">Date From</label>
+                                <input type="date" id="dashboard-date-from" class="input-text" style="width: 100%; margin-bottom: 0.6rem;">
+                                <label style="font-size: 0.8rem; color: #a1a1aa; margin-bottom: 0.2rem; display: block;">Date To</label>
+                                <input type="date" id="dashboard-date-to" class="input-text" style="width: 100%; margin-bottom: 0.65rem;">
+                                <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="today" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Today</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="yesterday" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Yesterday</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="7d" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Last 7d</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="this_month" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">This Month</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="last_month" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Last Month</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="this_year" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">This Year</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-dash-preset="all_time" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">All Time</button>
+                                </div>
                             </div>
                         </div>
 
                         <!-- Bank Filter -->
                         <div class="glass-card filter-box">
                             <div class="filter-header">
-                                <h3>Bank</h3>
+                                <h3>Bank Accounts</h3>
                             </div>
                             <div class="filter-body" id="dashboard-bank-filters">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" value="NUADCB136" checked>
-                                    NUADCB136
+                                <label class="checkbox-label" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                                    <span style="display: inline-flex; align-items: center; gap: 0.45rem;">
+                                        <input type="checkbox" value="NUADCB136" checked>
+                                        NUADCB136
+                                    </span>
+                                    <span id="dash-bank-badge-NUADCB136" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">0.00</span>
                                 </label>
-                                <label class="checkbox-label mt-2">
-                                    <input type="checkbox" value="NUADIB64" checked>
-                                    NUADIB64
+                                <label class="checkbox-label mt-2" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                                    <span style="display: inline-flex; align-items: center; gap: 0.45rem;">
+                                        <input type="checkbox" value="NUADIB64" checked>
+                                        NUADIB64
+                                    </span>
+                                    <span id="dash-bank-badge-NUADIB64" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">0.00</span>
                                 </label>
                             </div>
                         </div>

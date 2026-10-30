@@ -641,6 +641,8 @@ class App {
         const now = new Date();
         const dateFrom = document.getElementById('dashboard-date-from');
         const dateTo = document.getElementById('dashboard-date-to');
+        const fmtLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
         if (dateFrom && dateTo) {
             dateFrom.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
             const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
@@ -650,13 +652,96 @@ class App {
             dateTo.addEventListener('change', () => this.loadDashboard());
         }
 
-        document.getElementById('dashboard-group-by')?.addEventListener('change', () => this.loadDashboard());
+        // Date Range Presets
+        document.querySelectorAll('[data-dash-preset]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const preset = btn.getAttribute('data-dash-preset');
+                const today = new Date();
+                let start = new Date(today);
+                let end = new Date(today);
+
+                if (preset === 'today') {
+                    // today to today
+                } else if (preset === 'yesterday') {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (preset === '7d') {
+                    start.setDate(today.getDate() - 6);
+                } else if (preset === 'this_month') {
+                    start = new Date(today.getFullYear(), today.getMonth(), 1);
+                    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+                } else if (preset === 'last_month') {
+                    start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+                    end = new Date(today.getFullYear(), today.getMonth(), 0);
+                } else if (preset === 'this_year') {
+                    start = new Date(today.getFullYear(), 0, 1);
+                    end = new Date(today.getFullYear(), 11, 31);
+                } else if (preset === 'all_time') {
+                    start = new Date(2020, 0, 1);
+                    end = new Date(today.getFullYear() + 1, 11, 31);
+                }
+
+                if (dateFrom && dateTo) {
+                    dateFrom.value = fmtLocal(start);
+                    dateTo.value = fmtLocal(end);
+                    this.loadDashboard();
+                }
+            });
+        });
+
+        ['dashboard-group-by', 'dashboard-sort-by', 'dashboard-status-filter', 'dashboard-show-share'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', () => this.loadDashboard());
+        });
+
         const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]');
         checkboxes.forEach(cb => {
             cb.addEventListener('change', () => this.loadDashboard());
         });
 
-        // Add event delegation for the expand/collapse month rows
+        document.getElementById('btn-refresh-dashboard')?.addEventListener('click', () => this.loadDashboard());
+
+        // Expand / Collapse All Months button
+        document.getElementById('btn-dashboard-toggle-months')?.addEventListener('click', () => {
+            const pivotBody = document.getElementById('dashboard-pivot-body');
+            if (!pivotBody) return;
+            const toggles = Array.from(pivotBody.querySelectorAll('.month-toggle'));
+            const dayRows = Array.from(pivotBody.querySelectorAll('.day-row'));
+            if (toggles.length === 0) return;
+
+            const anyCollapsed = toggles.some(t => !t.classList.contains('expanded'));
+            toggles.forEach(t => t.classList.toggle('expanded', anyCollapsed));
+            dayRows.forEach(r => { r.style.display = anyCollapsed ? 'table-row' : 'none'; });
+
+            const labelEl = document.getElementById('dashboard-toggle-months-label');
+            if (labelEl) {
+                labelEl.textContent = anyCollapsed ? 'Collapse All Months' : 'Expand All Months';
+            }
+        });
+
+        // Export Pivot to Excel
+        document.getElementById('btn-export-pivot')?.addEventListener('click', () => {
+            this.exportDashboardPivotExcel();
+        });
+
+        // KPI Stat Cards Drill-Down
+        document.getElementById('dashboard-stats-row')?.addEventListener('click', (e) => {
+            const card = e.target.closest('[data-dash-drill]');
+            if (!card) return;
+            const drillType = card.getAttribute('data-dash-drill');
+            this.drillDownFromDashboard({ type: drillType });
+        });
+
+        // Top Categories Bar Drill-Down
+        document.getElementById('dashboard-top-categories')?.addEventListener('click', (e) => {
+            const badge = e.target.closest('[data-dash-category]');
+            if (!badge) return;
+            const cat = badge.getAttribute('data-dash-category');
+            if (cat) {
+                this.drillDownFromDashboard({ type: 'row', groupBy: 'mapping', key: cat });
+            }
+        });
+
+        // Add event delegation for expand/collapse month rows and row drill-down
         const pivotBody = document.getElementById('dashboard-pivot-body');
         if (pivotBody) {
             pivotBody.addEventListener('click', (e) => {
@@ -673,21 +758,45 @@ class App {
                         toggleContainer.classList.add('expanded');
                         dayRows.forEach(r => r.style.display = 'table-row');
                     }
+                    const allToggles = Array.from(pivotBody.querySelectorAll('.month-toggle'));
+                    const anyCollapsed = allToggles.some(t => !t.classList.contains('expanded'));
+                    const labelEl = document.getElementById('dashboard-toggle-months-label');
+                    if (labelEl) labelEl.textContent = anyCollapsed ? 'Expand All Months' : 'Collapse All Months';
+                    return;
+                }
+
+                const drillRow = e.target.closest('tr[data-drill-key]');
+                if (drillRow) {
+                    const groupBy = drillRow.getAttribute('data-drill-group');
+                    const key = drillRow.getAttribute('data-drill-key');
+                    if (groupBy && key) {
+                        this.drillDownFromDashboard({ type: 'row', groupBy, key });
+                    }
                 }
             });
         }
 
-        // Copy Table
+        // Copy Table for Email (preserves classic 4-column Outlook/Gmail format)
         const btnCopy = document.getElementById('btn-copy-pivot');
         if (btnCopy) {
             btnCopy.addEventListener('click', () => {
                 const table = document.getElementById('dashboard-pivot-table');
+                if (!table) return;
                 
                 const clone = table.cloneNode(true);
                 // Collapsed daily rows must not end up in the pasted email
                 clone.querySelectorAll('tr').forEach(tr => {
                     if (tr.style.display === 'none') tr.remove();
                 });
+                // Remove UI-only % Share column & drill-down icons so pasted email stays clean
+                clone.querySelectorAll('.pivot-share-col, .no-email-copy').forEach(el => el.remove());
+
+                const selectedBanksCount = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked').length;
+                const titleTh = clone.querySelector('.pivot-title');
+                if (titleTh && selectedBanksCount > 0) {
+                    titleTh.setAttribute('colspan', String(selectedBanksCount + 2));
+                }
+
                 const cells = clone.querySelectorAll('th, td');
                 cells.forEach(c => {
                     c.style.border = '1px solid black';
@@ -748,12 +857,125 @@ class App {
         }
     }
 
+    drillDownFromDashboard({ type, groupBy, key } = {}) {
+        const dateFrom = document.getElementById('dashboard-date-from')?.value || '';
+        const dateTo = document.getElementById('dashboard-date-to')?.value || '';
+        const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked');
+        const selectedBanks = Array.from(checkboxes).map(cb => cb.value);
+
+        if (type === 'erp_export') {
+            const erpFrom = document.getElementById('erp-date-from');
+            const erpTo = document.getElementById('erp-date-to');
+            if (erpFrom && dateFrom) erpFrom.value = dateFrom;
+            if (erpTo && dateTo) erpTo.value = dateTo;
+            document.querySelector('.nav-link[data-tab="erp-export"]')?.click();
+            return;
+        }
+
+        if (type === 'invalid_tx') {
+            const amFrom = document.getElementById('automatcher-date-from');
+            const amTo = document.getElementById('automatcher-date-to');
+            if (amFrom && dateFrom) amFrom.value = dateFrom;
+            if (amTo && dateTo) amTo.value = dateTo;
+            document.querySelector('.nav-link[data-tab="automatcher"]')?.click();
+            this.runAutoMatcher();
+            return;
+        }
+
+        // Otherwise drill down into Orders Transactions
+        const txFrom = document.getElementById('filter-date-from');
+        const txTo = document.getElementById('filter-date-to');
+        const txSearch = document.getElementById('search-input');
+
+        if (txSearch) txSearch.value = '';
+        this.headerFilters.transactions = {};
+        if (selectedBanks.length === 1) {
+            this.headerFilters.transactions.bank = [...selectedBanks];
+        }
+
+        if (type === 'row' && groupBy === 'date' && key) {
+            if (txFrom) txFrom.value = key;
+            if (txTo) txTo.value = key;
+            this.txQuickFilter = 'all';
+        } else {
+            if (txFrom) txFrom.value = dateFrom;
+            if (txTo) txTo.value = dateTo;
+            this.txQuickFilter = 'all';
+
+            if (type === 'valid_tx') {
+                this.headerFilters.transactions.id_status = ['Valid'];
+            } else if (type === 'unsettled_tx') {
+                this.txQuickFilter = 'unsettled';
+            } else if (type === 'row' && groupBy && key) {
+                if (groupBy === 'mapping' || groupBy === 'second_mapping') {
+                    this.headerFilters.transactions[groupBy] = [key === 'Unmapped' ? '(Empty / Unmapped)' : key];
+                } else if (groupBy === 'item_name') {
+                    this.headerFilters.transactions.item_name = [key];
+                }
+            }
+        }
+
+        // Sync Quick Filter buttons UI on Transactions view
+        document.querySelectorAll('[data-tx-quick-filter]').forEach(b => {
+            const isMatch = b.getAttribute('data-tx-quick-filter') === (this.txQuickFilter || 'all');
+            b.classList.toggle('btn-primary', isMatch);
+            b.classList.toggle('btn-outline', !isMatch);
+        });
+        document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => {
+            const col = icon.closest('.th-filter-wrapper')?.dataset.column;
+            const hasActive = Boolean(col && this.headerFilters.transactions[col] && this.headerFilters.transactions[col].length > 0);
+            icon.classList.toggle('active', hasActive);
+        });
+
+        this.currentPage = 1;
+        document.querySelector('.nav-link[data-tab="transactions"]')?.click();
+    }
+
+    exportDashboardPivotExcel() {
+        if (!this.lastDashboardExportRows || this.lastDashboardExportRows.length === 0) {
+            Toast.show('No pivot data available to export.', 'warning');
+            return;
+        }
+        const dateFrom = document.getElementById('dashboard-date-from')?.value || 'Start';
+        const dateTo = document.getElementById('dashboard-date-to')?.value || 'End';
+        const groupBy = document.getElementById('dashboard-group-by')?.value || 'date';
+
+        if (typeof XLSX !== 'undefined' && XLSX.utils && typeof XLSX.writeFile === 'function') {
+            const ws = XLSX.utils.json_to_sheet(this.lastDashboardExportRows);
+            const keys = Object.keys(this.lastDashboardExportRows[0] || {});
+            ws['!cols'] = keys.map((k, idx) => ({ wch: idx === 0 ? 28 : 18 }));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Pivot Summary');
+            XLSX.writeFile(wb, `Fawry_Pivot_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
+            Toast.show('Pivot exported to Excel!', 'success');
+        } else {
+            Toast.show('Excel library not loaded.', 'error');
+        }
+    }
+
     async loadDashboard() {
         const dateFrom = document.getElementById('dashboard-date-from')?.value;
         const dateTo = document.getElementById('dashboard-date-to')?.value;
         const groupBy = document.getElementById('dashboard-group-by')?.value || 'date';
+        const sortBy = document.getElementById('dashboard-sort-by')?.value || 'default';
+        const statusFilter = document.getElementById('dashboard-status-filter')?.value || 'all';
+        const showShare = document.getElementById('dashboard-show-share') ? document.getElementById('dashboard-show-share').checked : true;
         
         if (!dateFrom || !dateTo) return;
+
+        const subtitleEl = document.getElementById('dashboard-period-subtitle');
+        if (subtitleEl) {
+            const subsetLabels = {
+                all: 'All Transactions',
+                valid: 'Valid Student IDs Only',
+                invalid: 'Invalid / Missing IDs Only',
+                settled: 'Fawry Settled Only',
+                unsettled: 'Unsettled Only',
+                erp_recorded: 'ERP Recorded Only',
+                erp_unposted: 'ERP Unposted Only'
+            };
+            subtitleEl.textContent = `Period: ${dateFrom} to ${dateTo} • Subset: ${subsetLabels[statusFilter] || 'All Transactions'}`;
+        }
 
         const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked');
         const selectedBanks = Array.from(checkboxes).map(cb => cb.value);
@@ -762,66 +984,93 @@ class App {
         const tfoot = document.getElementById('dashboard-pivot-foot');
         if (!tbody || !tfoot) return;
 
-        const formatMoney = (num) => num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const formatMoney = (num) => Number(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const totalColSpan = selectedBanks.length + 2 + (showShare ? 1 : 0);
 
         if (selectedBanks.length === 0) {
+            this.lastDashboardExportRows = [];
             tbody.innerHTML = '<tr><td colspan="2" style="text-align: center;">No bank selected</td></tr>';
             tfoot.innerHTML = '<tr><td>Grand Total</td><td>0.00</td></tr>';
             document.getElementById('stat-total-collections').textContent = 'EGP 0.00';
             document.getElementById('stat-total-transactions').textContent = '0';
             document.getElementById('stat-valid-pct').textContent = '0%';
             document.getElementById('stat-errors').textContent = '0';
+            const setTxt = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+            setTxt('stat-avg-tx', 'Avg: EGP 0.00 / tx');
+            setTxt('stat-active-days', '0 active days');
+            setTxt('stat-valid-count', '0 valid tx');
+            setTxt('stat-unmapped-count', '0 unmapped item(s)');
+            setTxt('stat-settled-pct', '0%');
+            setTxt('stat-settled-sub', '0 settled • 0 unsettled');
+            setTxt('stat-erp-pct', '0%');
+            setTxt('stat-erp-sub', '0 posted • 0 unposted');
+            setTxt('dash-bank-badge-NUADCB136', '0.00');
+            setTxt('dash-bank-badge-NUADIB64', '0.00');
+            setTxt('dashboard-split-cb136-val', 'EGP 0.00');
+            setTxt('dashboard-split-ib64-val', 'EGP 0.00');
+            setTxt('dashboard-bank-split-label', 'NUADCB136: 0% • NUADIB64: 0%');
+            const topCat = document.getElementById('dashboard-top-categories');
+            if (topCat) topCat.innerHTML = '<span style="color: var(--text-muted);">No bank selected</span>';
             return;
         }
 
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Loading...</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${totalColSpan}" style="text-align: center;">Loading...</td></tr>`;
         tfoot.innerHTML = '';
 
         try {
             let allData = [];
             let rpcSucceeded = false;
             
-            // 1. Try fast server-side RPC supporting all Group By modes
-            const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
-                start_date: dateFrom,
-                end_date: dateTo,
-                group_col: groupBy
-            });
-            if (!pivotByErr && Array.isArray(pivotByData)) {
-                rpcSucceeded = true;
-                allData = pivotByData.map(row => ({
-                    payment_date: groupBy === 'date' ? row.group_key : null,
-                    mapping: groupBy === 'mapping' ? row.group_key : null,
-                    second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
-                    item_name: groupBy === 'item_name' ? row.group_key : null,
-                    bank: row.bank,
-                    item_price: row.total_amount
-                }));
-            } else if (groupBy === 'date') {
-                // 2. Fallback to legacy date-only RPC
-                const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
-                rpcSucceeded = !rpcError && Array.isArray(rpcData);
-                if (rpcSucceeded) {
-                    allData = rpcData.map(row => ({
-                        payment_date: row.payment_date,
+            // 1. Try fast server-side RPC supporting all Group By modes when viewing 'all' transactions
+            if (statusFilter === 'all') {
+                const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
+                    start_date: dateFrom,
+                    end_date: dateTo,
+                    group_col: groupBy
+                });
+                if (!pivotByErr && Array.isArray(pivotByData)) {
+                    rpcSucceeded = true;
+                    allData = pivotByData.map(row => ({
+                        payment_date: groupBy === 'date' ? row.group_key : null,
+                        mapping: groupBy === 'mapping' ? row.group_key : null,
+                        second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
+                        item_name: groupBy === 'item_name' ? row.group_key : null,
                         bank: row.bank,
-                        item_price: row.daily_total
+                        item_price: row.total_amount
                     }));
+                } else if (groupBy === 'date') {
+                    // 2. Fallback to legacy date-only RPC
+                    const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
+                    rpcSucceeded = !rpcError && Array.isArray(rpcData);
+                    if (rpcSucceeded) {
+                        allData = rpcData.map(row => ({
+                            payment_date: row.payment_date,
+                            bank: row.bank,
+                            item_price: row.daily_total
+                        }));
+                    }
                 }
             }
             
-            // Fallback (RPC missing / failed)
+            // Fallback (RPC missing / failed, or a specific transaction subset filter is active)
             if (!rpcSucceeded) {
                 let fetchMore = true;
                 let from = 0;
                 while (fetchMore) {
-                    const { data, error } = await supabase.from('transactions')
-                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name, id_status')
+                    let q = supabase.from('transactions')
+                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_journal_number')
                         .gte('payment_date', dateFrom)
                         .lte('payment_date', dateTo)
-                        .in('bank', selectedBanks)
-                        .order('id')
-                        .range(from, from + 999);
+                        .in('bank', selectedBanks);
+
+                    if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
+                    else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
+                    else if (statusFilter === 'settled') q = q.eq('is_settled', true);
+                    else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
+                    else if (statusFilter === 'erp_recorded') q = q.not('erp_journal_number', 'is', null).neq('erp_journal_number', '');
+                    else if (statusFilter === 'erp_unposted') q = q.or('erp_journal_number.is.null,erp_journal_number.eq.');
+
+                    const { data, error } = await q.order('id').range(from, from + 999);
                     
                     if (error) throw error;
                     if (!data || data.length === 0) break;
@@ -834,9 +1083,60 @@ class App {
             const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
             let bankTotals = { Total: 0 };
-            selectedBanks.forEach(b => bankTotals[b] = 0);
+            ['NUADCB136', 'NUADIB64', ...selectedBanks].forEach(b => { if (bankTotals[b] === undefined) bankTotals[b] = 0; });
+
+            const activeDaysSet = new Set();
+            allData.forEach(tx => {
+                if (!selectedBanks.includes(tx.bank)) return;
+                const price = parseFloat(tx.item_price) || 0;
+                bankTotals[tx.bank] = (bankTotals[tx.bank] || 0) + price;
+                bankTotals.Total += price;
+                const pDate = toDateOnly(tx.payment_date);
+                if (pDate) activeDaysSet.add(pDate);
+            });
+
+            // Update Bank Filter live badges & Bank Split progress bar
+            ['NUADCB136', 'NUADIB64'].forEach(b => {
+                const badgeEl = document.getElementById(`dash-bank-badge-${b}`);
+                if (badgeEl) badgeEl.textContent = formatMoney(bankTotals[b] || 0);
+            });
+
+            const cb136Val = bankTotals['NUADCB136'] || 0;
+            const ib64Val = bankTotals['NUADIB64'] || 0;
+            const combinedBankTotal = cb136Val + ib64Val;
+            const cb136Pct = combinedBankTotal > 0 ? ((cb136Val / combinedBankTotal) * 100) : 0;
+            const ib64Pct = combinedBankTotal > 0 ? ((ib64Val / combinedBankTotal) * 100) : 0;
+
+            const splitLabelEl = document.getElementById('dashboard-bank-split-label');
+            if (splitLabelEl) splitLabelEl.textContent = `NUADCB136: ${cb136Pct.toFixed(1)}% • NUADIB64: ${ib64Pct.toFixed(1)}%`;
+            const bar136 = document.getElementById('dashboard-bar-cb136');
+            const bar64 = document.getElementById('dashboard-bar-ib64');
+            if (bar136 && bar64) {
+                bar136.style.width = `${combinedBankTotal > 0 ? cb136Pct : 50}%`;
+                bar64.style.width = `${combinedBankTotal > 0 ? ib64Pct : 50}%`;
+            }
+            const split136El = document.getElementById('dashboard-split-cb136-val');
+            const split64El = document.getElementById('dashboard-split-ib64-val');
+            if (split136El) split136El.textContent = `EGP ${formatMoney(cb136Val)}`;
+            if (split64El) split64El.textContent = `EGP ${formatMoney(ib64Val)}`;
+
+            const renderShareCell = (amount) => {
+                if (!showShare) return '';
+                const pct = bankTotals.Total > 0 ? ((amount / bankTotals.Total) * 100) : 0;
+                const widthPct = Math.min(100, Math.max(0, pct));
+                return `<td class="pivot-share-col" style="min-width: 110px;">
+                    <div style="display: flex; align-items: center; justify-content: flex-end; gap: 0.45rem;">
+                        <div style="width: 44px; height: 5px; background: rgba(255,255,255,0.07); border-radius: 999px; overflow: hidden;">
+                            <div style="width: ${widthPct.toFixed(1)}%; height: 100%; background: var(--primary);"></div>
+                        </div>
+                        <span style="font-size: 0.78rem; color: var(--text-muted); min-width: 40px; text-align: right;">${pct.toFixed(1)}%</span>
+                    </div>
+                </td>`;
+            };
 
             let htmlOutput = '';
+            this.lastDashboardExportRows = [];
+            const btnToggleMonths = document.getElementById('btn-dashboard-toggle-months');
 
             if (groupBy === 'date') {
                 const monthlyPivot = {};
@@ -860,47 +1160,90 @@ class App {
                     monthlyPivot[monthKey].days[pDate].Total += price;
                     monthlyPivot[monthKey][tx.bank] += price;
                     monthlyPivot[monthKey].Total += price;
-                    bankTotals[tx.bank] += price;
-                    bankTotals.Total += price;
                 });
 
                 const months = Object.keys(monthlyPivot).sort();
-                const multiMonth = months.length > 1;
+                const multiMonth = months.length > 1 && sortBy === 'default';
 
-                months.forEach(m => {
-                    const monthData = monthlyPivot[m];
-                    const days = Object.keys(monthData.days).sort();
-                    
-                    if (multiMonth) {
-                        const parts = m.split('-');
-                        const monthLabel = `${monthNames[parseInt(parts[1]) - 1]} ${parts[0]}`;
-                        htmlOutput += `<tr class="month-row" data-month="${m}">
-                            <td><div class="month-toggle"><i data-lucide="chevron-right"></i><span>${monthLabel}</span></div></td>`;
-                        selectedBanks.forEach(b => {
-                            htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(monthData[b])}</td>`;
+                if (btnToggleMonths) {
+                    btnToggleMonths.classList.toggle('hidden', !multiMonth);
+                    const labelEl = document.getElementById('dashboard-toggle-months-label');
+                    if (labelEl) labelEl.textContent = 'Expand All Months';
+                }
+
+                if (sortBy !== 'default') {
+                    // Flat sorted daily rows when sorting by Grand Total
+                    const allDayEntries = [];
+                    months.forEach(m => {
+                        Object.keys(monthlyPivot[m].days).forEach(d => {
+                            allDayEntries.push({ date: d, row: monthlyPivot[m].days[d] });
                         });
-                        htmlOutput += `<td>${formatMoney(monthData.Total)}</td></tr>`;
-                    }
+                    });
+                    allDayEntries.sort((a, b) => sortBy === 'total_desc' ? (b.row.Total - a.row.Total) : (a.row.Total - b.row.Total));
 
-                    days.forEach(d => {
-                        const row = monthData.days[d];
+                    allDayEntries.forEach(({ date: d, row }) => {
                         const dateParts = d.split('-');
                         const dateLabel = `${parseInt(dateParts[2])}-${monthNames[parseInt(dateParts[1]) - 1]}-${dateParts[0]}`;
-                        htmlOutput += `<tr class="day-row month-${m}" style="${multiMonth ? 'display: none;' : ''}">
+                        htmlOutput += `<tr class="day-row" data-drill-group="date" data-drill-key="${d}" style="cursor: pointer;" title="Click to view transactions for ${dateLabel}">
                             <td>${dateLabel}</td>`;
+                        const exportRow = { "Date": dateLabel };
                         selectedBanks.forEach(b => {
                             htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
+                            exportRow[b] = Number((row[b] || 0).toFixed(2));
                         });
-                        htmlOutput += `<td>${formatMoney(row.Total)}</td></tr>`;
+                        htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
+                        htmlOutput += renderShareCell(row.Total);
+                        htmlOutput += `</tr>`;
+                        exportRow["Grand Total"] = Number((row.Total || 0).toFixed(2));
+                        if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
+                        this.lastDashboardExportRows.push(exportRow);
                     });
-                });
+                } else {
+                    months.forEach(m => {
+                        const monthData = monthlyPivot[m];
+                        const days = Object.keys(monthData.days).sort();
+                        
+                        if (multiMonth) {
+                            const parts = m.split('-');
+                            const monthLabel = `${monthNames[parseInt(parts[1]) - 1]} ${parts[0]}`;
+                            htmlOutput += `<tr class="month-row" data-month="${m}">
+                                <td><div class="month-toggle"><i data-lucide="chevron-right"></i><span>${monthLabel}</span></div></td>`;
+                            selectedBanks.forEach(b => {
+                                htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(monthData[b])}</td>`;
+                            });
+                            htmlOutput += `<td>${formatMoney(monthData.Total)}</td>`;
+                            htmlOutput += renderShareCell(monthData.Total);
+                            htmlOutput += `</tr>`;
+                        }
+
+                        days.forEach(d => {
+                            const row = monthData.days[d];
+                            const dateParts = d.split('-');
+                            const dateLabel = `${parseInt(dateParts[2])}-${monthNames[parseInt(dateParts[1]) - 1]}-${dateParts[0]}`;
+                            htmlOutput += `<tr class="day-row month-${m}" data-drill-group="date" data-drill-key="${d}" style="${multiMonth ? 'display: none;' : ''} cursor: pointer;" title="Click to view transactions for ${dateLabel}">
+                                <td>${dateLabel}</td>`;
+                            const exportRow = { "Date": dateLabel };
+                            selectedBanks.forEach(b => {
+                                htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
+                                exportRow[b] = Number((row[b] || 0).toFixed(2));
+                            });
+                            htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
+                            htmlOutput += renderShareCell(row.Total);
+                            htmlOutput += `</tr>`;
+                            exportRow["Grand Total"] = Number((row.Total || 0).toFixed(2));
+                            if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
+                            this.lastDashboardExportRows.push(exportRow);
+                        });
+                    });
+                }
 
                 if (months.length === 0) {
-                    htmlOutput = `<tr><td colspan="${selectedBanks.length + 2}" style="text-align: center;">No data for selected period</td></tr>`;
+                    htmlOutput = `<tr><td colspan="${totalColSpan}" style="text-align: center;">No data for selected period</td></tr>`;
                 }
 
             } else {
-                // Group by Mapping or Item Name
+                if (btnToggleMonths) btnToggleMonths.classList.add('hidden');
+                // Group by Mapping, 2nd Mapping, or Item Name
                 const groupedData = {};
                 
                 allData.forEach(tx => {
@@ -923,24 +1266,48 @@ class App {
                     const price = parseFloat(tx.item_price) || 0;
                     groupedData[key][tx.bank] += price;
                     groupedData[key].Total += price;
-                    bankTotals[tx.bank] += price;
-                    bankTotals.Total += price;
                 });
 
-                const keys = Object.keys(groupedData).sort();
+                const keys = Object.keys(groupedData);
+                if (sortBy === 'total_desc') {
+                    keys.sort((a, b) => groupedData[b].Total - groupedData[a].Total);
+                } else if (sortBy === 'total_asc') {
+                    keys.sort((a, b) => groupedData[a].Total - groupedData[b].Total);
+                } else {
+                    keys.sort();
+                }
+
+                const groupLabel = groupBy === 'mapping' ? 'Mapping' : (groupBy === 'second_mapping' ? '2nd Mapping' : 'Item Name');
                 
                 keys.forEach(k => {
                     const row = groupedData[k];
-                    htmlOutput += `<tr><td>${escapeHTML(k)}</td>`;
+                    htmlOutput += `<tr data-drill-group="${groupBy}" data-drill-key="${escapeHTML(k)}" style="cursor: pointer;" title="Click to view transactions for ${escapeHTML(k)}">
+                        <td>${escapeHTML(k)}</td>`;
+                    const exportRow = { [groupLabel]: k };
                     selectedBanks.forEach(b => {
                         htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
+                        exportRow[b] = Number((row[b] || 0).toFixed(2));
                     });
-                    htmlOutput += `<td>${formatMoney(row.Total)}</td></tr>`;
+                    htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
+                    htmlOutput += renderShareCell(row.Total);
+                    htmlOutput += `</tr>`;
+                    exportRow["Grand Total"] = Number((row.Total || 0).toFixed(2));
+                    if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
+                    this.lastDashboardExportRows.push(exportRow);
                 });
 
                 if (keys.length === 0) {
-                    htmlOutput = `<tr><td colspan="${selectedBanks.length + 2}" style="text-align: center;">No data for selected period</td></tr>`;
+                    htmlOutput = `<tr><td colspan="${totalColSpan}" style="text-align: center;">No data for selected period</td></tr>`;
                 }
+            }
+
+            if (this.lastDashboardExportRows.length > 0) {
+                const firstKey = Object.keys(this.lastDashboardExportRows[0])[0];
+                const totalExportRow = { [firstKey]: 'Grand Total' };
+                selectedBanks.forEach(b => { totalExportRow[b] = Number((bankTotals[b] || 0).toFixed(2)); });
+                totalExportRow["Grand Total"] = Number((bankTotals.Total || 0).toFixed(2));
+                if (showShare) totalExportRow["% Share"] = '100.0%';
+                this.lastDashboardExportRows.push(totalExportRow);
             }
 
             tbody.innerHTML = htmlOutput;
@@ -949,61 +1316,162 @@ class App {
             selectedBanks.forEach(b => {
                 footHtml += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(bankTotals[b])}</td>`;
             });
-            footHtml += `<td>${formatMoney(bankTotals.Total)}</td></tr>`;
+            footHtml += `<td>${formatMoney(bankTotals.Total)}</td>`;
+            if (showShare) {
+                footHtml += `<td class="pivot-share-col">100.0%</td>`;
+            }
+            footHtml += `</tr>`;
             tfoot.innerHTML = footHtml;
 
             const thead = document.querySelector('#dashboard-pivot-table thead');
             if (thead) {
                 const label = groupBy === 'date' ? 'Date' : (groupBy === 'mapping' ? 'Mapping' : (groupBy === 'second_mapping' ? '2nd Mapping' : 'Item Name'));
                 thead.innerHTML = `
-                    <tr><th colspan="${selectedBanks.length + 2}" class="pivot-title">Total Fawry Collection</th></tr>
+                    <tr><th colspan="${totalColSpan}" class="pivot-title">Total Fawry Collection</th></tr>
                     <tr>
                         <th class="pivot-row-label">${label}</th>
                         ${selectedBanks.map(b => `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b}</th>`).join('')}
                         <th class="pivot-col-label">Grand Total</th>
+                        ${showShare ? '<th class="pivot-col-label pivot-share-col">% Share</th>' : ''}
                     </tr>
                 `;
             }
 
-            // Update Stat Cards
+            // Update Stat Cards & Top Categories
             const totalCollections = bankTotals.Total || 0;
-            
             document.getElementById('stat-total-collections').textContent = `EGP ${formatMoney(totalCollections)}`;
             
             let validCount = 0;
             let totalCountAll = 0;
+            let settledCount = 0;
+            let erpRecordedCount = 0;
+            let unmappedCount = 0;
+            const categoryTotals = {};
 
             if (rpcSucceeded) {
-                // RPC only returned daily aggregates, so fetch valid/error counts for the date range
-                const validQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
-                    .gte('payment_date', dateFrom).lte('payment_date', dateTo).eq('id_status', 'Valid').in('bank', selectedBanks);
-                const totalQuery = supabase.from('transactions').select('*', { count: 'exact', head: true })
+                // RPC only returned daily/group aggregates, so fetch KPI counts + top categories in parallel
+                const baseFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
                     .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', selectedBanks);
 
-                const [{ count: vCnt, error: vErr }, { count: tCnt, error: tErr }] = await Promise.all([validQuery, totalQuery]);
+                const validQuery = baseFilter().eq('id_status', 'Valid');
+                const totalQuery = baseFilter();
+                const settledQuery = baseFilter().eq('is_settled', true);
+                const erpQuery = baseFilter().not('erp_journal_number', 'is', null).neq('erp_journal_number', '');
+                const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
+                const catPromise = (groupBy === 'mapping')
+                    ? Promise.resolve({ data: null })
+                    : supabase.rpc('get_dashboard_pivot_by', { start_date: dateFrom, end_date: dateTo, group_col: 'mapping' });
+
+                const [
+                    { count: vCnt, error: vErr },
+                    { count: tCnt, error: tErr },
+                    { count: sCnt },
+                    { count: eCnt },
+                    { count: uCnt },
+                    catRes
+                ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, catPromise]);
+
                 if (vErr) throw vErr;
                 if (tErr) throw tErr;
                 validCount = vCnt || 0;
                 totalCountAll = tCnt || 0;
+                settledCount = sCnt || 0;
+                erpRecordedCount = eCnt || 0;
+                unmappedCount = uCnt || 0;
+
+                if (groupBy === 'mapping') {
+                    allData.forEach(tx => {
+                        if (!selectedBanks.includes(tx.bank)) return;
+                        const k = tx.mapping || 'Unmapped';
+                        categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
+                    });
+                } else if (catRes && Array.isArray(catRes.data)) {
+                    catRes.data.forEach(r => {
+                        if (!selectedBanks.includes(r.bank)) return;
+                        const k = r.group_key || 'Unmapped';
+                        categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
+                    });
+                }
             } else {
                 // Full rows were already fetched and filtered by selectedBanks – count in memory
                 totalCountAll = allData.length;
-                validCount = allData.reduce((acc, tx) => acc + (tx.id_status === 'Valid' ? 1 : 0), 0);
+                allData.forEach(tx => {
+                    if (!selectedBanks.includes(tx.bank)) return;
+                    if (tx.id_status === 'Valid') validCount++;
+                    if (tx.is_settled) settledCount++;
+                    if (tx.erp_journal_number && String(tx.erp_journal_number).trim() !== '') erpRecordedCount++;
+                    if (!tx.mapping || String(tx.mapping).trim() === '') unmappedCount++;
+                    const k = tx.mapping || 'Unmapped';
+                    categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
+                });
             }
             
             document.getElementById('stat-total-transactions').textContent = (totalCountAll || 0).toLocaleString();
             
+            const avgTx = totalCountAll > 0 ? (totalCollections / totalCountAll) : 0;
+            const avgEl = document.getElementById('stat-avg-tx');
+            if (avgEl) avgEl.textContent = `Avg: EGP ${formatMoney(avgTx)} / tx`;
+
+            const activeDaysEl = document.getElementById('stat-active-days');
+            if (activeDaysEl) {
+                activeDaysEl.textContent = activeDaysSet.size > 0
+                    ? `${activeDaysSet.size} active payment day(s)`
+                    : `${totalCountAll.toLocaleString()} matching record(s)`;
+            }
+
             const validPct = totalCountAll > 0 ? ((validCount / totalCountAll) * 100).toFixed(1) : 0;
-            const errorCount = (totalCountAll || 0) - (validCount || 0);
+            const errorCount = Math.max(0, (totalCountAll || 0) - (validCount || 0));
             
             document.getElementById('stat-valid-pct').textContent = `${validPct}%`;
             document.getElementById('stat-errors').textContent = errorCount.toLocaleString();
+
+            const validCountEl = document.getElementById('stat-valid-count');
+            if (validCountEl) validCountEl.textContent = `${validCount.toLocaleString()} valid tx`;
+
+            const unmappedEl = document.getElementById('stat-unmapped-count');
+            if (unmappedEl) unmappedEl.textContent = `${unmappedCount.toLocaleString()} unmapped item(s)`;
+
+            const settledPct = totalCountAll > 0 ? ((settledCount / totalCountAll) * 100).toFixed(1) : 0;
+            const unsettledCount = Math.max(0, totalCountAll - settledCount);
+            const settledPctEl = document.getElementById('stat-settled-pct');
+            const settledSubEl = document.getElementById('stat-settled-sub');
+            if (settledPctEl) settledPctEl.textContent = `${settledPct}%`;
+            if (settledSubEl) settledSubEl.textContent = `${settledCount.toLocaleString()} settled • ${unsettledCount.toLocaleString()} unsettled`;
+
+            const erpPct = totalCountAll > 0 ? ((erpRecordedCount / totalCountAll) * 100).toFixed(1) : 0;
+            const erpUnpostedCount = Math.max(0, totalCountAll - erpRecordedCount);
+            const erpPctEl = document.getElementById('stat-erp-pct');
+            const erpSubEl = document.getElementById('stat-erp-sub');
+            if (erpPctEl) erpPctEl.textContent = `${erpPct}%`;
+            if (erpSubEl) erpSubEl.textContent = `${erpRecordedCount.toLocaleString()} posted • ${erpUnpostedCount.toLocaleString()} unposted`;
+
+            // Render Top Categories badges
+            const topCatContainer = document.getElementById('dashboard-top-categories');
+            if (topCatContainer) {
+                const sortedCats = Object.entries(categoryTotals)
+                    .filter(([, amt]) => amt > 0)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 4);
+                if (sortedCats.length === 0) {
+                    topCatContainer.innerHTML = '<span style="color: var(--text-muted);">No category breakdown for this period</span>';
+                } else {
+                    topCatContainer.innerHTML = sortedCats.map(([cat, amt]) => {
+                        const pct = totalCollections > 0 ? ((amt / totalCollections) * 100).toFixed(1) : '0.0';
+                        return `<button type="button" class="btn btn-outline btn-sm" data-dash-category="${escapeHTML(cat)}" style="padding: 0.2rem 0.6rem; font-size: 0.74rem; border-radius: 999px; display: inline-flex; align-items: center; gap: 0.35rem;" title="Click to view ${escapeHTML(cat)} transactions">
+                            <strong style="color: var(--text-main);">${escapeHTML(cat)}</strong>
+                            <span style="color: var(--primary);">EGP ${formatMoney(amt)}</span>
+                            <span style="color: var(--text-muted); font-size: 0.7rem;">(${pct}%)</span>
+                        </button>`;
+                    }).join('');
+                }
+            }
+
             this.updateSidebarBadges();
             
             if (window.lucide) lucide.createIcons();
 
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="${selectedBanks.length + 2}" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${totalColSpan}" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
         }
     }
 
