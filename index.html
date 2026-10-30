@@ -816,9 +816,6 @@
                         <button class="btn btn-outline" id="btn-toggle-student-import">
                             <i data-lucide="upload"></i> Import Excel
                         </button>
-                        <button class="btn btn-primary" id="btn-add-student">
-                            <i data-lucide="plus"></i> Add Student
-                        </button>
                     </div>
                 </div>
 
@@ -892,37 +889,38 @@
                         <button class="btn btn-outline" id="btn-clear-student-filters" title="Clear Filters">Clear</button>
                     </div>
 
-                    <!-- Inline Student Profile & Statement of Payments -->
-                    <div id="inline-student-profile" class="hidden glass-card" style="margin-bottom: 1.5rem; border-left: 4px solid var(--primary);">
-                        <!-- Student Identity Banner -->
-                        <div id="student-profile-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; padding-bottom: 1rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-color);">
-                            <!-- Populated dynamically by loadStudentProfile() -->
-                        </div>
+                    <div class="glass-card table-container" style="padding: 0;">
+                        <table class="data-table" id="students-table" style="min-width: 100%;">
+                            <thead>
+                                <tr>
+                                    <th>Student ID</th>
+                                    <th>Full Name</th>
+                                    <th>Email</th>
+                                    <th>Mobile</th>
+                                    <th>College</th>
+                                    <th>Program</th>
+                                </tr>
+                            </thead>
+                            <tbody id="students-table-body">
+                                <!-- Data will be populated here -->
+                            </tbody>
+                        </table>
+                        <div class="pagination" id="students-pagination"></div>
+                    </div>
 
-                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.85rem;">
-                            <h3 style="margin: 0; font-size: 1rem;">Categorized Payment Summary</h3>
-                            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                                <button class="btn btn-outline btn-sm" id="btn-edit-profile-student">
-                                    <i data-lucide="edit-2" style="width: 14px; height: 14px;"></i> Edit Student
-                                </button>
-                                <button class="btn btn-outline btn-sm" id="btn-export-student-statement">
-                                    <i data-lucide="file-spreadsheet" style="width: 14px; height: 14px;"></i> Export Statement (Excel)
-                                </button>
-                                <button class="btn btn-outline btn-sm" id="btn-print-profile">
-                                    <i data-lucide="printer" style="width: 14px; height: 14px;"></i> Print / Save PDF
-                                </button>
-                                <button class="btn btn-outline btn-sm" id="btn-close-student-profile">
-                                    <i data-lucide="x" style="width: 14px; height: 14px;"></i> Close
-                                </button>
-                            </div>
+                    <!-- Inline Student Profile -->
+                    <div id="inline-student-profile" class="hidden glass-card" style="margin-top: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                            <h3 style="margin: 0;">Categorized Payment Summary</h3>
+                            <button class="btn btn-outline btn-sm" id="btn-print-profile">
+                                <i data-lucide="printer"></i> Print / Save PDF
+                            </button>
                         </div>
-
-                        <div class="table-container" style="margin-bottom: 1.5rem;">
-                            <table class="data-table">
+                        <div class="table-container" style="margin-bottom: 2rem;">
+                            <table class="data-table" style="min-width: 100%;">
                                 <thead>
                                     <tr>
                                         <th>Mapping Category</th>
-                                        <th style="width: 140px; text-align: center;">Transactions</th>
                                         <th style="text-align: right;">Total Amount (EGP)</th>
                                     </tr>
                                 </thead>
@@ -932,17 +930,15 @@
                             </table>
                         </div>
 
-                        <h3 style="margin-bottom: 0.85rem; font-size: 1rem;">Statement of Payments (Chronological)</h3>
+                        <h3 style="margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">Statement of Payments (Chronological)</h3>
                         <div class="table-container">
-                            <table class="data-table">
+                            <table class="data-table" style="min-width: 100%;">
                                 <thead>
                                     <tr>
                                         <th>Date</th>
                                         <th>Ref Number</th>
                                         <th>Item Name</th>
                                         <th>Mapping</th>
-                                        <th>2nd Mapping</th>
-                                        <th>Bank / Status</th>
                                         <th style="text-align: right;">Amount</th>
                                     </tr>
                                 </thead>
@@ -951,25 +947,6 @@
                                 </tbody>
                             </table>
                         </div>
-                    </div>
-
-                    <div class="glass-card table-container" style="padding: 0;">
-                        <table class="data-table" id="students-table">
-                            <thead>
-                                <tr>
-                                    <th>Student ID</th>
-                                    <th>Full Name</th>
-                                    <th>Contact (Email &amp; Phone)</th>
-                                    <th>National ID</th>
-                                    <th>College &amp; Program</th>
-                                    <th>Source</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="students-table-body">
-                                <!-- Data will be populated here -->
-                            </tbody>
-                        </table>
                     </div>
                 </div>
             </section>
@@ -1575,65 +1552,6 @@
         </div>
     </div>
 
-
-    <!-- Add/Edit Student Modal -->
-    <div id="modal-student" class="modal hidden" style="z-index: 10025;">
-        <div class="modal-content glass-card" style="max-width: 600px;">
-            <div class="modal-header">
-                <h2 id="modal-student-title">Add Student</h2>
-                <button class="btn-close" onclick="document.getElementById('modal-student').classList.add('hidden')"><i data-lucide="x"></i></button>
-            </div>
-            <div class="modal-body">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem;">
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Student ID *</label>
-                        <input type="text" id="stu-modal-id" class="input-text" placeholder="e.g. 221001234">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>National ID / Passport</label>
-                        <input type="text" id="stu-modal-national-id" class="input-text" placeholder="14-digit National ID">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Full Name (English) *</label>
-                        <input type="text" id="stu-modal-name" class="input-text" placeholder="Student Full Name">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Arabic Name</label>
-                        <input type="text" id="stu-modal-arabic-name" class="input-text" placeholder="الاسم بالعربية">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Email</label>
-                        <input type="email" id="stu-modal-email" class="input-text" placeholder="student@nu.edu.eg">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Mobile Phone</label>
-                        <input type="text" id="stu-modal-mobile" class="input-text" placeholder="010XXXXXXXX">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Guardian Name</label>
-                        <input type="text" id="stu-modal-guardian-name" class="input-text" placeholder="Optional">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Guardian Mobile</label>
-                        <input type="text" id="stu-modal-guardian-mobile" class="input-text" placeholder="010XXXXXXXX">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>College</label>
-                        <input type="text" id="stu-modal-college" class="input-text" list="datalist-student-colleges" placeholder="e.g. Engineering and Applied Sciences">
-                        <datalist id="datalist-student-colleges"></datalist>
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>Program / Major</label>
-                        <input type="text" id="stu-modal-program" class="input-text" placeholder="e.g. Computer Science">
-                    </div>
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.25rem;">
-                    <button type="button" class="btn btn-outline" onclick="document.getElementById('modal-student').classList.add('hidden')">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="btn-save-student">Save Student</button>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- Add/Edit Link Modal -->
     <div id="modal-link" class="modal hidden">
