@@ -628,7 +628,11 @@ class App {
                 if (tabId === 'history') this.loadHistory();
                 if (tabId === 'payment-links') this.loadPaymentLinks();
                 if (tabId === 'erp-export') this.loadErpExport();
-                if (tabId === 'student-master') this.loadStudents();
+                if (tabId === 'student-master') {
+                    document.getElementById('inline-student-profile')?.classList.add('hidden');
+                    document.getElementById('student-directory-view')?.classList.remove('hidden');
+                    this.loadStudents({ skipAutoProfile: true });
+                }
             });
         });
     }
@@ -3940,6 +3944,62 @@ class App {
             });
         }
 
+        const btnAddStudent = document.getElementById('btn-add-student');
+        if (btnAddStudent) {
+            btnAddStudent.addEventListener('click', () => this.openStudentModal());
+        }
+
+        const btnSaveStudent = document.getElementById('btn-save-student');
+        if (btnSaveStudent) {
+            btnSaveStudent.addEventListener('click', async () => {
+                const rawSid = document.getElementById('stu-modal-id')?.value.trim();
+                const fullName = document.getElementById('stu-modal-name')?.value.trim();
+                if (!rawSid || !fullName) {
+                    Toast.show('Student ID and Full Name are required.', 'warning');
+                    return;
+                }
+
+                const normSid = this.normalizeStudentId(rawSid);
+                const payload = {
+                    student_id: normSid,
+                    full_name: fullName,
+                    arabic_name: document.getElementById('stu-modal-arabic-name')?.value.trim() || null,
+                    national_id: document.getElementById('stu-modal-national-id')?.value.trim() || null,
+                    email: document.getElementById('stu-modal-email')?.value.trim() || null,
+                    mobile: document.getElementById('stu-modal-mobile')?.value.trim() || null,
+                    guardian_name: document.getElementById('stu-modal-guardian-name')?.value.trim() || null,
+                    guardian_mobile: document.getElementById('stu-modal-guardian-mobile')?.value.trim() || null,
+                    college: document.getElementById('stu-modal-college')?.value.trim() || null,
+                    program: document.getElementById('stu-modal-program')?.value.trim() || null,
+                    source: 'Manual'
+                };
+
+                try {
+                    btnSaveStudent.disabled = true;
+                    const existing = (this.allStudentsData || []).find(s => String(s.student_id) === String(normSid));
+                    if (existing && existing.source && existing.source !== 'Manual' && !existing.source.includes('Manual')) {
+                        payload.source = `${existing.source}, Manual`;
+                    }
+
+                    const { error } = await supabase.from('student_master').upsert([payload], { onConflict: 'student_id' });
+                    if (error) throw error;
+
+                    await this.logAudit(existing ? 'UPDATE' : 'CREATE', 'student_master', normSid, existing || null, payload);
+                    Toast.show(existing ? `Updated student ${normSid}` : `Added student ${normSid}`, 'success');
+                    document.getElementById('modal-student')?.classList.add('hidden');
+
+                    await this.loadStudents({ forceReload: true, skipAutoProfile: true });
+                    if (this.currentProfileSid && String(this.normalizeStudentId(this.currentProfileSid)) === String(normSid)) {
+                        this.loadStudentProfile(normSid);
+                    }
+                } catch (err) {
+                    Toast.show('Error saving student: ' + err.message, 'error');
+                } finally {
+                    btnSaveStudent.disabled = false;
+                }
+            });
+        }
+
         document.getElementById('btn-export-students')?.addEventListener('click', async () => {
             try {
                 Toast.show("Preparing export...", "info");
@@ -4066,11 +4126,53 @@ class App {
                 if (collegeSelect) collegeSelect.value = '';
                 if (sourceSelect) sourceSelect.value = '';
                 document.getElementById('inline-student-profile')?.classList.add('hidden');
+                document.getElementById('student-directory-view')?.classList.remove('hidden');
                 this.currentProfileSid = null;
                 this.studentsCurrentPage = 1;
                 this.loadStudents({ skipAutoProfile: true });
             });
         }
+
+        document.getElementById('btn-close-student-profile')?.addEventListener('click', () => {
+            document.getElementById('inline-student-profile')?.classList.add('hidden');
+            document.getElementById('student-directory-view')?.classList.remove('hidden');
+            this.currentProfileSid = null;
+        });
+
+        document.getElementById('btn-edit-profile-student')?.addEventListener('click', () => {
+            if (!this.currentProfileSid) return;
+            const st = this.currentProfileStudent || (this.allStudentsData || []).find(s => String(s.student_id) === String(this.currentProfileSid));
+            this.openStudentModal(st || { student_id: this.currentProfileSid });
+        });
+
+        document.getElementById('btn-export-student-statement')?.addEventListener('click', () => {
+            this.exportStudentStatement();
+        });
+
+        document.getElementById('btn-delete-profile-student')?.addEventListener('click', async () => {
+            const sid = this.currentProfileSid;
+            if (!sid) return;
+            const st = this.currentProfileStudent || (this.allStudentsData || []).find(s => String(s.student_id) === String(sid));
+            const confirmed = await ConfirmModal.show({
+                title: 'Delete Student Record',
+                message: `Are you sure you want to delete student "${st?.full_name || sid}" (${sid}) from the master directory?`,
+                confirmText: 'Delete Student',
+                type: 'danger'
+            });
+            if (!confirmed) return;
+            try {
+                const { error } = await supabase.from('student_master').delete().eq('student_id', sid);
+                if (error) throw error;
+                await this.logAudit('DELETE', 'student_master', sid, st || { student_id: sid }, null);
+                Toast.show(`Deleted student ${sid}`, 'success');
+                document.getElementById('inline-student-profile')?.classList.add('hidden');
+                document.getElementById('student-directory-view')?.classList.remove('hidden');
+                this.currentProfileSid = null;
+                await this.loadStudents({ forceReload: true, skipAutoProfile: true });
+            } catch (err) {
+                Toast.show('Failed to delete student: ' + err.message, 'error');
+            }
+        });
 
         const dropzone = document.getElementById('student-upload-zone');
         const fileInput = document.getElementById('student-file-input');
@@ -6437,6 +6539,52 @@ class App {
         }
     }
 
+    openStudentModal(student = null) {
+        const modal = document.getElementById('modal-student');
+        if (!modal) return;
+        const titleEl = document.getElementById('modal-student-title');
+        const idInput = document.getElementById('stu-modal-id');
+
+        if (student) {
+            if (titleEl) titleEl.textContent = `Edit Student (${student.student_id})`;
+            if (idInput) {
+                idInput.value = student.student_id || '';
+                idInput.readOnly = true;
+                idInput.style.opacity = '0.75';
+            }
+            const setVal = (id, v) => {
+                const el = document.getElementById(id);
+                if (el) el.value = v || '';
+            };
+            setVal('stu-modal-national-id', student.national_id);
+            setVal('stu-modal-name', student.full_name);
+            setVal('stu-modal-arabic-name', student.arabic_name);
+            setVal('stu-modal-email', student.email);
+            setVal('stu-modal-mobile', student.mobile);
+            setVal('stu-modal-guardian-name', student.guardian_name);
+            setVal('stu-modal-guardian-mobile', student.guardian_mobile);
+            setVal('stu-modal-college', student.college);
+            setVal('stu-modal-program', student.program);
+        } else {
+            if (titleEl) titleEl.textContent = 'Add Student Record';
+            if (idInput) {
+                idInput.value = '';
+                idInput.readOnly = false;
+                idInput.style.opacity = '1';
+            }
+            [
+                'stu-modal-national-id', 'stu-modal-name', 'stu-modal-arabic-name',
+                'stu-modal-email', 'stu-modal-mobile', 'stu-modal-guardian-name',
+                'stu-modal-guardian-mobile', 'stu-modal-college', 'stu-modal-program'
+            ].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+        }
+        modal.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
+
     async loadStudents({ forceReload = false, skipAutoProfile = false } = {}) {
         const tbody = document.getElementById('students-table-body');
         try {
@@ -6538,6 +6686,11 @@ class App {
                 sortedColleges.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
             collegeSelect.value = currentVal;
         }
+
+        const datalist = document.getElementById('datalist-student-colleges');
+        if (datalist) {
+            datalist.innerHTML = sortedColleges.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
+        }
     }
 
     renderStudentsPage() {
@@ -6617,8 +6770,10 @@ class App {
                 if (!this.currentProfileSid) return;
                 
                 const profileContent = document.getElementById('inline-student-profile').cloneNode(true);
-                const printBtnClone = profileContent.querySelector('#btn-print-profile');
-                if (printBtnClone) printBtnClone.remove();
+                ['.header', '#student-profile-header'].forEach(sel => {
+                    const el = profileContent.querySelector(sel);
+                    if (el) el.remove();
+                });
 
                 const st = this.currentProfileStudent || {};
                 let name = st.full_name || st.name || '-';
@@ -6656,8 +6811,8 @@ class App {
                             h1 { font-size: 1.5rem; text-align: center; margin-bottom: 0.2rem; }
                             h2 { font-size: 1.2rem; text-align: center; color: #555; margin-bottom: 2rem; font-weight: normal; }
                             .header-info { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid #ddd; }
-                            table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: 0.9rem; }
-                            th, td { padding: 0.75rem; border: 1px solid #ddd; text-align: left; }
+                            table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: 0.85rem; }
+                            th, td { padding: 0.65rem; border: 1px solid #ddd; text-align: left; }
                             th { background-color: #f5f5f5; font-weight: 600; }
                             td { background-color: #fff; }
                             .text-right { text-align: right; }
@@ -6697,10 +6852,18 @@ class App {
 
     async loadStudentProfile(sid) {
         this.currentProfileSid = sid;
+        this.currentProfileTransactions = [];
         try {
-            document.getElementById('inline-student-profile').classList.remove('hidden');
+            document.getElementById('student-directory-view')?.classList.add('hidden');
+            const profileContainer = document.getElementById('inline-student-profile');
+            if (profileContainer) {
+                profileContainer.classList.remove('hidden');
+            }
+            if (window.lucide) lucide.createIcons();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
             document.getElementById('student-summary-body').innerHTML = '';
-            document.getElementById('student-ledger-body').innerHTML = '';
+            document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 1.5rem; color: var(--text-muted);">Loading payment history...</td></tr>';
 
             const normSid = this.normalizeStudentId(sid);
             const sidVariants = Array.from(new Set([
@@ -6709,33 +6872,105 @@ class App {
                 /^\d+$/.test(normSid) && normSid.length < 9 ? normSid.padStart(9, '0') : null
             ].filter(Boolean)));
 
-            // Fetch student profile record from student_master
-            const { data: students } = await supabase.from('student_master')
-                .select('*')
-                .in('student_id', sidVariants)
-                .limit(1);
-            this.currentProfileStudent = (students && students[0]) || null;
+            // Fetch student profile record from cache or student_master
+            let st = (this.allStudentsData || []).find(s => sidVariants.includes(String(s.student_id)));
+            if (!st) {
+                const { data: students } = await supabase.from('student_master')
+                    .select('*')
+                    .in('student_id', sidVariants)
+                    .limit(1);
+                st = (students && students[0]) || null;
+            }
+            this.currentProfileStudent = st;
 
             // Fetch Transactions using fetchAll pagination
             const txs = await fetchAll('transactions', '*', q => q.in('student_id', sidVariants).order('payment_date', { ascending: false }), 'payment_date');
+            this.currentProfileTransactions = txs || [];
+
+            let totalPaid = 0;
+            (this.currentProfileTransactions || []).forEach(t => {
+                totalPaid += parseFloat(t.item_price || 0) || 0;
+            });
+
+            const headerEl = document.getElementById('student-profile-header');
+            if (headerEl) {
+                const name = st?.full_name || 'Student Record';
+                const arabicName = st?.arabic_name || '';
+                const college = st?.college || '-';
+                const program = st?.program || '-';
+                const email = st?.email || '-';
+                const mobile = st?.mobile || '-';
+                const natId = st?.national_id || '-';
+                const guardian = st?.guardian_name ? `${st.guardian_name}${st.guardian_mobile ? ` (${st.guardian_mobile})` : ''}` : '-';
+                const src = st?.source || 'Master';
+
+                headerEl.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+                        <div style="flex: 1; min-width: 260px;">
+                            <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+                                <h3 style="margin: 0; font-size: 1.25rem; color: var(--text-main);">${escapeHTML(name)}</h3>
+                                <span class="badge" style="background: rgba(99,102,241,0.15); color: var(--primary); font-family: monospace; font-size: 0.85rem; font-weight: 700;">ID: ${escapeHTML(sid)}</span>
+                                <span class="badge" style="background: rgba(16,185,129,0.14); color: #10b981; font-size: 0.75rem;">${escapeHTML(src)}</span>
+                            </div>
+                            ${arabicName ? `<div style="font-size: 0.92rem; color: var(--text-muted); margin-top: 0.3rem;">${escapeHTML(arabicName)}</div>` : ''}
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.6rem 1.5rem; margin-top: 1rem; font-size: 0.85rem; color: var(--text-secondary);">
+                                <div><strong style="color: var(--text-muted);">College:</strong> ${escapeHTML(college)}</div>
+                                <div><strong style="color: var(--text-muted);">Program:</strong> ${escapeHTML(program)}</div>
+                                <div><strong style="color: var(--text-muted);">Email:</strong> ${escapeHTML(email)}</div>
+                                <div><strong style="color: var(--text-muted);">Mobile:</strong> ${escapeHTML(mobile)}</div>
+                                <div><strong style="color: var(--text-muted);">National ID:</strong> ${escapeHTML(natId)}</div>
+                                <div><strong style="color: var(--text-muted);">Guardian:</strong> ${escapeHTML(guardian)}</div>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 1rem; align-items: center; background: var(--bg-secondary); padding: 0.85rem 1.25rem; border-radius: 10px; border: 1px solid var(--border-color);">
+                            <div style="text-align: right;">
+                                <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Total Paid</div>
+                                <div style="font-size: 1.35rem; font-weight: 700; color: #10b981;">${formatMoney(totalPaid)} EGP</div>
+                                <div style="font-size: 0.78rem; color: var(--text-muted);">${this.currentProfileTransactions.length} transaction(s)</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
 
             if (!txs || txs.length === 0) {
-                document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem;">No payments found for this student.</td></tr>';
-                document.getElementById('student-summary-body').innerHTML = '<tr><td colspan="2" style="text-align: center; padding: 1rem;">No data</td></tr>';
+                document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem; color: var(--text-muted);">No payments found for this student.</td></tr>';
+                document.getElementById('student-summary-body').innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 1rem; color: var(--text-muted);">No payment categories</td></tr>';
                 return;
             }
 
-            // Render Ledger using formatMoney()
-            document.getElementById('student-ledger-body').innerHTML = txs.map(t => {
+            const ledgerBody = document.getElementById('student-ledger-body');
+            ledgerBody.innerHTML = txs.map((t, idx) => {
+                const settledBadge = t.is_settled
+                    ? `<span class="badge badge-success" style="font-size:0.7rem;">Settled</span>`
+                    : `<span class="badge" style="background:rgba(148,163,184,0.15);color:var(--text-muted);font-size:0.7rem;">Unsettled</span>`;
                 return `
                 <tr>
-                    <td>${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
-                    <td>${escapeHTML(t.reference_number)}</td>
-                    <td>${escapeHTML(t.item_name)}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
+                    <td>
+                        <a href="#" class="student-ledger-ref-link" data-idx="${idx}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction">
+                            ${escapeHTML(t.reference_number || '-')}
+                        </a>
+                    </td>
+                    <td>${escapeHTML(t.item_name || '-')}</td>
                     <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
-                    <td style="text-align: right; font-weight: 500;">${formatMoney(t.item_price || 0)}</td>
+                    <td>${escapeHTML(t.second_mapping || '-')}</td>
+                    <td>${t.bank_Style ? `<span style="font-size:0.78rem; margin-right:4px;">${escapeHTML(t.bank_Style)}</span>` : ''}${settledBadge}</td>
+                    <td style="text-align: right; font-weight: 600;">${formatMoney(t.item_price || 0)}</td>
                 </tr>
-            `}).join('');
+            `;
+            }).join('');
+
+            ledgerBody.querySelectorAll('.student-ledger-ref-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const idx = parseInt(link.getAttribute('data-idx'), 10);
+                    const tx = this.currentProfileTransactions[idx];
+                    if (tx && typeof this.openTransactionDetailsModal === 'function') {
+                        this.openTransactionDetailsModal(tx);
+                    }
+                });
+            });
 
             // Calculate Summary Grouped by Mapping
             const summary = {};
@@ -6743,29 +6978,93 @@ class App {
             txs.forEach(t => {
                 const mapKey = t.mapping || 'Unmapped';
                 const amt = parseFloat(t.item_price || 0) || 0;
-                if (!summary[mapKey]) summary[mapKey] = 0;
-                summary[mapKey] += amt;
+                if (!summary[mapKey]) summary[mapKey] = { count: 0, amount: 0 };
+                summary[mapKey].count += 1;
+                summary[mapKey].amount += amt;
                 total += amt;
             });
 
             const summaryHtml = Object.keys(summary).sort().map(k => `
                 <tr>
                     <td><strong>${escapeHTML(k)}</strong></td>
-                    <td style="text-align: right;">${formatMoney(summary[k])}</td>
+                    <td style="text-align: center;">${summary[k].count}</td>
+                    <td style="text-align: right; font-weight: 500;">${formatMoney(summary[k].amount)}</td>
                 </tr>
             `).join('');
             
             document.getElementById('student-summary-body').innerHTML = summaryHtml + `
                 <tr style="background-color: var(--bg-secondary);">
                     <td><strong>Grand Total</strong></td>
-                    <td style="text-align: right; font-size: 1.1rem; font-weight: 700;">${formatMoney(total)} EGP</td>
+                    <td style="text-align: center;"><strong>${txs.length}</strong></td>
+                    <td style="text-align: right; font-size: 1.05rem; font-weight: 700; color: #10b981;">${formatMoney(total)} EGP</td>
                 </tr>
             `;
 
         } catch (err) {
             Toast.show('Error loading profile: ' + err.message, 'error');
-            document.getElementById('inline-student-profile').classList.add('hidden');
+            document.getElementById('inline-student-profile')?.classList.add('hidden');
+            document.getElementById('student-directory-view')?.classList.remove('hidden');
         }
+    }
+
+    exportStudentStatement() {
+        if (!this.currentProfileSid) {
+            Toast.show('Select a student first to export their statement.', 'warning');
+            return;
+        }
+        const st = this.currentProfileStudent || {};
+        const txs = this.currentProfileTransactions || [];
+        const sid = this.currentProfileSid;
+
+        const ledgerRows = txs.map(t => ({
+            'Payment Date': toDateOnly(t.payment_date) || '',
+            'Reference Number': t.reference_number || '',
+            'Student ID': t.student_id || sid,
+            'Student Name': t.full_name || st.full_name || '',
+            'Item Name': t.item_name || '',
+            'Mapping': t.mapping || 'Unmapped',
+            '2nd Mapping': t.second_mapping || '',
+            'Bank': t.bank_Style || '',
+            'Settled': t.is_settled ? 'Yes' : 'No',
+            'Amount (EGP)': Number(parseFloat(t.item_price || 0).toFixed(2))
+        }));
+
+        const summaryMap = {};
+        let grandTotal = 0;
+        txs.forEach(t => {
+            const k = t.mapping || 'Unmapped';
+            const amt = parseFloat(t.item_price || 0) || 0;
+            if (!summaryMap[k]) summaryMap[k] = { count: 0, total: 0 };
+            summaryMap[k].count++;
+            summaryMap[k].total += amt;
+            grandTotal += amt;
+        });
+
+        const summaryRows = Object.keys(summaryMap).sort().map(k => ({
+            'Mapping Category': k,
+            'Transactions': summaryMap[k].count,
+            'Total Amount (EGP)': Number(summaryMap[k].total.toFixed(2))
+        }));
+        summaryRows.push({
+            'Mapping Category': 'Grand Total',
+            'Transactions': txs.length,
+            'Total Amount (EGP)': Number(grandTotal.toFixed(2))
+        });
+
+        const wb = XLSX.utils.book_new();
+        const wsLedger = XLSX.utils.json_to_sheet(ledgerRows.length ? ledgerRows : [{ 'Note': 'No payments recorded for this student' }]);
+        wsLedger['!cols'] = [
+            { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 26 },
+            { wch: 32 }, { wch: 22 }, { wch: 20 }, { wch: 16 },
+            { wch: 10 }, { wch: 16 }
+        ];
+        const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+        wsSummary['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 20 }];
+
+        XLSX.utils.book_append_sheet(wb, wsLedger, 'Statement of Payments');
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Category Summary');
+        XLSX.writeFile(wb, `Student_Statement_${sid}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        Toast.show(`Exported statement for ${sid}`, 'success');
     }
 
     renderFilterChips(table) {
