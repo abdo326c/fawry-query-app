@@ -646,8 +646,10 @@ class SettlementProcessor {
             this.btnMarkSettled.innerHTML = `<i data-lucide="check-square"></i> Mark Matched as Settled in DB (${unsettledMatchedCount.toLocaleString()})`;
         }
         if (this.btnMarkSettled) {
-            this.btnMarkSettled.disabled = unsettledMatchedCount === 0;
-            this.btnMarkSettled.style.opacity = unsettledMatchedCount === 0 ? '0.6' : '1';
+            const canSettle = window.app && typeof window.app.hasRole === 'function' ? window.app.hasRole('accountant') : true;
+            this.btnMarkSettled.style.display = canSettle ? '' : 'none';
+            this.btnMarkSettled.disabled = !canSettle || unsettledMatchedCount === 0;
+            this.btnMarkSettled.style.opacity = (!canSettle || unsettledMatchedCount === 0) ? '0.6' : '1';
         }
     }
 
@@ -868,6 +870,9 @@ class SettlementProcessor {
     }
 
     async markAsSettled() {
+        if (window.app && typeof window.app.requireRole === 'function') {
+            if (!window.app.requireRole('accountant', 'mark transactions as settled')) return;
+        }
         const matches = this.reconciliationResults.filter(r => r.status === 'Matched' && !r.is_settled);
         if (matches.length === 0) {
             Toast.show('No new matched transactions to mark as settled.', 'info');

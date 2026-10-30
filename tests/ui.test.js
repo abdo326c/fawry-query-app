@@ -175,4 +175,57 @@ test('App initializes and wires interactive buttons, modals, and pivot export lo
     expect(pivotBody.querySelector('.day-row').style.display).toBe('table-row');
     toggleBtn.click(); // Collapse all
     expect(pivotBody.querySelector('.day-row').style.display).toBe('none');
+
+    // RBAC 4-Tier Hierarchy & UI Permissions
+    // 1. Viewer (Level 1): Read-only + Excel exports, cannot import or fix or delete
+    window.app.userRole = 'viewer';
+    window.app.applyRolePermissionsToUI();
+    expect(window.app.hasRole('viewer')).toBe(true);
+    expect(window.app.hasRole('operator')).toBe(false);
+    expect(document.getElementById('user-role-badge').textContent).toBe('Viewer');
+    expect(document.getElementById('btn-show-import').style.display).toBe('none');
+    expect(document.getElementById('btn-add-fix').style.display).toBe('none');
+    expect(document.getElementById('btn-detect-duplicates').style.display).toBe('none');
+    expect(document.getElementById('nav-link-users').style.display).toBe('none');
+    // Viewer can still export to Excel across pages
+    expect(document.getElementById('btn-export').style.display).not.toBe('none');
+    expect(document.getElementById('btn-export-pivot').style.display).not.toBe('none');
+    expect(document.getElementById('btn-export-erp-file').style.display).not.toBe('none');
+
+    // 2. Operator (Level 2): Can import transactions/students/payment links, cannot add fixes/mappings or settle
+    window.app.userRole = 'operator';
+    window.app.applyRolePermissionsToUI();
+    expect(window.app.hasRole('operator')).toBe(true);
+    expect(window.app.hasRole('accountant')).toBe(false);
+    expect(document.getElementById('user-role-badge').textContent).toBe('Operator');
+    expect(document.getElementById('btn-show-import').style.display).toBe('');
+    expect(document.getElementById('btn-add-student').style.display).toBe('');
+    expect(document.getElementById('btn-add-link').style.display).toBe('');
+    expect(document.getElementById('btn-add-fix').style.display).toBe('none');
+    expect(document.getElementById('btn-mark-settled').style.display).toBe('none');
+    expect(document.getElementById('btn-record-erp').style.display).toBe('none');
+
+    // 3. Accountant (Level 3): Can add fixes/mappings, run automatcher, settle, record ERP; cannot delete/revert or manage users
+    window.app.userRole = 'accountant';
+    window.app.applyRolePermissionsToUI();
+    expect(window.app.hasRole('accountant')).toBe(true);
+    expect(window.app.hasRole('admin')).toBe(false);
+    expect(document.getElementById('user-role-badge').textContent).toBe('Accountant');
+    expect(document.getElementById('btn-add-fix').style.display).toBe('');
+    expect(document.getElementById('btn-add-mapping').style.display).toBe('');
+    expect(document.getElementById('btn-mark-settled').style.display).toBe('');
+    expect(document.getElementById('btn-record-erp').style.display).toBe('');
+    expect(document.getElementById('btn-detect-duplicates').style.display).toBe('none');
+    expect(document.getElementById('btn-dedup-mappings').style.display).toBe('none');
+    expect(document.getElementById('nav-link-users').style.display).toBe('none');
+
+    // 4. Primary Admin (Ammahmoud@nu.edu.eg -> Level 4 Admin): Full access including deletes, reverts & Users/Audit Log view
+    const resolvedRole = await window.app.fetchUserRole({ email: 'Ammahmoud@nu.edu.eg' });
+    expect(resolvedRole).toBe('admin');
+    window.app.applyRolePermissionsToUI();
+    expect(window.app.hasRole('admin')).toBe(true);
+    expect(document.getElementById('user-role-badge').textContent).toBe('Admin');
+    expect(document.getElementById('btn-detect-duplicates').style.display).toBe('');
+    expect(document.getElementById('btn-dedup-mappings').style.display).toBe('');
+    expect(document.getElementById('nav-link-users').style.display).toBe('flex');
 });

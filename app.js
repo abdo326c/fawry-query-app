@@ -109,6 +109,7 @@ window.Toast = Toast;
 class App {
     constructor() {
         this.currentUser = null;
+        this.userRole = 'viewer';
         this.currentPage = 1;
         this.pageSize = 10;
         
@@ -141,6 +142,7 @@ class App {
         this.initDashboard();
         this.initStudentMaster();
         this.initHistory();
+        this.initUsersAndRoles();
         this.initAuth();
     }
 
@@ -204,16 +206,150 @@ class App {
         });
     }
 
-    setupUser(user) {
+    getRoleLevel(role) {
+        const levels = { viewer: 1, operator: 2, accountant: 3, admin: 4 };
+        return levels[String(role || 'viewer').trim().toLowerCase()] || 1;
+    }
+
+    hasRole(minRole) {
+        return this.getRoleLevel(this.userRole) >= this.getRoleLevel(minRole);
+    }
+
+    requireRole(minRole, actionDesc = 'perform this action') {
+        if (this.hasRole(minRole)) return true;
+        const roleLabel = String(minRole).charAt(0).toUpperCase() + String(minRole).slice(1);
+        Toast.show(`Permission denied: ${roleLabel} role (or higher) is required to ${actionDesc}.`, 'warning');
+        return false;
+    }
+
+    async fetchUserRole(user) {
+        if (!user || !user.email) {
+            this.userRole = 'viewer';
+            return 'viewer';
+        }
+        const email = String(user.email).trim().toLowerCase();
+        if (email === 'ammahmoud@nu.edu.eg') {
+            this.userRole = 'admin';
+            try {
+                await supabase.from('user_roles').upsert({
+                    email: 'ammahmoud@nu.edu.eg',
+                    role: 'admin',
+                    updated_by: user.email,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'email' });
+            } catch (e) {
+                // ignore if table not migrated yet
+            }
+            return 'admin';
+        }
+        try {
+            const { data, error } = await supabase
+                .from('user_roles')
+                .select('role')
+                .ilike('email', email)
+                .maybeSingle();
+            if (!error && data && data.role) {
+                const r = String(data.role).trim().toLowerCase();
+                if (['viewer', 'operator', 'accountant', 'admin'].includes(r)) {
+                    this.userRole = r;
+                    return r;
+                }
+            }
+        } catch (err) {
+            console.warn('Could not fetch user role, defaulting to viewer:', err.message);
+        }
+        this.userRole = 'viewer';
+        return 'viewer';
+    }
+
+    applyRolePermissionsToUI() {
+        const role = String(this.userRole || 'viewer').toLowerCase();
+        const badgeEl = document.getElementById('user-role-badge');
+        if (badgeEl) {
+            const roleMeta = {
+                admin: { label: 'Admin', bg: 'rgba(168, 85, 247, 0.15)', color: '#a855f7', border: 'rgba(168, 85, 247, 0.35)' },
+                accountant: { label: 'Accountant', bg: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: 'rgba(16, 185, 129, 0.35)' },
+                operator: { label: 'Operator', bg: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: 'rgba(56, 189, 248, 0.35)' },
+                viewer: { label: 'Viewer', bg: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-muted)', border: 'rgba(148, 163, 184, 0.3)' }
+            };
+            const meta = roleMeta[role] || roleMeta.viewer;
+            badgeEl.textContent = meta.label;
+            badgeEl.style.background = meta.bg;
+            badgeEl.style.color = meta.color;
+            badgeEl.style.borderColor = meta.border;
+        }
+
+        const navUsers = document.getElementById('nav-link-users');
+        if (navUsers) {
+            navUsers.style.display = this.hasRole('admin') ? 'flex' : 'none';
+        }
+
+        const setElVisible = (id, visible) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.style.display = visible ? '' : 'none';
+            const wrapper = el.closest('label.upload-btn-wrapper');
+            if (wrapper) wrapper.style.display = visible ? '' : 'none';
+        };
+
+        const isOperator = this.hasRole('operator');
+        const isAccountant = this.hasRole('accountant');
+        const isAdmin = this.hasRole('admin');
+
+        // Operator+ controls (Imports, Student Master Add/Edit/Upload, Payment Links Create/Edit/Import)
+        [
+            'btn-show-import',
+            'btn-toggle-student-import',
+            'btn-add-student',
+            'btn-edit-profile-student',
+            'btn-add-link',
+            'btn-import-links',
+            'btn-template-links'
+        ].forEach(id => setElVisible(id, isOperator));
+
+        // Accountant+ controls (Mappings, Manual Fixes, Auto-Matcher apply, Re-apply rules, Settlement mark, ERP record)
+        [
+            'btn-reapply-rules',
+            'btn-apply-reapply-fixes',
+            'btn-add-mapping',
+            'btn-save-mapping',
+            'file-upload-mappings',
+            'btn-add-fix',
+            'btn-save-fix',
+            'file-upload-fixes',
+            'btn-select-high-confidence',
+            'btn-apply-automatch-fixes',
+            'btn-confirm-automatch',
+            'btn-mark-settled',
+            'btn-record-erp'
+        ].forEach(id => setElVisible(id, isAccountant));
+
+        // Admin-only controls (Duplicate cleanup, Deduplication, User Role management)
+        [
+            'btn-detect-duplicates',
+            'btn-cleanup-duplicates',
+            'btn-dedup-mappings',
+            'btn-dedup-fixes',
+            'btn-save-user-role'
+        ].forEach(id => setElVisible(id, isAdmin));
+    }
+
+    async setupUser(user) {
         this.currentUser = user;
         document.getElementById('auth-overlay').classList.add('hidden');
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
+        await this.fetchUserRole(user);
+        this.applyRolePermissionsToUI();
         this.fetchUniqueFilters();
         this.loadTransactions();
         this.updateSidebarBadges();
-        this.stripDatabaseTransactionTimes();
-        this.deduplicateItemMappings({ silent: true });
+        if (this.hasRole('operator')) {
+            this.stripDatabaseTransactionTimes();
+        }
+        if (this.hasRole('admin')) {
+            this.deduplicateItemMappings({ silent: true });
+        }
         // ERP Export data is loaded when that tab is opened (see initNavigation)
         this.initRealtime();
     }
@@ -634,6 +770,9 @@ class App {
                     document.getElementById('inline-student-profile')?.classList.add('hidden');
                     document.getElementById('student-directory-view')?.classList.remove('hidden');
                     this.loadStudents({ skipAutoProfile: true });
+                }
+                if (tabId === 'users') {
+                    this.loadUsersAndRoles();
                 }
             });
         });
@@ -1726,13 +1865,29 @@ class App {
         if (error) console.warn('Could not record import history:', error.message);
     }
 
-    async logAudit(action, affected, details) {
+    async logAudit(action, affected, details, oldData, newData) {
         if (!this.currentUser) return;
+        let payloadDetails = details;
+        let affectedRef = affected;
+        if (oldData !== undefined || newData !== undefined) {
+            affectedRef = `${affected}:${details || ''}`;
+            payloadDetails = {
+                table: affected,
+                record_id: details,
+                before: oldData,
+                after: newData,
+                user_role: this.userRole || 'viewer'
+            };
+        } else if (payloadDetails && typeof payloadDetails === 'object' && !Array.isArray(payloadDetails)) {
+            payloadDetails = { ...payloadDetails, user_role: this.userRole || 'viewer' };
+        } else {
+            payloadDetails = { value: payloadDetails, user_role: this.userRole || 'viewer' };
+        }
         const { error } = await supabase.from('audit_logs').insert({
             user_email: this.currentUser.email,
             action,
-            affected_references: affected,
-            details
+            affected_references: affectedRef,
+            details: payloadDetails
         });
         if (error) console.warn('Audit log failed:', error.message);
     }
@@ -3663,9 +3818,10 @@ class App {
                 : '';
 
             const origItem = normalizeItemName(originalItemName(t)) || normalizeItemName(t.item_name) || '';
+            const canEditRules = this.hasRole('accountant');
             const mappingCell = t.mapping
                 ? escapeHTML(t.mapping)
-                : (origItem
+                : (origItem && canEditRules
                     ? `<button type="button" class="btn btn-outline btn-sm" data-quick-map-item="${escapeHTML(origItem)}" title="Map '${escapeHTML(origItem)}'" style="padding: 0.12rem 0.45rem; font-size: 0.72rem; color: var(--warning); border-color: rgba(245, 158, 11, 0.4);">+ Map</button>`
                     : '-');
 
@@ -3683,9 +3839,9 @@ class App {
                         <div style="display: inline-flex; flex-direction: column; align-items: flex-start;">
                             <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
                                 <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
-                                <button type="button" class="btn btn-icon" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}" style="padding: 0.15rem 0.3rem; opacity: ${statusClass === 'valid' ? '0.55' : '1'};">
+                                ${canEditRules ? `<button type="button" class="btn btn-icon" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}" style="padding: 0.15rem 0.3rem; opacity: ${statusClass === 'valid' ? '0.55' : '1'};">
                                     <i data-lucide="wrench" style="width: 13px; height: 13px;"></i>
-                                </button>
+                                </button>` : ''}
                             </div>
                             ${errorDetail}
                         </div>
@@ -3807,12 +3963,13 @@ class App {
             </div>
 
             <div style="display: flex; justify-content: flex-end; gap: 0.65rem; flex-wrap: wrap;">
+                ${this.hasRole('accountant') ? `
                 <button type="button" class="btn btn-outline" id="btn-tx-detail-map">
                     <i data-lucide="layers" style="width: 14px; height: 14px;"></i> Map Item
                 </button>
                 <button type="button" class="btn btn-primary" id="btn-tx-detail-fix">
                     <i data-lucide="wrench" style="width: 14px; height: 14px;"></i> Manual Fix
-                </button>
+                </button>` : ''}
                 <button type="button" class="btn btn-outline" onclick="document.getElementById('modal-tx-details').classList.add('hidden')">Close</button>
             </div>
         `;
@@ -3868,7 +4025,9 @@ class App {
             tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
         }
         try {
-            await this.deduplicateItemMappings({ silent: true });
+            if (this.hasRole('admin')) {
+                await this.deduplicateItemMappings({ silent: true });
+            }
             const allData = await fetchAll('item_mappings', '*', null, 'item_name');
             this.allMappingsData = allData;
             this.mappingsPage = 1;
@@ -3959,6 +4118,7 @@ class App {
                 return;
             }
 
+            const canEditMappings = this.hasRole('accountant');
             tbody.innerHTML = items.map(item => `
                 <tr>
                     <td><strong>${escapeHTML(item.originalName)}</strong></td>
@@ -3966,9 +4126,9 @@ class App {
                     <td>${item.count.toLocaleString()}</td>
                     <td>EGP ${formatMoney(item.totalAmount)}</td>
                     <td>
-                        <button type="button" class="btn btn-primary btn-sm" data-quick-map="${escapeHTML(item.originalName)}">
+                        ${canEditMappings ? `<button type="button" class="btn btn-primary btn-sm" data-quick-map="${escapeHTML(item.originalName)}">
                             <i data-lucide="plus" style="width: 12px; height: 12px;"></i> Map Item
-                        </button>
+                        </button>` : '<span style="color: var(--text-muted); font-size: 0.78rem;">View Only</span>'}
                     </td>
                 </tr>
             `).join('');
@@ -4037,6 +4197,8 @@ class App {
         const startIdx = (this.mappingsPage - 1) * pageSize;
         const pageData = filteredData.slice(startIdx, startIdx + pageSize);
 
+        const canEditMapping = this.hasRole('accountant');
+        const canDeleteMapping = this.hasRole('admin');
         tbody.innerHTML = pageData.map(m => `
             <tr>
                 <td><strong>${escapeHTML(m.item_name)}</strong></td>
@@ -4044,8 +4206,9 @@ class App {
                 <td>${m.mapping ? `<span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.25);">${escapeHTML(m.mapping)}</span>` : '<span style="color: var(--warning); font-size: 0.8rem;">Unmapped</span>'}</td>
                 <td>${escapeHTML(m.second_mapping) || '-'}</td>
                 <td style="white-space: nowrap;">
-                    <button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>
-                    <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>
+                    ${canEditMapping ? `<button class="btn btn-outline btn-sm" data-edit-mapping="${escapeHTML(m.item_name)}">Edit</button>` : ''}
+                    ${canDeleteMapping ? `<button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-mapping="${escapeHTML(m.item_name)}">Delete</button>` : ''}
+                    ${(!canEditMapping && !canDeleteMapping) ? '<span style="color: var(--text-muted); font-size: 0.78rem;">View Only</span>' : ''}
                 </td>
             </tr>
         `).join('');
@@ -4225,7 +4388,9 @@ class App {
             tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
         }
         try {
-            await this.deduplicateManualFixes({ silent: true });
+            if (this.hasRole('admin')) {
+                await this.deduplicateManualFixes({ silent: true });
+            }
             const allData = await fetchAll('manual_fixes', '*', null, 'reference_number');
             this.allFixesData = allData;
             this.fixesPage = 1;
@@ -4297,6 +4462,7 @@ class App {
                 return;
             }
 
+            const canEditFixes = this.hasRole('accountant');
             const displayItems = items.slice(0, 150);
             tbody.innerHTML = displayItems.map(t => {
                 const isMissing = t.id_status && t.id_status.includes('Missing');
@@ -4310,9 +4476,9 @@ class App {
                         <td style="max-width: 240px; white-space: normal; font-size: 0.82rem;">${escapeHTML(t.item_name || '-')}</td>
                         <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
                         <td>
-                            <button class="btn btn-primary btn-sm" data-fix-unresolved="${escapeHTML(t.reference_number)}">
+                            ${canEditFixes ? `<button class="btn btn-primary btn-sm" data-fix-unresolved="${escapeHTML(t.reference_number)}">
                                 <i data-lucide="wrench" style="width: 13px; height: 13px;"></i> Fix
-                            </button>
+                            </button>` : '<span style="color: var(--text-muted); font-size: 0.78rem;">View Only</span>'}
                         </td>
                     </tr>
                 `;
@@ -4383,6 +4549,8 @@ class App {
         const startIdx = (this.fixesPage - 1) * pageSize;
         const pageData = filteredData.slice(startIdx, startIdx + pageSize);
 
+        const canEditFix = this.hasRole('accountant');
+        const canDeleteFix = this.hasRole('admin');
         tbody.innerHTML = pageData.map(f => {
             const cid = f.correct_id ? String(f.correct_id).trim() : '';
             const idStatus = cid ? validateID(cid) : null;
@@ -4400,8 +4568,9 @@ class App {
                     <td>${ f.mapping ? `<span class="badge valid" style="background: rgba(16, 185, 129, 0.12); color: #10b981;">${escapeHTML(f.mapping)}</span>` : '-' }</td>
                     <td>${escapeHTML(f.second_mapping) || '-'}</td>
                     <td>
-                        <button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>
-                        <button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>
+                        ${canEditFix ? `<button class="btn btn-outline btn-sm" data-edit-fix="${escapeHTML(f.reference_number)}">Edit</button>` : ''}
+                        ${canDeleteFix ? `<button class="btn btn-outline btn-sm" style="color: var(--danger);" data-delete-fix="${escapeHTML(f.reference_number)}">Delete</button>` : ''}
+                        ${(!canEditFix && !canDeleteFix) ? '<span style="color: var(--text-muted); font-size: 0.78rem;">View Only</span>' : ''}
                     </td>
                 </tr>
             `;
@@ -4983,6 +5152,7 @@ class App {
             historyBody.addEventListener('click', async (e) => {
                 const btn = e.target.closest('.btn-revert-batch');
                 if (!btn) return;
+                if (!this.requireRole('admin', 'revert import batches')) return;
                 
                 const batchId = btn.getAttribute('data-batch-id');
                 const fileName = btn.getAttribute('data-file-name');
@@ -5057,7 +5227,7 @@ class App {
             tbody.innerHTML = data.map(b => {
                 const date = new Date(b.created_at).toLocaleString();
                 const type = b.details && b.details.type ? b.details.type : 'transactions';
-                const canRevert = type === 'transactions' && b.status !== 'reverted' && b.status !== 'failed' && b.status !== 'processing';
+                const canRevert = this.hasRole('admin') && type === 'transactions' && b.status !== 'reverted' && b.status !== 'failed' && b.status !== 'processing';
                 
                 let statusColor = 'var(--text-muted)';
                 if (b.status === 'success') statusColor = 'var(--success)';
@@ -6005,11 +6175,12 @@ class App {
                 </span>
             `;
 
-            const quickFixBtnHtml = `
+            const canApplyFixes = this.hasRole('accountant');
+            const quickFixBtnHtml = canApplyFixes ? `
                 <button type="button" class="btn btn-outline btn-sm" data-automatch-manual-fix="${escapeHTML(proposal.original_ref)}" data-proposed-sid="${escapeHTML(proposal.proposedStudent?.student_id || '')}" title="Open in Manual Fixes to inspect or override" style="padding: 0.15rem 0.45rem; font-size: 0.72rem; height: auto; display: inline-flex; align-items: center; gap: 3px;">
                     <i data-lucide="wrench" style="width: 11px; height: 11px;"></i> Fix
                 </button>
-            `;
+            ` : '';
 
             if (proposal.proposedStudent) {
                 let badgeStyle = '';
@@ -6024,7 +6195,7 @@ class App {
 
                 html += `
                     <tr>
-                        <td><input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" ${proposal.selected ? 'checked' : ''}></td>
+                        <td>${canApplyFixes ? `<input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" ${proposal.selected ? 'checked' : ''}>` : ''}</td>
                         <td style="font-family: monospace; font-weight: 500;">${escapeHTML(proposal.original_ref)}</td>
                         <td>${escapeHTML(proposal.original_date)}</td>
                         <td>${currentIdHtml}</td>
@@ -6838,15 +7009,17 @@ class App {
                                 <i data-lucide="share-2" style="width: 13px; height: 13px;"></i>
                             </button>
                             ${link.invoice_link ? `<a href="${escapeHTML(link.invoice_link)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" title="Open Payment Link in New Tab" style="padding: 0.25rem 0.45rem; font-size: 0.76rem; text-decoration: none;"><i data-lucide="external-link" style="width: 13px; height: 13px;"></i></a>` : ''}
+                            ${this.hasRole('operator') ? `
                             <button class="btn btn-outline btn-sm duplicate-link-btn" data-id="${escapeHTML(link.id)}" title="Duplicate / Renew Link" style="padding: 0.25rem 0.45rem; font-size: 0.76rem;">
                                 <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
                             </button>
                             <button class="btn btn-outline btn-sm edit-link-btn" data-id="${escapeHTML(link.id)}" title="Edit Link" style="padding: 0.25rem 0.45rem; font-size: 0.76rem;">
                                 <i data-lucide="edit-2" style="width: 13px; height: 13px;"></i>
-                            </button>
+                            </button>` : ''}
+                            ${this.hasRole('admin') ? `
                             <button class="btn btn-outline btn-sm delete-link-btn" style="color: var(--danger); padding: 0.25rem 0.45rem; font-size: 0.76rem;" data-id="${escapeHTML(link.id)}" title="Delete Link">
                                 <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i>
-                            </button>
+                            </button>` : ''}
                         </div>
                     </td>
                 </tr>
@@ -7300,21 +7473,22 @@ class App {
                    </div>`;
 
             let erpStatusHtml = '';
+            const canManageErp = this.hasRole('accountant');
             if (row.erp_batch_number) {
                 erpStatusHtml = `
                     <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
                         <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; font-size: 0.72rem;" title="${row.erp_voucher ? 'Voucher: ' + escapeHTML(row.erp_voucher) : 'Posted to ERP'}">
                             Batch: ${escapeHTML(row.erp_batch_number)}${row.erp_voucher ? ` (${escapeHTML(row.erp_voucher)})` : ''}
                         </span>
-                        <button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id)}" data-batch="${escapeHTML(row.erp_batch_number)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
+                        ${canManageErp ? `<button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id)}" data-batch="${escapeHTML(row.erp_batch_number)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
                             <i data-lucide="x" style="width: 13px; height: 13px;"></i>
-                        </button>
+                        </button>` : ''}
                     </div>`;
             } else if (!isValid) {
-                erpStatusHtml = `
+                erpStatusHtml = canManageErp ? `
                     <button type="button" class="btn btn-outline btn-sm erp-fix-row-btn" data-idx="${index}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px; color: var(--warning, #f59e0b); border-color: rgba(245, 158, 11, 0.4);">
                         <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> Fix ID
-                    </button>`;
+                    </button>` : `<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-size: 0.72rem;">Needs Fix</span>`;
             } else {
                 erpStatusHtml = `<span class="badge" style="background: rgba(16, 185, 129, 0.14); color: #10b981; font-size: 0.72rem;">Ready</span>`;
             }
@@ -7451,6 +7625,7 @@ class App {
         const validTransactions = rows.filter(row => !row.id_status || row.id_status === 'Valid');
 
         if (invalidTransactions.length > 0) {
+            const canFixErp = this.hasRole('accountant');
             const tbody = document.getElementById('erp-warning-table-body');
             tbody.innerHTML = invalidTransactions.map((t, idx) => `
                 <tr>
@@ -7459,9 +7634,9 @@ class App {
                     <td style="text-align: right; font-weight: 600;">${escapeHTML(formatMoney(this.erpAmount(t)))}</td>
                     <td><span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.74rem;">${escapeHTML(t.id_status)}</span></td>
                     <td style="text-align: right;">
-                        <button type="button" class="btn btn-outline btn-sm erp-modal-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px;">
+                        ${canFixErp ? `<button type="button" class="btn btn-outline btn-sm erp-modal-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px;">
                             <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> Fix
-                        </button>
+                        </button>` : '-'}
                     </td>
                 </tr>
             `).join('');
@@ -8437,6 +8612,232 @@ class App {
                 }
             }, 300);
         });
+    }
+
+    // ==========================================
+    // Users, Roles & Audit Log (Admin Only)
+    // ==========================================
+    initUsersAndRoles() {
+        this.allUserRoles = [];
+        this.allAuditLogs = [];
+
+        const btnSaveRole = document.getElementById('btn-save-user-role');
+        if (btnSaveRole) {
+            btnSaveRole.addEventListener('click', async () => {
+                if (!this.requireRole('admin', 'assign user roles')) return;
+                const emailInput = document.getElementById('role-user-email');
+                const roleSelect = document.getElementById('role-user-select');
+                const email = String(emailInput?.value || '').trim().toLowerCase();
+                const role = String(roleSelect?.value || 'viewer').trim().toLowerCase();
+
+                if (!email || !email.includes('@')) {
+                    Toast.show('Please enter a valid user email address.', 'warning');
+                    return;
+                }
+                if (email === 'ammahmoud@nu.edu.eg' && role !== 'admin') {
+                    Toast.show('Primary Admin (Ammahmoud@nu.edu.eg) must retain the Admin role.', 'warning');
+                    if (roleSelect) roleSelect.value = 'admin';
+                    return;
+                }
+
+                btnSaveRole.disabled = true;
+                try {
+                    const { error } = await supabase.from('user_roles').upsert({
+                        email,
+                        role,
+                        updated_by: this.currentUser?.email || 'Admin',
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'email' });
+                    if (error) throw error;
+
+                    await this.logAudit('User Role Assigned', email, { target_email: email, assigned_role: role });
+                    Toast.show(`Assigned ${role.toUpperCase()} role to ${email}`, 'success');
+                    if (emailInput) emailInput.value = '';
+                    if (this.currentUser && String(this.currentUser.email).toLowerCase() === email) {
+                        this.userRole = role;
+                        this.applyRolePermissionsToUI();
+                    }
+                    await this.loadUsersAndRoles();
+                } catch (err) {
+                    Toast.show('Error saving role: ' + err.message, 'error');
+                } finally {
+                    btnSaveRole.disabled = false;
+                }
+            });
+        }
+
+        const btnRefresh = document.getElementById('btn-refresh-users-roles');
+        if (btnRefresh) {
+            btnRefresh.addEventListener('click', () => this.loadUsersAndRoles());
+        }
+
+        const searchAudit = document.getElementById('audit-log-search');
+        if (searchAudit) {
+            searchAudit.addEventListener('input', () => this.renderAuditLogsTable());
+        }
+    }
+
+    async loadUsersAndRoles() {
+        if (!this.hasRole('admin')) {
+            Toast.show('Admin permission is required to view Users & Roles.', 'warning');
+            return;
+        }
+
+        const rolesTbody = document.getElementById('user-roles-table-body');
+        const auditTbody = document.getElementById('audit-logs-table-body');
+        if (rolesTbody) {
+            rolesTbody.innerHTML = '<tr><td colspan="4" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading user roles...</td></tr>';
+        }
+        if (auditTbody) {
+            auditTbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading audit log...</td></tr>';
+        }
+        if (window.lucide) lucide.createIcons();
+
+        try {
+            const { data: rolesData, error: rolesErr } = await supabase
+                .from('user_roles')
+                .select('*')
+                .order('updated_at', { ascending: false });
+            if (rolesErr) throw rolesErr;
+
+            const rows = Array.isArray(rolesData) ? [...rolesData] : [];
+            if (!rows.some(r => String(r.email || '').toLowerCase() === 'ammahmoud@nu.edu.eg')) {
+                rows.unshift({
+                    email: 'ammahmoud@nu.edu.eg',
+                    role: 'admin',
+                    updated_by: 'System Seed',
+                    updated_at: new Date().toISOString()
+                });
+            }
+            this.allUserRoles = rows;
+            this.renderUserRolesTable();
+        } catch (err) {
+            if (rolesTbody) {
+                rolesTbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger); text-align: center; padding: 1.25rem;">Could not load user_roles table (${escapeHTML(err.message)}). Run migration <code>2.3.0_user_roles_rbac.sql</code> in Supabase SQL Editor.</td></tr>`;
+            }
+        }
+
+        try {
+            const { data: logsData, error: logsErr } = await supabase
+                .from('audit_logs')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(200);
+            if (logsErr) throw logsErr;
+            this.allAuditLogs = logsData || [];
+            this.renderAuditLogsTable();
+        } catch (err) {
+            if (auditTbody) {
+                auditTbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center; padding: 1.25rem;">Error loading audit logs: ${escapeHTML(err.message)}</td></tr>`;
+            }
+        }
+    }
+
+    renderUserRolesTable() {
+        const tbody = document.getElementById('user-roles-table-body');
+        if (!tbody) return;
+        const rows = this.allUserRoles || [];
+        const countLabel = document.getElementById('user-roles-count-label');
+        if (countLabel) countLabel.textContent = `${rows.length} user${rows.length === 1 ? '' : 's'}`;
+        if (rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No custom roles configured.</td></tr>';
+            return;
+        }
+
+        const roleBadge = (r) => {
+            const rl = String(r || 'viewer').toLowerCase();
+            if (rl === 'admin') return '<span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.35);">Admin (L4)</span>';
+            if (rl === 'accountant') return '<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35);">Accountant (L3)</span>';
+            if (rl === 'operator') return '<span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35);">Operator (L2)</span>';
+            return '<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted); border: 1px solid rgba(148, 163, 184, 0.3);">Viewer (L1)</span>';
+        };
+
+        tbody.innerHTML = rows.map(r => {
+            const email = String(r.email || '').toLowerCase();
+            const isPrimaryAdmin = email === 'ammahmoud@nu.edu.eg';
+            const updatedStr = r.updated_at ? new Date(r.updated_at).toLocaleString() : '-';
+            return `
+                <tr>
+                    <td>
+                        <strong>${escapeHTML(r.email)}</strong>
+                        ${isPrimaryAdmin ? '<span class="badge" style="margin-left: 0.4rem; font-size: 0.68rem; background: rgba(168,85,247,0.12); color: #a855f7;">Primary Admin</span>' : ''}
+                    </td>
+                    <td>${roleBadge(r.role)}</td>
+                    <td style="font-size: 0.82rem; color: var(--text-muted);">
+                        ${escapeHTML(r.updated_by || 'System')} &bull; ${escapeHTML(updatedStr)}
+                    </td>
+                    <td style="text-align: right; white-space: nowrap;">
+                        <button type="button" class="btn btn-outline btn-sm" data-edit-user-role="${escapeHTML(email)}" data-role="${escapeHTML(r.role)}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem;">
+                            Edit
+                        </button>
+                        ${!isPrimaryAdmin ? `<button type="button" class="btn btn-outline btn-sm" data-delete-user-role="${escapeHTML(email)}" style="color: var(--danger); padding: 0.2rem 0.55rem; font-size: 0.76rem; margin-left: 0.3rem;">
+                            Reset to Viewer
+                        </button>` : ''}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('[data-edit-user-role]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const email = btn.getAttribute('data-edit-user-role');
+                const role = btn.getAttribute('data-role') || 'viewer';
+                const emailInput = document.getElementById('role-user-email');
+                const roleSelect = document.getElementById('role-user-select');
+                if (emailInput) {
+                    emailInput.value = email;
+                    emailInput.focus();
+                }
+                if (roleSelect) roleSelect.value = role;
+            });
+        });
+
+        tbody.querySelectorAll('[data-delete-user-role]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const email = btn.getAttribute('data-delete-user-role');
+                if (!email || email === 'ammahmoud@nu.edu.eg') return;
+                if (!await window.customConfirm(`Reset "${email}" back to default Viewer (read-only) role?`, 'Reset Role', 'Cancel')) return;
+                try {
+                    const { error } = await supabase.from('user_roles').delete().ilike('email', email);
+                    if (error) throw error;
+                    await this.logAudit('User Role Removed', email, { target_email: email, new_default_role: 'viewer' });
+                    Toast.show(`Reset ${email} to Viewer role`, 'info');
+                    await this.loadUsersAndRoles();
+                } catch (err) {
+                    Toast.show('Error removing role: ' + err.message, 'error');
+                }
+            });
+        });
+    }
+
+    renderAuditLogsTable() {
+        const tbody = document.getElementById('audit-logs-table-body');
+        if (!tbody) return;
+        const searchQ = (document.getElementById('audit-log-search')?.value || '').trim().toLowerCase();
+        const logs = (this.allAuditLogs || []).filter(log => {
+            if (!searchQ) return true;
+            const hay = `${log.user_email || ''} ${log.action || ''} ${log.affected_references || ''} ${JSON.stringify(log.details || {})}`.toLowerCase();
+            return hay.includes(searchQ);
+        });
+
+        if (logs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No matching audit log entries found.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = logs.map(log => {
+            const ts = log.created_at ? new Date(log.created_at).toLocaleString() : '-';
+            const detailsStr = log.details ? JSON.stringify(log.details) : '-';
+            return `
+                <tr>
+                    <td style="white-space: nowrap; font-size: 0.8rem; color: var(--text-muted);">${escapeHTML(ts)}</td>
+                    <td style="font-size: 0.84rem;"><strong>${escapeHTML(log.user_email || 'System')}</strong></td>
+                    <td><span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-size: 0.74rem;">${escapeHTML(log.action || '-')}</span></td>
+                    <td style="font-family: monospace; font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHTML(log.affected_references || '')}">${escapeHTML(log.affected_references || '-')}</td>
+                    <td style="font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHTML(detailsStr)}">${escapeHTML(detailsStr)}</td>
+                </tr>
+            `;
+        }).join('');
     }
 
 }

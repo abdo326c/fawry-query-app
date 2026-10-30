@@ -136,6 +136,9 @@
                 <a href="#erp-export" class="nav-link" data-tab="erp-export">
                     <i data-lucide="download-cloud"></i> ERP Export
                 </a>
+                <a href="#users" class="nav-link" data-tab="users" id="nav-link-users" style="display: none;">
+                    <i data-lucide="shield"></i> Users &amp; Roles
+                </a>
             </nav>
 
             <!-- User Profile & Logout -->
@@ -145,13 +148,16 @@
                 </div>
                 <div class="user-details-mini">
                     <div class="user-email-text" id="user-email-display" title="user@example.com">user@example.com</div>
-                    <div class="user-actions-mini">
-                        <button id="btn-theme-toggle" class="action-icon-btn" title="Toggle Theme">
-                            <i data-lucide="sun" id="theme-icon"></i>
-                        </button>
-                        <button id="btn-logout" class="action-icon-btn text-danger" title="Sign Out">
-                            <i data-lucide="log-out"></i>
-                        </button>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;">
+                        <span id="user-role-badge" class="badge" style="font-size: 0.65rem; padding: 0.1rem 0.45rem; text-transform: uppercase; letter-spacing: 0.04em; background: rgba(56, 189, 248, 0.15); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.3);">Viewer</span>
+                        <div class="user-actions-mini">
+                            <button id="btn-theme-toggle" class="action-icon-btn" title="Toggle Theme">
+                                <i data-lucide="sun" id="theme-icon"></i>
+                            </button>
+                            <button id="btn-logout" class="action-icon-btn text-danger" title="Sign Out">
+                                <i data-lucide="log-out"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1614,6 +1620,123 @@
                             <tr>
                                 <td colspan="9" class="text-center" style="color: var(--text-muted); padding: 2rem;">Upload Fawry settlement files to see reconciliation results.</td>
                             </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Users & Roles + Audit Log View (Admin Only) -->
+            <section id="view-users" class="view">
+                <div class="header">
+                    <div>
+                        <h1>Users, Roles &amp; Audit Log</h1>
+                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Manage 4-tier access permissions (Viewer, Operator, Accountant, Admin) and review system audit history</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-outline" id="btn-refresh-users-roles">
+                            <i data-lucide="refresh-cw"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Role Matrix Overview & Assign Role Form -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem;">
+                    <div class="glass-card" style="padding: 1.25rem;">
+                        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <i data-lucide="user-plus" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                            Assign or Update User Role
+                        </h3>
+                        <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">
+                            Enter a user's email address to assign their permission tier. Users not listed default to <strong>Viewer</strong>.
+                        </p>
+                        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end;">
+                            <div class="form-group" style="margin: 0; flex: 2; min-width: 200px;">
+                                <label style="font-size: 0.75rem;">User Email</label>
+                                <input type="email" id="role-user-email" class="input-text" placeholder="e.g. colleague@nu.edu.eg" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;">
+                            </div>
+                            <div class="form-group" style="margin: 0; flex: 1; min-width: 145px;">
+                                <label style="font-size: 0.75rem;">Role Tier</label>
+                                <select id="role-user-select" class="input-text" style="padding: 0.45rem 0.65rem; font-size: 0.85rem;">
+                                    <option value="viewer">Viewer (Read &amp; Export)</option>
+                                    <option value="operator">Operator (Imports &amp; Links)</option>
+                                    <option value="accountant">Accountant (Fixes, Mappings &amp; ERP)</option>
+                                    <option value="admin">Admin (Full Access &amp; Deletes)</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn btn-primary" id="btn-save-user-role" style="padding: 0.48rem 1.1rem; font-size: 0.85rem;">
+                                <i data-lucide="shield-check" style="width: 15px; height: 15px;"></i> Save Role
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding: 1.25rem;">
+                        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <i data-lucide="layers" style="width: 18px; height: 18px; color: var(--success);"></i>
+                            4-Tier Permission Summary
+                        </h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; font-size: 0.78rem;">
+                            <div style="padding: 0.55rem 0.7rem; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border-color);">
+                                <strong style="color: #94a3b8;">1. Viewer</strong>
+                                <div style="color: var(--text-muted); margin-top: 2px;">View all pages, Copy for Email, &amp; Export Excel reports.</div>
+                            </div>
+                            <div style="padding: 0.55rem 0.7rem; background: rgba(56, 189, 248, 0.06); border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.2);">
+                                <strong style="color: #38bdf8;">2. Operator</strong>
+                                <div style="color: var(--text-muted); margin-top: 2px;">Viewer + Import transactions/students, add/edit Payment Links.</div>
+                            </div>
+                            <div style="padding: 0.55rem 0.7rem; background: rgba(16, 185, 129, 0.06); border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.2);">
+                                <strong style="color: #10b981;">3. Accountant</strong>
+                                <div style="color: var(--text-muted); margin-top: 2px;">Operator + Fixes, Mappings, Auto-Matcher, Settle &amp; ERP Posting.</div>
+                            </div>
+                            <div style="padding: 0.55rem 0.7rem; background: rgba(168, 85, 247, 0.08); border-radius: 6px; border: 1px solid rgba(168, 85, 247, 0.25);">
+                                <strong style="color: #c084fc;">4. Admin</strong>
+                                <div style="color: var(--text-muted); margin-top: 2px;">Accountant + Revert imports, delete records &amp; manage roles.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- User Roles Directory Table -->
+                <div class="table-container glass-card" style="margin-bottom: 1.5rem;">
+                    <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                        <h3 style="margin: 0; font-size: 1rem;">User Role Assignments</h3>
+                        <span id="user-roles-count-label" style="font-size: 0.8rem; color: var(--text-muted);">0 users</span>
+                    </div>
+                    <table class="data-table" style="min-width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>User Email</th>
+                                <th>Current Role</th>
+                                <th>Updated By &amp; Date</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="user-roles-table-body">
+                            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading user roles...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- System Audit Log Table -->
+                <div class="table-container glass-card">
+                    <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+                        <div>
+                            <h3 style="margin: 0; font-size: 1rem;">Recent System Audit Log</h3>
+                            <p style="margin: 0.15rem 0 0 0; font-size: 0.78rem; color: var(--text-muted);">Tracks manual fixes, mapping updates, ERP postings, and role changes</p>
+                        </div>
+                        <input type="text" id="audit-log-search" class="input-text" placeholder="Filter by user, action, or reference..." style="max-width: 300px; padding: 0.38rem 0.75rem; font-size: 0.82rem;">
+                    </div>
+                    <table class="data-table" style="min-width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Target / Reference</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-logs-table-body">
+                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading audit logs...</td></tr>
                         </tbody>
                     </table>
                 </div>

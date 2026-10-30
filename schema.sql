@@ -257,3 +257,100 @@ BEGIN
   END IF;
 END;
 $$;
+
+
+-- 11. Role-Based Access Control (4-tier RBAC: viewer < operator < accountant < admin)
+CREATE TABLE IF NOT EXISTS user_roles (
+  email       VARCHAR(255) PRIMARY KEY,
+  role        VARCHAR(50) NOT NULL DEFAULT 'viewer' CHECK (role IN ('viewer', 'operator', 'accountant', 'admin')),
+  updated_by  VARCHAR(255),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO user_roles (email, role, updated_by)
+VALUES ('ammahmoud@nu.edu.eg', 'admin', 'system')
+ON CONFLICT (email) DO UPDATE SET role = 'admin', updated_at = NOW();
+
+CREATE OR REPLACE FUNCTION public.role_level(r TEXT)
+RETURNS INTEGER LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE LOWER(COALESCE(r, 'viewer'))
+    WHEN 'admin' THEN 4
+    WHEN 'accountant' THEN 3
+    WHEN 'operator' THEN 2
+    ELSE 1
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.current_user_role()
+RETURNS TEXT LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_email TEXT;
+  v_role  TEXT;
+BEGIN
+  v_email := LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', '')));
+  IF v_email = '' THEN RETURN 'viewer'; END IF;
+  IF v_email = 'ammahmoud@nu.edu.eg' THEN RETURN 'admin'; END IF;
+  SELECT role INTO v_role FROM public.user_roles WHERE LOWER(TRIM(email)) = v_email LIMIT 1;
+  RETURN COALESCE(v_role, 'viewer');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.has_min_role(required_role TEXT)
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT public.role_level(public.current_user_role()) >= public.role_level(required_role);
+$$;
+
+ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS user_roles_select ON user_roles;
+CREATE POLICY user_roles_select ON user_roles FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS user_roles_admin_write ON user_roles;
+CREATE POLICY user_roles_admin_write ON user_roles FOR ALL TO authenticated USING (public.has_min_role('admin')) WITH CHECK (public.has_min_role('admin'));
+
+DO $$
+DECLARE
+  tbl TEXT;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY[
+    'transactions', 'links', 'item_mappings', 'manual_fixes',
+    'student_master', 'payment_links', 'import_batches', 'audit_logs'
+  ]
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS authenticated_full_access ON %I', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS rbac_select ON %I', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS rbac_insert ON %I', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS rbac_update ON %I', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS rbac_delete ON %I', tbl);
+    EXECUTE format('CREATE POLICY rbac_select ON %I FOR SELECT TO authenticated USING (true)', tbl);
+  END LOOP;
+END $$;
+
+CREATE POLICY rbac_insert ON transactions FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_update ON transactions FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_delete ON transactions FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+CREATE POLICY rbac_insert ON links FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_update ON links FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_delete ON links FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+CREATE POLICY rbac_insert ON student_master FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_update ON student_master FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_delete ON student_master FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+CREATE POLICY rbac_insert ON payment_links FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_update ON payment_links FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_delete ON payment_links FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+CREATE POLICY rbac_insert ON import_batches FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_update ON import_batches FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_delete ON import_batches FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+CREATE POLICY rbac_insert ON audit_logs FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+
+CREATE POLICY rbac_insert ON item_mappings FOR INSERT TO authenticated WITH CHECK (public.has_min_role('accountant'));
+CREATE POLICY rbac_update ON item_mappings FOR UPDATE TO authenticated USING (public.has_min_role('accountant')) WITH CHECK (public.has_min_role('accountant'));
+CREATE POLICY rbac_delete ON item_mappings FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+CREATE POLICY rbac_insert ON manual_fixes FOR INSERT TO authenticated WITH CHECK (public.has_min_role('accountant'));
+CREATE POLICY rbac_update ON manual_fixes FOR UPDATE TO authenticated USING (public.has_min_role('accountant')) WITH CHECK (public.has_min_role('accountant'));
+CREATE POLICY rbac_delete ON manual_fixes FOR DELETE TO authenticated USING (public.has_min_role('admin'));
