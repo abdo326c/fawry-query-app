@@ -2504,23 +2504,45 @@ class App {
         });
 
         document.getElementById('btn-clear-automatcher')?.addEventListener('click', () => {
+            const hadDateOrTarget = Boolean(
+                document.getElementById('automatcher-date-from')?.value ||
+                document.getElementById('automatcher-date-to')?.value ||
+                (this.targetedMatchRefs && this.targetedMatchRefs.length > 0)
+            );
             document.getElementById('automatcher-date-from').value = '';
             document.getElementById('automatcher-date-to').value = '';
             document.getElementById('automatcher-search').value = '';
             const toggle = document.getElementById('automatch-toggle-unmatched');
             if (toggle) toggle.checked = false;
+            this.automatchTierFilter = 'all';
+            document.querySelectorAll('[data-automatch-tier]').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-automatch-tier') === 'all');
+            });
+            this.targetedMatchRefs = [];
+            const importStatus = document.getElementById('automatcher-import-status');
+            if (importStatus) importStatus.innerText = '';
             this.headerFilters.automatch = {};
             document.querySelectorAll('[data-table="automatch"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.renderFilterChips('automatch');
-            this.runAutoMatcher();
+            this.automatchPage = 1;
+            if (hadDateOrTarget || !this.automatchProposals || this.automatchProposals.length === 0) {
+                this.runAutoMatcher();
+            } else {
+                this.renderAutoMatcherPage();
+            }
         });
 
         let automatchSearchTimeout;
         document.getElementById('automatcher-search')?.addEventListener('input', () => {
             clearTimeout(automatchSearchTimeout);
             automatchSearchTimeout = setTimeout(() => {
-                this.runAutoMatcher();
-            }, 300);
+                this.automatchPage = 1;
+                if (this.automatchProposals && this.automatchProposals.length > 0) {
+                    this.renderAutoMatcherPage();
+                } else {
+                    this.runAutoMatcher();
+                }
+            }, 250);
         });
 
         document.getElementById('automatcher-date-from')?.addEventListener('change', () => this.runAutoMatcher());
@@ -2724,6 +2746,7 @@ class App {
             closePopover();
             this.renderFilterChips(currentTable);
             if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
+            else if (this.automatchProposals && this.automatchProposals.length > 0) { this.automatchPage = 1; this.renderAutoMatcherPage(); }
             else { this.runAutoMatcher(); }
         });
 
@@ -2741,6 +2764,7 @@ class App {
             closePopover();
             this.renderFilterChips(currentTable);
             if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
+            else if (this.automatchProposals && this.automatchProposals.length > 0) { this.automatchPage = 1; this.renderAutoMatcherPage(); }
             else { this.runAutoMatcher(); }
         });
     }
@@ -4086,27 +4110,47 @@ class App {
                     Toast.show('No results to export. Run Auto-Match first to generate matches.', 'warning');
                     return;
                 }
-                const csvData = this.automatchProposals.map(tx => ({
+                const tierLabels = {
+                    high: 'High (ID / Email / National ID)',
+                    phone: 'Phone Match',
+                    name: 'Name Match',
+                    unmatched: 'Unmatched'
+                };
+                const exportRows = this.automatchProposals.map(tx => ({
                     "Reference Number": tx.original_ref,
                     "Payment Date": tx.original_date,
-                    "Bank": tx.original_bank,
-                    "Item Name": tx.original_item,
-                    "Amount": tx.original_amount,
+                    "Current Student ID": tx.original_student_id || '',
                     "Current Status": tx.original_status,
-                    "Mapping": tx.original_mapping,
-                    "2nd Mapping": tx.original_second_mapping,
+                    "Confidence Tier": tierLabels[tx.confidenceTier] || (tx.proposedStudent ? 'Matched' : 'Unmatched'),
                     "Proposed Fix (Student ID)": tx.proposedStudent ? tx.proposedStudent.student_id : 'No Match Found',
                     "Proposed Fix (Student Name)": tx.proposedStudent ? tx.proposedStudent.full_name : '',
-                    "Match Reason": tx.matchReason
+                    "Match Reason": tx.matchReason || '',
+                    "Item Name": tx.original_item,
+                    "Mapping": tx.original_mapping || '',
+                    "2nd Mapping": tx.original_second_mapping || '',
+                    "Amount": Number(tx.original_amount || 0),
+                    "Bank": tx.original_bank || ''
                 }));
-                const csv = Papa.unparse(csvData);
-                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                const link = document.createElement('a');
-                const url = URL.createObjectURL(blob);
-                link.href = url;
-                link.download = `Auto_Matcher_Results.csv`;
-                link.click();
-                setTimeout(() => URL.revokeObjectURL(url), 100);
+                if (typeof XLSX !== 'undefined' && XLSX.utils && typeof XLSX.writeFile === 'function') {
+                    const ws = XLSX.utils.json_to_sheet(exportRows);
+                    ws['!cols'] = [
+                        { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 24 },
+                        { wch: 26 }, { wch: 22 }, { wch: 30 }, { wch: 36 },
+                        { wch: 28 }, { wch: 22 }, { wch: 22 }, { wch: 12 }, { wch: 14 }
+                    ];
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, 'Auto-Matcher Results');
+                    XLSX.writeFile(wb, `Auto_Matcher_Results_${new Date().toISOString().split('T')[0]}.xlsx`);
+                } else {
+                    const csv = Papa.unparse(exportRows);
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    const url = URL.createObjectURL(blob);
+                    link.href = url;
+                    link.download = `Auto_Matcher_Results.csv`;
+                    link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                }
             });
         }
 
@@ -4114,28 +4158,72 @@ class App {
         if (btnRunMatcher) {
             btnRunMatcher.addEventListener('click', () => this.runAutoMatcher());
         }
-        const selectAllMatcher = document.getElementById('automatcher-select-all');
-        if(selectAllMatcher) {
-            selectAllMatcher.addEventListener('change', (e) => {
-                const checked = e.target.checked;
-                const showUnmatched = document.getElementById('automatch-toggle-unmatched')?.checked || false;
-                const pfFilter = (this.headerFilters?.automatch || {})['proposed_fix'];
-                if (Array.isArray(this.automatchProposals)) {
-                    for (const p of this.automatchProposals) {
-                        if (!showUnmatched && !p.proposedStudent) continue;
-                        const pfStatus = p.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
-                        const visible = !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
-                        if (visible && p.proposedStudent) {
-                            p.selected = checked;
-                        }
+
+        this.automatchTierFilter = 'all';
+        document.querySelectorAll('[data-automatch-tier]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('[data-automatch-tier]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const tier = btn.getAttribute('data-automatch-tier') || 'all';
+                this.automatchTierFilter = tier;
+                const toggle = document.getElementById('automatch-toggle-unmatched');
+                if (tier === 'unmatched' && toggle && !toggle.checked) {
+                    toggle.checked = true;
+                }
+                this.automatchPage = 1;
+                this.renderAutoMatcherPage();
+            });
+        });
+
+        const btnSelectHighConfidence = document.getElementById('btn-select-high-confidence');
+        if (btnSelectHighConfidence) {
+            btnSelectHighConfidence.addEventListener('click', () => {
+                let count = 0;
+                for (const p of (this.automatchProposals || [])) {
+                    if (p.proposedStudent && p.confidenceTier === 'high' && !p.locked) {
+                        p.selected = true;
+                        count++;
+                    } else {
+                        p.selected = false;
                     }
                 }
-                document.querySelectorAll('.automatch-checkbox').forEach(cb => cb.checked = checked);
+                this.renderAutoMatcherPage();
+                if (count > 0) {
+                    Toast.show(`Selected ${count} high-confidence match(es) (ID / Email / National ID).`, 'success');
+                } else {
+                    Toast.show('No unlocked high-confidence matches available to select.', 'info');
+                }
+            });
+        }
+
+        const selectAllMatcher = document.getElementById('automatcher-select-all');
+        if (selectAllMatcher) {
+            selectAllMatcher.addEventListener('change', (e) => {
+                const checked = e.target.checked;
+                const visibleProposals = this.getFilteredAutoMatchProposals();
+                for (const p of visibleProposals) {
+                    if (p.proposedStudent && (!checked || !p.locked)) {
+                        p.selected = checked;
+                    }
+                }
+                document.querySelectorAll('.automatch-checkbox').forEach(cb => {
+                    const p = (this.automatchProposals || []).find(item => String(item.tx_id) === cb.value);
+                    if (p && (!checked || !p.locked)) {
+                        cb.checked = checked;
+                    }
+                });
+                this.updateAutoMatchSelectionUI();
             });
         }
         const toggleUnmatched = document.getElementById('automatch-toggle-unmatched');
         if (toggleUnmatched) {
             toggleUnmatched.addEventListener('change', () => {
+                if (!toggleUnmatched.checked && this.automatchTierFilter === 'unmatched') {
+                    this.automatchTierFilter = 'all';
+                    document.querySelectorAll('[data-automatch-tier]').forEach(b => {
+                        b.classList.toggle('active', b.getAttribute('data-automatch-tier') === 'all');
+                    });
+                }
                 this.automatchPage = 1;
                 this.renderAutoMatcherPage();
             });
@@ -4703,21 +4791,13 @@ class App {
         try {
             const dateFrom = document.getElementById('automatcher-date-from')?.value;
             const dateTo = document.getElementById('automatcher-date-to')?.value;
-            const search = document.getElementById('automatcher-search')?.value;
 
-            // First fetch the base invalidTx (with or without targeted filter)
+            // Fetch base invalidTx filtered by date range and optional targeted ref list
+            // (Search and header filters are applied client-side in renderAutoMatcherPage so selections persist)
             let queryFn = (q) => {
                 q = q.neq('id_status', 'Valid');
                 if (dateFrom) q = q.gte('payment_date', dateFrom);
                 if (dateTo) q = q.lte('payment_date', dateTo);
-                if (search) {
-                    const safeSearch = sanitizeForFilter(search);
-                    if (/^\d+$/.test(safeSearch)) {
-                        q = q.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
-                    } else {
-                        q = q.ilike('student_id', `%${safeSearch}%`);
-                    }
-                }
                 if (this.targetedMatchRefs && this.targetedMatchRefs.length > 0 && this.targetedMatchRefs.length <= 500) {
                     q = q.in('reference_number', this.targetedMatchRefs);
                 }
@@ -4729,7 +4809,6 @@ class App {
             }
 
             let invalidTx = await fetchAll('transactions', '*', queryFn);
-            this.invalidTx = invalidTx; // Store for header filter dropdowns
             
             // If the targeted match list was very large and bypassed the .in(), filter locally
             if (this.targetedMatchRefs && this.targetedMatchRefs.length > 500) {
@@ -4737,9 +4816,15 @@ class App {
                 invalidTx = invalidTx.filter(t => targetSet.has(t.reference_number));
             }
 
+            this.invalidTx = invalidTx; // Store for header filter dropdowns
+
             if (invalidTx.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="text-center">No invalid IDs found matching criteria.</td></tr>';
-                btnApply.style.display = 'none';
+                this.automatchProposals = [];
+                this.renderAutoMatcherPage();
+                tbody.innerHTML = '<tr><td colspan="10" class="text-center" style="padding: 2rem;">No invalid IDs found matching criteria.</td></tr>';
+                if (btnApply) btnApply.style.display = 'none';
+                const btnHigh = document.getElementById('btn-select-high-confidence');
+                if (btnHigh) btnHigh.style.display = 'none';
                 return;
             }
             
@@ -4751,46 +4836,35 @@ class App {
             this.automatchDistinctMappings = distinctMappings;
             this.automatchDistinctItems = distinctItems;
 
-            // Apply dynamic header filters for Auto-Matcher
-            const activeFilters = this.headerFilters.automatch || {};
-            for (const [col, values] of Object.entries(activeFilters)) {
-                if (values && values.length > 0 && col !== 'proposed_fix') {
-                    if (col === 'id_status') {
-                        // Statuses are stored as e.g. "Error: ID Too Short (3 digits)" – match by category
-                        invalidTx = invalidTx.filter(t => {
-                            const st = String(t.id_status || '');
-                            return (values.includes('Valid') && st === 'Valid') ||
-                                (values.includes('Missing ID') && st.includes('Missing ID')) ||
-                                (values.includes('Error') && st.includes('Error'));
-                        });
-                    } else {
-                        invalidTx = invalidTx.filter(t => values.includes(String(t[col])));
-                    }
-                }
-            }
-            
             let filteredTx = invalidTx;
-            
-            if (filteredTx.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="text-center">No transactions match selected filters.</td></tr>';
-                btnApply.style.display = 'none';
-                return;
-            }
 
-                        // Fetch Master List safely without bulk PII download
+            // Fetch Master List safely without bulk PII download
             const requiredMobiles = new Set();
             const requiredIds = new Set();
             const requiredEmails = new Set();
 
             for (const tx of filteredTx) {
-                if (tx.customer_mobile) requiredMobiles.add(String(tx.customer_mobile).replace(/[^0-9]/g, '').slice(-10));
+                if (tx.customer_mobile) {
+                    const cleanMob = String(tx.customer_mobile).replace(/[^0-9]/g, '');
+                    if (cleanMob.length >= 10) requiredMobiles.add(cleanMob.slice(-10));
+                }
                 if (tx.student_id) {
                     const tId = String(tx.student_id).trim();
                     requiredIds.add(tId);
-                    if (tId.includes('@')) requiredEmails.add(tId.toLowerCase());
-                    else if (tId.replace(/[^0-9]/g, '').length >= 10) {
-                        requiredMobiles.add(tId.replace(/[^0-9]/g, '').slice(-10));
-                        requiredIds.add(tId.replace(/[^0-9]/g, ''));
+                    const normTid = this.normalizeStudentId(tId);
+                    if (normTid) requiredIds.add(normTid);
+                    if (tId.includes('@')) {
+                        requiredEmails.add(tId.toLowerCase());
+                    } else {
+                        const digitsOnly = tId.replace(/[^0-9]/g, '');
+                        if (digitsOnly.length >= 4) {
+                            requiredIds.add(digitsOnly);
+                            const normDigits = this.normalizeStudentId(digitsOnly);
+                            if (normDigits) requiredIds.add(normDigits);
+                        }
+                        if (digitsOnly.length >= 10) {
+                            requiredMobiles.add(digitsOnly.slice(-10));
+                        }
                     }
                 }
             }
@@ -4924,9 +4998,6 @@ class App {
             }
 
             this.automatchProposals = [];
-            let html = '';
-            
-            const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
             let loopCount = 0;
             for (const tx of filteredTx) {
@@ -4937,58 +5008,118 @@ class App {
                 }
 
                 const link = linksMap[tx.reference_number];
+                const rawTxSid = tx.student_id ? String(tx.student_id).trim() : '';
+                const cleanTxSidDigits = rawTxSid.replace(/[^0-9]/g, '');
                 let proposedStudent = null;
                 let matchReason = '';
+                let confidenceTier = 'unmatched';
 
-                // Try 1: ID
+                // Try 1a: ID in Link Info
                 if (link && link.custom_input_value) {
                     const rawInput = String(link.custom_input_value).trim();
                     proposedStudent = studentIdMap.get(rawInput) || studentIdMap.get(this.normalizeStudentId(rawInput));
-                    if (proposedStudent) matchReason = 'Found exact ID in Link Info';
+                    if (proposedStudent) {
+                        matchReason = 'Found exact ID in Link Info';
+                        confidenceTier = 'high';
+                    }
                 }
 
-                // Try 2: Mail
+                // Try 1b: Normalized / 0-padded Student ID directly in Transaction student_id field
+                if (!proposedStudent && rawTxSid) {
+                    proposedStudent = studentIdMap.get(rawTxSid) ||
+                        studentIdMap.get(this.normalizeStudentId(rawTxSid)) ||
+                        (cleanTxSidDigits.length >= 4 && cleanTxSidDigits.length <= 9 ? studentIdMap.get(this.normalizeStudentId(cleanTxSidDigits)) : null);
+                    if (proposedStudent) {
+                        matchReason = 'Normalized Student ID in Transaction';
+                        confidenceTier = 'high';
+                    }
+                }
+
+                // Try 2a: Email in Link Info
                 if (!proposedStudent && link && link.customer_email) {
                     proposedStudent = studentEmailMap.get(String(link.customer_email).toLowerCase().trim());
-                    if (proposedStudent) matchReason = 'Email matched via Link Info';
+                    if (proposedStudent) {
+                        matchReason = 'Email matched via Link Info';
+                        confidenceTier = 'high';
+                    }
                 }
 
-                // Try 3: National ID
+                // Try 2b: Email entered directly in Transaction student_id field
+                if (!proposedStudent && rawTxSid && rawTxSid.includes('@')) {
+                    proposedStudent = studentEmailMap.get(rawTxSid.toLowerCase());
+                    if (proposedStudent) {
+                        matchReason = 'Email entered in Transaction ID field';
+                        confidenceTier = 'high';
+                    }
+                }
+
+                // Try 3a: National ID in Link Info
                 if (!proposedStudent && link && link.customer_national_id) {
                     proposedStudent = studentNationalIdMap.get(String(link.customer_national_id).trim());
-                    if (proposedStudent) matchReason = 'National ID matched via Link Info';
+                    if (proposedStudent) {
+                        matchReason = 'National ID matched via Link Info';
+                        confidenceTier = 'high';
+                    }
                 }
 
-                // Try 4: Phone (Link & Transaction)
+                // Try 3b: National ID / Passport entered directly in Transaction student_id field
+                if (!proposedStudent && rawTxSid && rawTxSid.length >= 7) {
+                    proposedStudent = studentNationalIdMap.get(rawTxSid) ||
+                        (cleanTxSidDigits.length >= 14 ? studentNationalIdMap.get(cleanTxSidDigits) : null);
+                    if (proposedStudent) {
+                        matchReason = 'National ID entered in Transaction ID field';
+                        confidenceTier = 'high';
+                    }
+                }
+
+                // Try 4a: Phone in Link Info
                 if (!proposedStudent && link && link.customer_mobile) {
                     const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
                     if (cleanMobile.length >= 10) proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
-                    if (proposedStudent) matchReason = 'Phone number matched via Link Info';
+                    if (proposedStudent) {
+                        matchReason = 'Phone number matched via Link Info';
+                        confidenceTier = 'phone';
+                    }
                 }
+                // Try 4b: Phone in Transaction customer_mobile
                 if (!proposedStudent && tx.customer_mobile) {
                     const cleanMobile = String(tx.customer_mobile).replace(/[^0-9]/g, '');
                     if (cleanMobile.length >= 10) proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
-                    if (proposedStudent) matchReason = 'Phone number matched via Transaction data';
+                    if (proposedStudent) {
+                        matchReason = 'Phone number matched via Transaction data';
+                        confidenceTier = 'phone';
+                    }
+                }
+                // Try 4c: Phone number entered directly in Transaction student_id field
+                if (!proposedStudent && cleanTxSidDigits.length >= 10 && cleanTxSidDigits.length <= 13) {
+                    proposedStudent = studentMobileMap.get(cleanTxSidDigits.slice(-10));
+                    if (proposedStudent) {
+                        matchReason = 'Phone number entered in Transaction ID field';
+                        confidenceTier = 'phone';
+                    }
                 }
 
                 // Try 5: Name (Link & Transaction)
-                if (enableNameMatch) {
+                if (!proposedStudent && enableNameMatch) {
                     let searchStr = '';
-                    if (!proposedStudent && link && link.customer_name) {
+                    if (link && link.customer_name) {
                         searchStr = String(link.customer_name).trim();
                         proposedStudent = studentNameMap.get(searchStr.toLowerCase());
-                        if (proposedStudent) matchReason = 'Exact Name matched via Link Info';
+                        if (proposedStudent) {
+                            matchReason = 'Exact Name matched via Link Info';
+                            confidenceTier = 'name';
+                        }
                     }
-                    if (!proposedStudent && !searchStr && tx.student_id) {
-                        const tempStr = String(tx.student_id).trim();
-                        if (/[a-zA-Z]/.test(tempStr) && tempStr.length > 3) {
-                            searchStr = tempStr;
-                            proposedStudent = studentNameMap.get(searchStr.toLowerCase());
-                            if (proposedStudent) matchReason = 'Exact Name matched via Transaction data';
+                    if (!proposedStudent && rawTxSid && /[a-zA-Z]/.test(rawTxSid) && !rawTxSid.includes('@') && rawTxSid.length > 3) {
+                        searchStr = rawTxSid;
+                        proposedStudent = studentNameMap.get(searchStr.toLowerCase());
+                        if (proposedStudent) {
+                            matchReason = 'Exact Name matched via Transaction data';
+                            confidenceTier = 'name';
                         }
                     }
 
-                    // --- NEW FUZZY MATCH LOGIC ---
+                    // --- FUZZY MATCH LOGIC ---
                     if (!proposedStudent && searchStr && nameFuse) {
                         const results = nameFuse.search(searchStr);
                         if (results.length > 0) {
@@ -4998,18 +5129,21 @@ class App {
                                 proposedStudent = bestMatch.item;
                                 const confidence = Math.round((1 - bestMatch.score) * 100);
                                 matchReason = `Fuzzy Name Match (Confidence: ${confidence}%): "${proposedStudent.full_name}"`;
+                                confidenceTier = 'name';
                             }
                         }
                     }
                 }
                 
-                // Track for export
+                // Track for export & display
                 const proposalTx = {
                     tx_id: tx.id,
                     proposedStudent: proposedStudent,
                     matchReason: matchReason,
+                    confidenceTier: proposedStudent ? confidenceTier : 'unmatched',
                     original_ref: tx.reference_number,
                     original_date: toDateOnly(tx.payment_date),
+                    original_student_id: rawTxSid,
                     original_bank: tx.bank,
                     original_mapping: tx.mapping,
                     original_second_mapping: tx.second_mapping,
@@ -5023,16 +5157,16 @@ class App {
                 this.automatchProposals.push(proposalTx);
             }
 
-            // Sort matched proposals on top
+            // Sort proposals by confidence tier priority: high -> phone -> name -> unmatched
+            const tierPriority = { high: 1, phone: 2, name: 3, unmatched: 4 };
             this.automatchProposals.sort((a, b) => {
-                if (a.proposedStudent && !b.proposedStudent) return -1;
-                if (!a.proposedStudent && b.proposedStudent) return 1;
-                return 0;
+                const pa = tierPriority[a.confidenceTier] || 4;
+                const pb = tierPriority[b.confidenceTier] || 4;
+                return pa - pb;
             });
 
             this.automatchPage = 1;
             this.renderAutoMatcherPage();
-            btnApply.style.display = this.automatchProposals.filter(p => p.proposedStudent).length > 0 ? 'inline-block' : 'none';
             
             const selectAllMatcher = document.getElementById('automatcher-select-all');
             if (selectAllMatcher) selectAllMatcher.checked = false;
@@ -5046,6 +5180,91 @@ class App {
         }
     }
 
+    getFilteredAutoMatchProposals() {
+        const proposals = this.automatchProposals || [];
+        const tierFilter = this.automatchTierFilter || 'all';
+        const showUnmatchedToggle = document.getElementById('automatch-toggle-unmatched')?.checked || false;
+        const showUnmatched = showUnmatchedToggle || tierFilter === 'unmatched';
+        const search = (document.getElementById('automatcher-search')?.value || '').trim().toLowerCase();
+        const activeFilters = this.headerFilters?.automatch || {};
+
+        return proposals.filter(proposal => {
+            if (!showUnmatched && !proposal.proposedStudent) return false;
+
+            if (tierFilter === 'high' && proposal.confidenceTier !== 'high') return false;
+            if (tierFilter === 'phone' && proposal.confidenceTier !== 'phone') return false;
+            if (tierFilter === 'name' && proposal.confidenceTier !== 'name') return false;
+            if (tierFilter === 'unmatched' && proposal.proposedStudent) return false;
+
+            // Header filters
+            for (const [col, values] of Object.entries(activeFilters)) {
+                if (!values || values.length === 0) continue;
+                if (col === 'proposed_fix') {
+                    const pfStatus = proposal.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
+                    if (!values.includes(pfStatus)) return false;
+                } else if (col === 'id_status') {
+                    const st = String(proposal.original_status || '');
+                    const matchCat = (values.includes('Valid') && st === 'Valid') ||
+                        (values.includes('Missing ID') && st.includes('Missing ID')) ||
+                        (values.includes('Error') && st.includes('Error'));
+                    if (!matchCat) return false;
+                } else if (col === 'mapping') {
+                    if (!values.includes(String(proposal.original_mapping ?? ''))) return false;
+                } else if (col === 'second_mapping') {
+                    if (!values.includes(String(proposal.original_second_mapping ?? ''))) return false;
+                } else if (col === 'item_name') {
+                    if (!values.includes(String(proposal.original_item ?? ''))) return false;
+                }
+            }
+
+            // Unified client-side search across Ref, Current ID, Status, Item, Mapping, Proposed Student ID/Name, and Match Reason
+            if (search) {
+                const haystacks = [
+                    proposal.original_ref,
+                    proposal.original_student_id,
+                    proposal.original_status,
+                    proposal.original_item,
+                    proposal.original_mapping,
+                    proposal.original_second_mapping,
+                    proposal.proposedStudent?.student_id,
+                    proposal.proposedStudent?.full_name,
+                    proposal.matchReason
+                ];
+                const matchedSearch = haystacks.some(val => val && String(val).toLowerCase().includes(search));
+                if (!matchedSearch) return false;
+            }
+
+            return true;
+        });
+    }
+
+    updateAutoMatchSelectionUI() {
+        const proposals = this.automatchProposals || [];
+        const matchedTotal = proposals.filter(p => p.proposedStudent).length;
+        const selectedCount = proposals.filter(p => p.proposedStudent && p.selected).length;
+        const highUnlockedCount = proposals.filter(p => p.proposedStudent && p.confidenceTier === 'high' && !p.locked).length;
+
+        const btnApply = document.getElementById('btn-apply-automatch-fixes');
+        const btnApplyLabel = document.getElementById('btn-apply-automatch-label');
+        if (btnApply) {
+            btnApply.style.display = matchedTotal > 0 ? 'inline-flex' : 'none';
+        }
+        if (btnApplyLabel) {
+            btnApplyLabel.innerText = `Apply Selected Fixes (${selectedCount})`;
+        }
+
+        const btnSelectHigh = document.getElementById('btn-select-high-confidence');
+        if (btnSelectHigh) {
+            btnSelectHigh.style.display = highUnlockedCount > 0 ? 'inline-flex' : 'none';
+        }
+
+        const selectAllMatcher = document.getElementById('automatcher-select-all');
+        if (selectAllMatcher) {
+            const visibleSelectable = this.getFilteredAutoMatchProposals().filter(p => p.proposedStudent && !p.locked);
+            selectAllMatcher.checked = visibleSelectable.length > 0 && visibleSelectable.every(p => p.selected);
+        }
+    }
+
     renderAutoMatcherPage() {
         this.renderFilterChips('automatch');
         const tbody = document.getElementById('automatcher-table-body');
@@ -5053,8 +5272,12 @@ class App {
         const formatMoney = (num) => parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         
         // Update summary card stats
-        const totalCount = (this.automatchProposals || []).length;
-        const matchedCount = (this.automatchProposals || []).filter(p => p.proposedStudent).length;
+        const proposals = this.automatchProposals || [];
+        const totalCount = proposals.length;
+        const matchedCount = proposals.filter(p => p.proposedStudent).length;
+        const highCount = proposals.filter(p => p.confidenceTier === 'high').length;
+        const phoneCount = proposals.filter(p => p.confidenceTier === 'phone').length;
+        const nameCount = proposals.filter(p => p.confidenceTier === 'name').length;
         const unmatchedCount = totalCount - matchedCount;
 
         const summaryCard = document.getElementById('automatch-summary-card');
@@ -5063,33 +5286,34 @@ class App {
                 summaryCard.style.display = 'block';
                 const totalEl = document.getElementById('automatch-stat-total');
                 const matchedEl = document.getElementById('automatch-stat-matched');
+                const highEl = document.getElementById('automatch-stat-high');
+                const phoneEl = document.getElementById('automatch-stat-phone');
+                const nameEl = document.getElementById('automatch-stat-name');
                 const unmatchedEl = document.getElementById('automatch-stat-unmatched');
                 if (totalEl) totalEl.innerText = totalCount.toLocaleString();
                 if (matchedEl) matchedEl.innerText = matchedCount.toLocaleString();
+                if (highEl) highEl.innerText = highCount.toLocaleString();
+                if (phoneEl) phoneEl.innerText = phoneCount.toLocaleString();
+                if (nameEl) nameEl.innerText = nameCount.toLocaleString();
                 if (unmatchedEl) unmatchedEl.innerText = unmatchedCount.toLocaleString();
             } else {
                 summaryCard.style.display = 'none';
             }
         }
 
-        const showUnmatched = document.getElementById('automatch-toggle-unmatched')?.checked || false;
-        const activeFilters = this.headerFilters?.automatch || {};
-        const pfFilter = activeFilters['proposed_fix'];
+        this.updateAutoMatchSelectionUI();
 
-        const filteredProposals = (this.automatchProposals || []).filter(proposal => {
-            if (!showUnmatched && !proposal.proposedStudent) return false;
-            const pfStatus = proposal.proposedStudent ? 'Has Proposed Match' : 'No Match Found';
-            return !pfFilter || pfFilter.length === 0 || pfFilter.includes(pfStatus);
-        });
+        const showUnmatched = (document.getElementById('automatch-toggle-unmatched')?.checked || false) || this.automatchTierFilter === 'unmatched';
+        const filteredProposals = this.getFilteredAutoMatchProposals();
 
         if (filteredProposals.length === 0) {
             if (totalCount > 0 && !showUnmatched) {
-                tbody.innerHTML = `<tr><td colspan="9" class="text-center" style="padding: 2.5rem 1rem;">
+                tbody.innerHTML = `<tr><td colspan="10" class="text-center" style="padding: 2.5rem 1rem;">
                     <div style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 0.75rem;">
-                        No proposed matches were found among the ${totalCount.toLocaleString()} scanned transactions.
+                        No proposed matches were found matching current filters among the ${totalCount.toLocaleString()} scanned transactions.
                     </div>
                     <button class="btn btn-outline btn-sm" id="btn-show-unmatched-empty">
-                        <i data-lucide="eye" style="width: 14px; height: 14px; margin-right: 4px;"></i> Show all ${totalCount.toLocaleString()} unmatched transactions
+                        <i data-lucide="eye" style="width: 14px; height: 14px; margin-right: 4px;"></i> Show all ${unmatchedCount.toLocaleString()} unmatched transactions
                     </button>
                 </td></tr>`;
                 document.getElementById('btn-show-unmatched-empty')?.addEventListener('click', () => {
@@ -5099,7 +5323,7 @@ class App {
                     this.renderAutoMatcherPage();
                 });
             } else {
-                tbody.innerHTML = '<tr><td colspan="9" class="text-center" style="padding: 2rem;">No fixable transactions found.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="text-center" style="padding: 2rem;">No fixable transactions found.</td></tr>';
             }
             const pager = document.getElementById('automatcher-pagination');
             if (pager) pager.remove();
@@ -5115,49 +5339,113 @@ class App {
 
         let html = '';
         for (const proposal of pageProposals) {
+            const rawStatus = String(proposal.original_status || '');
+            const isMissing = rawStatus.includes('Missing ID');
+            const statusShort = isMissing ? 'Missing ID' : (rawStatus.includes('Error') ? rawStatus.replace(/^Error:\s*/i, '') : (rawStatus || 'Invalid'));
+            const currentIdHtml = `
+                <div style="font-family: monospace; font-weight: 600; font-size: 0.84rem; color: ${proposal.original_student_id ? 'var(--text-main)' : 'var(--text-muted)'};">
+                    ${proposal.original_student_id ? escapeHTML(proposal.original_student_id) : '<span style="font-style: italic; font-weight: 400;">(Empty)</span>'}
+                </div>
+                <span class="status-badge ${isMissing ? 'missing-id' : 'invalid-id'}" style="font-size: 0.7rem; padding: 0.1rem 0.45rem; margin-top: 2px; display: inline-block;" title="${escapeHTML(rawStatus)}">
+                    ${escapeHTML(statusShort)}
+                </span>
+            `;
+
+            const quickFixBtnHtml = `
+                <button type="button" class="btn btn-outline btn-sm" data-automatch-manual-fix="${escapeHTML(proposal.original_ref)}" data-proposed-sid="${escapeHTML(proposal.proposedStudent?.student_id || '')}" title="Open in Manual Fixes to inspect or override" style="padding: 0.15rem 0.45rem; font-size: 0.72rem; height: auto; display: inline-flex; align-items: center; gap: 3px;">
+                    <i data-lucide="wrench" style="width: 11px; height: 11px;"></i> Fix
+                </button>
+            `;
+
             if (proposal.proposedStudent) {
-                const isNameMatch = proposal.matchReason.includes('Name');
+                let badgeStyle = '';
+                let tierTag = 'High';
+                if (proposal.confidenceTier === 'phone') {
+                    badgeStyle = 'style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3);"';
+                    tierTag = 'Phone';
+                } else if (proposal.confidenceTier === 'name') {
+                    badgeStyle = 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"';
+                    tierTag = 'Name';
+                }
+
                 html += `
                     <tr>
                         <td><input type="checkbox" class="automatch-checkbox" value="${escapeHTML(proposal.tx_id)}" ${proposal.selected ? 'checked' : ''}></td>
-                        <td>${escapeHTML(proposal.original_ref)}</td>
+                        <td style="font-family: monospace; font-weight: 500;">${escapeHTML(proposal.original_ref)}</td>
                         <td>${escapeHTML(proposal.original_date)}</td>
+                        <td>${currentIdHtml}</td>
                         <td>${escapeHTML(proposal.original_mapping || '-')}</td>
                         <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
                         <td>${escapeHTML(proposal.original_item)}</td>
                         <td>${formatMoney(proposal.original_amount)}</td>
                         <td>
-                            <span class="status-badge ${isNameMatch ? 'invalid-id' : 'valid-id'}" title="${escapeHTML(proposal.matchReason)}" ${isNameMatch ? 'style="background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3);"' : ''}>
-                                Matched: ${escapeHTML(proposal.proposedStudent.student_id)} ${isNameMatch ? ' (By Name)' : ''}
+                            <span class="status-badge valid-id" title="${escapeHTML(proposal.matchReason)}" ${badgeStyle}>
+                                Matched: ${escapeHTML(proposal.proposedStudent.student_id)} (${tierTag})
                             </span>
                             <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
                         </td>
-                        <td style="white-space: normal; word-wrap: break-word; max-width: 200px;"><span style="font-size:0.85rem; color:var(--text-muted)">${escapeHTML(proposal.matchReason)}</span>${proposal.locked ? '<div style="font-size:0.8rem; color: var(--warning); margin-top: 2px;"><i data-lucide="lock" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:2px;"></i>Locked: settled / in ERP</div>' : ''}</td>
+                        <td style="white-space: normal; word-wrap: break-word; max-width: 220px;">
+                            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.4rem;">
+                                <span style="font-size:0.82rem; color:var(--text-muted);">${escapeHTML(proposal.matchReason)}</span>
+                                ${quickFixBtnHtml}
+                            </div>
+                            ${proposal.locked ? '<div style="font-size:0.78rem; color: var(--warning); margin-top: 3px;"><i data-lucide="lock" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:2px;"></i>Locked: settled / in ERP</div>' : ''}
+                        </td>
                     </tr>
                 `;
             } else {
                 html += `
                     <tr>
                         <td></td>
-                        <td>${escapeHTML(proposal.original_ref)}</td>
+                        <td style="font-family: monospace; font-weight: 500;">${escapeHTML(proposal.original_ref)}</td>
                         <td>${escapeHTML(proposal.original_date)}</td>
+                        <td>${currentIdHtml}</td>
                         <td>${escapeHTML(proposal.original_mapping || '-')}</td>
                         <td>${escapeHTML(proposal.original_second_mapping || '-')}</td>
                         <td>${escapeHTML(proposal.original_item)}</td>
                         <td>${formatMoney(proposal.original_amount)}</td>
                         <td><span class="status-badge invalid-id">No Match Found</span></td>
-                        <td><span style="color:var(--text-muted)">-</span></td>
+                        <td>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;">
+                                <span style="color:var(--text-muted); font-size: 0.82rem;">No match in Student Master</span>
+                                ${quickFixBtnHtml}
+                            </div>
+                        </td>
                     </tr>
                 `;
             }
         }
 
-        tbody.innerHTML = html || '<tr><td colspan="9" class="text-center">No fixable transactions found.</td></tr>';
+        tbody.innerHTML = html || '<tr><td colspan="10" class="text-center">No fixable transactions found.</td></tr>';
 
         tbody.querySelectorAll('.automatch-checkbox').forEach(cb => {
             cb.addEventListener('change', (e) => {
                 const p = (this.automatchProposals || []).find(item => String(item.tx_id) === cb.value);
                 if (p) p.selected = e.target.checked;
+                this.updateAutoMatchSelectionUI();
+            });
+        });
+
+        tbody.querySelectorAll('[data-automatch-manual-fix]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const ref = btn.getAttribute('data-automatch-manual-fix');
+                const proposedSid = btn.getAttribute('data-proposed-sid');
+                const fixesNav = document.querySelector('.nav-item[data-target="fixes"]');
+                if (fixesNav) fixesNav.click();
+                setTimeout(() => {
+                    const btnAddFix = document.getElementById('btn-add-fix');
+                    if (btnAddFix) btnAddFix.click();
+                    const refInput = document.getElementById('fix-ref-num');
+                    const sidInput = document.getElementById('fix-correct-id');
+                    if (refInput && ref) {
+                        refInput.value = ref;
+                        refInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    if (sidInput && proposedSid) {
+                        sidInput.value = proposedSid;
+                        sidInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }, 60);
             });
         });
 
@@ -6347,6 +6635,9 @@ class App {
                 if (table === 'transactions') {
                     this.currentPage = 1;
                     this.loadTransactions();
+                } else if (this.automatchProposals && this.automatchProposals.length > 0) {
+                    this.automatchPage = 1;
+                    this.renderAutoMatcherPage();
                 } else {
                     this.runAutoMatcher();
                 }
@@ -6361,6 +6652,9 @@ class App {
             if (table === 'transactions') {
                 this.currentPage = 1;
                 this.loadTransactions();
+            } else if (this.automatchProposals && this.automatchProposals.length > 0) {
+                this.automatchPage = 1;
+                this.renderAutoMatcherPage();
             } else {
                 this.runAutoMatcher();
             }

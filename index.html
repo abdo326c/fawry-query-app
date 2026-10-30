@@ -941,42 +941,68 @@
                                 <label style="font-size: 0.75rem">Date To</label>
                                 <input type="date" id="automatcher-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
                             </div>
-                            <div class="form-group" style="margin: 0; flex: 2; min-width: 200px;">
-                                <input type="text" id="automatcher-search" class="input-text" placeholder="Search by Student ID, Ref..." style="padding: 0.4rem; font-size: 0.85rem">
+                            <div class="form-group" style="margin: 0; flex: 2; min-width: 220px;">
+                                <label style="font-size: 0.75rem">Instant Filter (Preserves Selection)</label>
+                                <input type="text" id="automatcher-search" class="input-text" placeholder="Search Ref, Current ID, Proposed Student ID/Name, Item, or Reason..." style="padding: 0.4rem; font-size: 0.85rem">
                             </div>
                             <div class="form-group" style="margin: 0; display: flex;">
                                 <button class="btn btn-outline" id="btn-clear-automatcher" style="padding: 0.4rem 1rem;">Clear</button>
                             </div>
                         </div>
                           
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
                             <h3 style="margin: 0; color: var(--text-main);">Suggested Matches</h3>
-                            <button class="btn btn-primary" id="btn-apply-automatch-fixes" style="display: none; padding: 0.8rem 2rem; font-size: 1rem; font-weight: bold; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);"><i data-lucide="check-circle" style="width: 20px; height: 20px; margin-right: 0.5rem; vertical-align: middle;"></i> Apply Selected Fixes</button>
+                            <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-outline btn-sm" id="btn-select-high-confidence" style="display: none;">
+                                    <i data-lucide="shield-check" style="width: 15px; height: 15px; color: var(--success);"></i> Select All High-Confidence
+                                </button>
+                                <button class="btn btn-primary" id="btn-apply-automatch-fixes" style="display: none; padding: 0.65rem 1.5rem; font-size: 0.95rem; font-weight: bold; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);"><i data-lucide="check-circle" style="width: 18px; height: 18px; margin-right: 0.4rem; vertical-align: middle;"></i> <span id="btn-apply-automatch-label">Apply Selected Fixes</span></button>
+                            </div>
                         </div>
 
-                        <!-- Summary Card for Matches & Unmatched Toggle -->
+                        <!-- Summary Card for Matches & Tier Filters -->
                         <div id="automatch-summary-card" class="glass-card" style="display: none; margin-bottom: 1.5rem; padding: 1rem 1.25rem; border-radius: 8px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-                                <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
-                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                        <span style="color: var(--text-muted); font-size: 0.85rem;">Total Scanned:</span>
-                                        <strong id="automatch-stat-total" style="font-size: 1.1rem; color: var(--text-main);">0</strong>
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.75rem;">
+                                <div style="display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;">
+                                    <div style="display: flex; align-items: center; gap: 0.45rem;">
+                                        <span style="color: var(--text-muted); font-size: 0.82rem;">Total Scanned:</span>
+                                        <strong id="automatch-stat-total" style="font-size: 1.05rem; color: var(--text-main);">0</strong>
                                     </div>
-                                    <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid rgba(255, 255, 255, 0.1);">
-                                        <span class="status-badge valid-id" style="font-size: 0.75rem;"><i data-lucide="check" style="width: 12px; height: 12px; margin-right: 4px;"></i> Matches Found</span>
-                                        <strong id="automatch-stat-matched" style="font-size: 1.1rem; color: var(--success);">0</strong>
+                                    <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 0.9rem; border-left: 1px solid var(--border-color);">
+                                        <span class="status-badge valid-id" style="font-size: 0.72rem;"><i data-lucide="check" style="width: 12px; height: 12px; margin-right: 3px;"></i> Matched</span>
+                                        <strong id="automatch-stat-matched" style="font-size: 1.05rem; color: var(--success);">0</strong>
                                     </div>
-                                    <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid rgba(255, 255, 255, 0.1);">
-                                        <span class="status-badge invalid-id" style="font-size: 0.75rem;"><i data-lucide="x" style="width: 12px; height: 12px; margin-right: 4px;"></i> Unmatched</span>
-                                        <strong id="automatch-stat-unmatched" style="font-size: 1.1rem; color: var(--text-muted);">0</strong>
+                                    <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 0.9rem; border-left: 1px solid var(--border-color);">
+                                        <span style="color: var(--text-muted); font-size: 0.82rem;">High (ID/NatID/Email):</span>
+                                        <strong id="automatch-stat-high" style="font-size: 1rem; color: var(--success);">0</strong>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 0.9rem; border-left: 1px solid var(--border-color);">
+                                        <span style="color: var(--text-muted); font-size: 0.82rem;">Phone:</span>
+                                        <strong id="automatch-stat-phone" style="font-size: 1rem; color: var(--primary);">0</strong>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 0.9rem; border-left: 1px solid var(--border-color);">
+                                        <span style="color: var(--text-muted); font-size: 0.82rem;">Name:</span>
+                                        <strong id="automatch-stat-name" style="font-size: 1rem; color: #f59e0b;">0</strong>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 0.9rem; border-left: 1px solid var(--border-color);">
+                                        <span class="status-badge invalid-id" style="font-size: 0.72rem;"><i data-lucide="x" style="width: 12px; height: 12px; margin-right: 3px;"></i> Unmatched</span>
+                                        <strong id="automatch-stat-unmatched" style="font-size: 1.05rem; color: var(--text-muted);">0</strong>
                                     </div>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                                    <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; user-select: none; background: rgba(255,255,255,0.05); padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
-                                        <input type="checkbox" id="automatch-toggle-unmatched" style="cursor: pointer; width: 16px; height: 16px;">
+                                    <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.82rem; user-select: none; background: rgba(255,255,255,0.05); padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+                                        <input type="checkbox" id="automatch-toggle-unmatched" style="cursor: pointer; width: 15px; height: 15px;">
                                         <span>Show unmatched transactions</span>
                                     </label>
                                 </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding-top: 0.65rem; border-top: 1px solid var(--border-color);" id="automatch-tier-pills">
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.25rem;">Filter by Confidence / Method:</span>
+                                <button type="button" class="btn btn-primary btn-sm" data-automatch-tier="all" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">All Visible</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-automatch-tier="high" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">High Confidence (ID / Email / NatID)</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-automatch-tier="phone" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Phone Match</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-automatch-tier="name" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Name / Fuzzy Match</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-automatch-tier="unmatched" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Unmatched Only</button>
                             </div>
                         </div>
 
@@ -998,14 +1024,19 @@
                                 <thead>
                                     <tr>
                                         <th style="width: 40px;"><input type="checkbox" id="automatcher-select-all"></th>
-                                        <th style="min-width: 120px;">
+                                        <th style="min-width: 115px;">
                                             <div class="th-filter-wrapper" data-column="reference_number" data-table="automatch">
                                                 Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th style="min-width: 120px;">
+                                        <th style="min-width: 105px;">
                                             <div class="th-filter-wrapper" data-column="payment_date" data-table="automatch">
                                                 Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                            </div>
+                                        </th>
+                                        <th style="min-width: 145px;">
+                                            <div class="th-filter-wrapper" data-column="id_status" data-table="automatch">
+                                                Current ID / Status <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
                                         <th style="min-width: 100px;">
@@ -1028,17 +1059,17 @@
                                                 Amount <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th style="min-width: 200px;">
+                                        <th style="min-width: 210px;">
                                             <div class="th-filter-wrapper" data-column="proposed_fix" data-table="automatch">
                                                 Proposed Fix <i data-lucide="filter" class="header-filter-icon"></i>
                                             </div>
                                         </th>
-                                        <th style="min-width: 250px;">Match Reason</th>
+                                        <th style="min-width: 240px;">Match Reason &amp; Action</th>
                                     </tr>
                                 </thead>
                                 <tbody id="automatcher-table-body">
                                     <tr>
-                                        <td colspan="9">
+                                        <td colspan="10">
                                             <div class="empty-state">
                                                 <i data-lucide="zap" style="width: 48px; height: 48px; opacity: 0.5;"></i>
                                                 <h3>Ready to Match Invalid IDs</h3>
