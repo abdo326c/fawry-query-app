@@ -1769,6 +1769,9 @@ class App {
                 if (document.getElementById('view-transactions')?.classList.contains('active')) {
                     this.loadTransactions();
                 }
+                if (document.getElementById('view-erp-export')?.classList.contains('active')) {
+                    this.loadErpExport({ refresh: true });
+                }
             } catch (err) {
                 Toast.show('Error saving mapping: ' + err.message, 'error');
             } finally {
@@ -1872,6 +1875,9 @@ class App {
                 this.loadFixes();
                 if (document.getElementById('view-transactions')?.classList.contains('active')) {
                     this.loadTransactions();
+                }
+                if (document.getElementById('view-erp-export')?.classList.contains('active')) {
+                    this.loadErpExport({ refresh: true });
                 }
             } catch (err) {
                 Toast.show('Error saving fix: ' + err.message, 'error');
@@ -6391,20 +6397,30 @@ class App {
 
 
     initErpExport() {
+        this.erpStatusFilter = 'all';
+        this.erpSearchQuery = '';
+
         const dateFrom = document.getElementById('erp-filter-date-from');
         const dateTo = document.getElementById('erp-filter-date-to');
         const bankFilter = document.getElementById('erp-filter-bank');
+        const batchFilter = document.getElementById('erp-filter-batch');
         const itemNameFilter = document.getElementById('erp-filter-item-name');
         const mappingFilter = document.getElementById('erp-filter-mapping');
+        const searchInput = document.getElementById('erp-search');
         const btnExport = document.getElementById('btn-export-erp-file');
         const btnRecord = document.getElementById('btn-record-erp');
+        const chkValidOnly = document.getElementById('erp-record-valid-only');
 
-        if (dateFrom && dateTo) {
+        const setDefaultMonthDates = () => {
+            if (!dateFrom || !dateTo) return;
             const now = new Date();
             dateFrom.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
             const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
             dateTo.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        };
 
+        if (dateFrom && dateTo) {
+            setDefaultMonthDates();
             dateFrom.addEventListener('change', () => this.loadErpExport());
             dateTo.addEventListener('change', () => this.loadErpExport());
         }
@@ -6412,6 +6428,78 @@ class App {
         if (bankFilter) {
             bankFilter.addEventListener('change', () => this.loadErpExport());
         }
+
+        if (batchFilter) {
+            batchFilter.addEventListener('change', () => this.loadErpExport({ refresh: false }));
+        }
+
+        let erpSearchTimeout;
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                clearTimeout(erpSearchTimeout);
+                erpSearchTimeout = setTimeout(() => {
+                    this.erpSearchQuery = (e.target.value || '').trim().toLowerCase();
+                    this.loadErpExport({ refresh: false });
+                }, 200);
+            });
+        }
+
+        document.querySelectorAll('.erp-date-preset').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!dateFrom || !dateTo) return;
+                const preset = btn.getAttribute('data-preset');
+                const now = new Date();
+                const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                if (preset === 'today') {
+                    dateFrom.value = fmt(now);
+                    dateTo.value = fmt(now);
+                } else if (preset === 'yesterday') {
+                    const y = new Date(now);
+                    y.setDate(y.getDate() - 1);
+                    dateFrom.value = fmt(y);
+                    dateTo.value = fmt(y);
+                } else if (preset === '7d') {
+                    const s = new Date(now);
+                    s.setDate(s.getDate() - 6);
+                    dateFrom.value = fmt(s);
+                    dateTo.value = fmt(now);
+                } else if (preset === 'this_month') {
+                    setDefaultMonthDates();
+                } else if (preset === 'last_month') {
+                    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                    const last = new Date(now.getFullYear(), now.getMonth(), 0);
+                    dateFrom.value = fmt(first);
+                    dateTo.value = fmt(last);
+                }
+                this.loadErpExport();
+            });
+        });
+
+        document.querySelectorAll('[data-erp-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('[data-erp-filter]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.erpStatusFilter = btn.getAttribute('data-erp-filter') || 'all';
+                this.loadErpExport({ refresh: false });
+            });
+        });
+
+        document.getElementById('btn-clear-erp-filters')?.addEventListener('click', () => {
+            setDefaultMonthDates();
+            if (bankFilter) bankFilter.value = '';
+            if (batchFilter) batchFilter.value = '';
+            if (searchInput) searchInput.value = '';
+            this.erpSearchQuery = '';
+            this.erpStatusFilter = 'all';
+            document.querySelectorAll('[data-erp-filter]').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-erp-filter') === 'all');
+            });
+            if (this.erpItemNameSelect) this.erpItemNameSelect.clear(true);
+            if (this.erpMappingSelect) this.erpMappingSelect.clear(true);
+            this.loadErpExport();
+        });
+
+        chkValidOnly?.addEventListener('change', () => this.updateErpRecordButtonLabel());
         
         // Item / Mapping only narrow the already-loaded rows – no new request
         if (itemNameFilter && window.TomSelect) {
@@ -6444,15 +6532,24 @@ class App {
     }
 
     /**
-     * Fills the Item Name / Mapping dropdowns from rows already loaded for the current
+     * Fills the Item Name / Mapping / ERP Batch dropdowns from rows already loaded for the current
      * date range + bank (no extra request).
      */
     updateErpDropdowns(baseData = this.erpBaseData || []) {
         const items = [...new Set(baseData.map(d => d.item_name).filter(Boolean))].sort();
         const mappings = [...new Set(baseData.map(d => d.mapping).filter(Boolean))].sort();
+        const batches = [...new Set(baseData.map(d => d.erp_batch_number).filter(Boolean))].sort();
 
         const itemSelect = document.getElementById('erp-filter-item-name');
         const mappingSelect = document.getElementById('erp-filter-mapping');
+        const batchSelect = document.getElementById('erp-filter-batch');
+
+        if (batchSelect) {
+            const currentBatch = batchSelect.value;
+            batchSelect.innerHTML = `<option value="">All Batches (${batches.length})</option>` +
+                batches.map(b => `<option value="${escapeHTML(b)}">${escapeHTML(b)}</option>`).join('');
+            if (batches.includes(currentBatch)) batchSelect.value = currentBatch;
+        }
 
         if (this.erpItemNameSelect) {
             const currentItems = this.erpItemNameSelect.getValue();
@@ -6480,7 +6577,7 @@ class App {
     /**
      * @param {{refresh?: boolean}} [opts]
      *   refresh – re-download the date/bank range from the database (default true).
-     *             Item / Mapping filter changes pass false and just re-filter the loaded rows.
+     *             Item / Mapping / Status / Search filter changes pass false and just re-filter the loaded rows.
      */
     async loadErpExport({ refresh = true } = {}) {
         if (!this.currentUser) return;
@@ -6516,9 +6613,12 @@ class App {
             this.updateErpDropdowns(baseData);
         }
 
-        // Read the item / mapping selection AFTER the dropdowns were refreshed
+        // Read the item / mapping / batch / status / search selection AFTER the dropdowns were refreshed
         const itemNameSelect = document.getElementById('erp-filter-item-name');
         const mappingSelect = document.getElementById('erp-filter-mapping');
+        const batchFilter = document.getElementById('erp-filter-batch')?.value || '';
+        const statusFilter = this.erpStatusFilter || 'all';
+        const q = (this.erpSearchQuery || '').trim().toLowerCase();
         
         let itemNames = [];
         if (this.erpItemNameSelect) itemNames = [].concat(this.erpItemNameSelect.getValue()).filter(Boolean);
@@ -6534,12 +6634,72 @@ class App {
 
         const itemSet = new Set(itemNames);
         const mappingSet = new Set(mappings);
-        this.erpData = this.erpBaseData.filter(t =>
-            (itemSet.size === 0 || itemSet.has(t.item_name)) &&
-            (mappingSet.size === 0 || mappingSet.has(t.mapping))
-        );
+        this.erpData = (this.erpBaseData || []).filter(t => {
+            if (itemSet.size > 0 && !itemSet.has(t.item_name)) return false;
+            if (mappingSet.size > 0 && !mappingSet.has(t.mapping)) return false;
+            if (batchFilter && (t.erp_batch_number || '') !== batchFilter) return false;
+
+            const isValid = !t.id_status || t.id_status === 'Valid';
+            const isRecorded = Boolean(t.erp_batch_number);
+
+            if (statusFilter === 'ready' && (!isValid || isRecorded)) return false;
+            if (statusFilter === 'unposted' && isRecorded) return false;
+            if (statusFilter === 'recorded' && !isRecorded) return false;
+            if (statusFilter === 'invalid' && isValid) return false;
+            if (statusFilter === 'settled' && !t.is_settled) return false;
+
+            if (q) {
+                const ref = String(t.reference_number || '').toLowerCase();
+                const sid = String(t.student_id || '').toLowerCase();
+                const acct = String(this.erpAccount(t) || '').toLowerCase();
+                const item = String(t.item_name || '').toLowerCase();
+                const map = String(t.mapping || '').toLowerCase();
+                const map2 = String(t.second_mapping || '').toLowerCase();
+                const batch = String(t.erp_batch_number || '').toLowerCase();
+                const vch = String(t.erp_voucher || '').toLowerCase();
+                const match = ref.includes(q) || sid.includes(q) || acct.includes(q) || item.includes(q) || map.includes(q) || map2.includes(q) || batch.includes(q) || vch.includes(q);
+                if (!match) return false;
+            }
+            return true;
+        });
         this.erpPage = 1;
         this.renderErpPreview();
+    }
+
+    updateErpRecordButtonLabel() {
+        const labelEl = document.getElementById('btn-record-erp-label');
+        if (!labelEl) return;
+        const rows = this.erpData || [];
+        const validOnly = document.getElementById('erp-record-valid-only')?.checked ?? true;
+        const eligible = rows.filter(r => !r.erp_batch_number && (!validOnly || !r.id_status || r.id_status === 'Valid'));
+        labelEl.textContent = eligible.length > 0 ? `Save References (${eligible.length.toLocaleString()} lines)` : 'Save References';
+    }
+
+    openManualFixFromErp(tx) {
+        if (!tx) return;
+        document.getElementById('modal-erp-warning')?.classList.add('hidden');
+        const modal = document.getElementById('modal-fix');
+        if (!modal) return;
+        document.getElementById('modal-fix-title').textContent = 'Add Manual Fix';
+        const refInput = document.getElementById('fix-ref');
+        if (refInput) {
+            refInput.value = tx.reference_number || '';
+            refInput.readOnly = false;
+            refInput.dispatchEvent(new Event('input'));
+        }
+        const idInput = document.getElementById('fix-id');
+        if (idInput) {
+            idInput.value = (tx.id_status === 'Valid' && tx.student_id) ? tx.student_id : '';
+            idInput.dispatchEvent(new Event('input'));
+        }
+        const itemInput = document.getElementById('fix-item');
+        if (itemInput) itemInput.value = '';
+        const mapInput = document.getElementById('fix-mapping');
+        if (mapInput) mapInput.value = '';
+        const map2Input = document.getElementById('fix-second-mapping');
+        if (map2Input) map2Input.value = '';
+        modal.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
     }
 
     renderErpPreview() {
@@ -6549,32 +6709,33 @@ class App {
         const rows = this.erpData || [];
         const summaryCard = document.getElementById('erp-summary-card');
         if (summaryCard) {
-            if (rows.length > 0) {
-                summaryCard.style.display = 'flex';
-                const totalAmt = rows.reduce((sum, r) => sum + this.erpAmount(r), 0);
-                const validCnt = rows.filter(r => !r.id_status || r.id_status === 'Valid').length;
-                const invalidCnt = rows.length - validCnt;
-                const recordedCnt = rows.filter(r => r.erp_batch_number).length;
+            summaryCard.style.display = 'flex';
+            const totalAmt = rows.reduce((sum, r) => sum + this.erpAmount(r), 0);
+            const validCnt = rows.filter(r => !r.id_status || r.id_status === 'Valid').length;
+            const invalidCnt = rows.length - validCnt;
+            const recordedCnt = rows.filter(r => r.erp_batch_number).length;
+            const readyCnt = rows.filter(r => (!r.id_status || r.id_status === 'Valid') && !r.erp_batch_number).length;
 
-                const elTotal = document.getElementById('erp-stat-total');
-                const elAmount = document.getElementById('erp-stat-amount');
-                const elValid = document.getElementById('erp-stat-valid');
-                const elInvalid = document.getElementById('erp-stat-invalid');
-                const elRecorded = document.getElementById('erp-stat-recorded');
+            const elTotal = document.getElementById('erp-stat-total');
+            const elAmount = document.getElementById('erp-stat-amount');
+            const elReady = document.getElementById('erp-stat-ready');
+            const elValid = document.getElementById('erp-stat-valid');
+            const elInvalid = document.getElementById('erp-stat-invalid');
+            const elRecorded = document.getElementById('erp-stat-recorded');
 
-                if (elTotal) elTotal.textContent = rows.length.toLocaleString();
-                if (elAmount) elAmount.textContent = `EGP ${formatMoney(totalAmt)}`;
-                if (elValid) elValid.textContent = validCnt.toLocaleString();
-                if (elInvalid) elInvalid.textContent = invalidCnt.toLocaleString();
-                if (elRecorded) elRecorded.textContent = recordedCnt.toLocaleString();
-            } else {
-                summaryCard.style.display = 'none';
-            }
+            if (elTotal) elTotal.textContent = rows.length.toLocaleString();
+            if (elAmount) elAmount.textContent = `EGP ${formatMoney(totalAmt)}`;
+            if (elReady) elReady.textContent = readyCnt.toLocaleString();
+            if (elValid) elValid.textContent = validCnt.toLocaleString();
+            if (elInvalid) elInvalid.textContent = invalidCnt.toLocaleString();
+            if (elRecorded) elRecorded.textContent = recordedCnt.toLocaleString();
         }
+
+        this.updateErpRecordButtonLabel();
 
         tbody.innerHTML = '';
         if (rows.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No transactions match the selected ERP filters.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">No transactions match the selected ERP filters.</td></tr>';
             document.getElementById('erp-pagination')?.remove();
             return;
         }
@@ -6587,18 +6748,97 @@ class App {
         
         previewData.forEach((row, index) => {
             const paddedAccount = this.erpAccount(row);
-            const description = `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`;
+            const isValid = !row.id_status || row.id_status === 'Valid';
+            const descriptionTail = `/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
+            if (!isValid) {
+                tr.style.background = 'rgba(239, 68, 68, 0.04)';
+            }
+
+            const accountCellHtml = isValid
+                ? `<span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>`
+                : `<div>
+                        <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(paddedAccount || 'Missing ID')}</span>
+                        <div style="font-size: 0.72rem; color: var(--danger); margin-top: 2px;">${escapeHTML(row.id_status)}</div>
+                   </div>`;
+
+            let erpStatusHtml = '';
+            if (row.erp_batch_number) {
+                erpStatusHtml = `
+                    <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                        <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; font-size: 0.72rem;" title="${row.erp_voucher ? 'Voucher: ' + escapeHTML(row.erp_voucher) : 'Posted to ERP'}">
+                            Batch: ${escapeHTML(row.erp_batch_number)}${row.erp_voucher ? ` (${escapeHTML(row.erp_voucher)})` : ''}
+                        </span>
+                        <button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id)}" data-batch="${escapeHTML(row.erp_batch_number)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
+                            <i data-lucide="x" style="width: 13px; height: 13px;"></i>
+                        </button>
+                    </div>`;
+            } else if (!isValid) {
+                erpStatusHtml = `
+                    <button type="button" class="btn btn-outline btn-sm erp-fix-row-btn" data-idx="${index}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px; color: var(--warning, #f59e0b); border-color: rgba(245, 158, 11, 0.4);">
+                        <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> Fix ID
+                    </button>`;
+            } else {
+                erpStatusHtml = `<span class="badge" style="background: rgba(16, 185, 129, 0.14); color: #10b981; font-size: 0.72rem;">Ready</span>`;
+            }
+
             tr.innerHTML = `
-                <td>${escapeHTML(toDateOnly(row.payment_date))}</td>
-                <td>${escapeHTML(paddedAccount)}</td>
-                <td>${escapeHTML(description)}</td>
-                <td>${escapeHTML(formatMoney(this.erpAmount(row)))}</td>
-                <td>${escapeHTML(row.bank || '')}</td>
-                <td>${startIdx + index + 1}</td>
+                <td style="white-space: nowrap;">${escapeHTML(toDateOnly(row.payment_date))}</td>
+                <td>${accountCellHtml}</td>
+                <td>
+                    <a href="#" class="erp-ref-inspect-link" data-idx="${index}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction details">${escapeHTML(row.reference_number || '')}</a><span style="color: var(--text-secondary);">${escapeHTML(descriptionTail)}</span>
+                </td>
+                <td style="text-align: right; font-weight: 600; white-space: nowrap;">${escapeHTML(formatMoney(this.erpAmount(row)))}</td>
+                <td style="white-space: nowrap;">
+                    <span>${escapeHTML(row.bank || '')}</span>
+                    ${row.is_settled ? `<span class="badge badge-success" style="font-size: 0.68rem; margin-left: 4px; padding: 0.1rem 0.45rem;">Settled</span>` : ''}
+                </td>
+                <td style="white-space: nowrap;">${erpStatusHtml}</td>
+                <td style="text-align: right; color: var(--text-muted);">${startIdx + index + 1}</td>
             `;
             tbody.appendChild(tr);
         });
+
+        tbody.querySelectorAll('.erp-ref-inspect-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const idx = parseInt(link.getAttribute('data-idx'), 10);
+                const tx = previewData[idx];
+                if (tx && typeof this.openTransactionDetailsModal === 'function') {
+                    this.openTransactionDetailsModal(tx);
+                }
+            });
+        });
+
+        tbody.querySelectorAll('.erp-fix-row-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = parseInt(btn.getAttribute('data-idx'), 10);
+                const tx = previewData[idx];
+                if (tx) this.openManualFixFromErp(tx);
+            });
+        });
+
+        tbody.querySelectorAll('.erp-unlink-batch-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.getAttribute('data-id');
+                const batch = btn.getAttribute('data-batch');
+                if (!id) return;
+                if (!await window.customConfirm(`Clear ERP Batch "${batch}" from this transaction so it can be re-exported?`, 'Clear Batch', 'Cancel')) {
+                    return;
+                }
+                try {
+                    const { error } = await supabase.from('transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('id', id);
+                    if (error) throw error;
+                    await this.logAudit('UPDATE', 'transactions', id, { erp_batch_number: batch }, { erp_batch_number: null, erp_voucher: null });
+                    Toast.show('Cleared ERP batch reference', 'success');
+                    await this.loadErpExport({ refresh: true });
+                } catch (err) {
+                    Toast.show('Failed to clear batch: ' + err.message, 'error');
+                }
+            });
+        });
+
+        if (window.lucide) lucide.createIcons({ root: tbody });
 
         const container = tbody.closest('.table-container');
         if (container) {
@@ -6671,25 +6911,57 @@ class App {
         }
 
         const invalidTransactions = rows.filter(row => row.id_status && row.id_status !== 'Valid');
+        const validTransactions = rows.filter(row => !row.id_status || row.id_status === 'Valid');
 
         if (invalidTransactions.length > 0) {
             const tbody = document.getElementById('erp-warning-table-body');
-            tbody.innerHTML = invalidTransactions.map(t => `
+            tbody.innerHTML = invalidTransactions.map((t, idx) => `
                 <tr>
-                    <td>${escapeHTML(t.reference_number || '')}</td>
-                    <td style="color: var(--danger); font-weight: bold;">${escapeHTML(t.student_id || '')}</td>
-                    <td>${escapeHTML(formatMoney(this.erpAmount(t)))}</td>
-                    <td>${escapeHTML(t.id_status)}</td>
+                    <td style="font-family: monospace; font-weight: 600;">${escapeHTML(t.reference_number || '')}</td>
+                    <td style="color: var(--danger); font-weight: bold; font-family: monospace;">${escapeHTML(t.student_id || 'Missing')}</td>
+                    <td style="text-align: right; font-weight: 600;">${escapeHTML(formatMoney(this.erpAmount(t)))}</td>
+                    <td><span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.74rem;">${escapeHTML(t.id_status)}</span></td>
+                    <td style="text-align: right;">
+                        <button type="button" class="btn btn-outline btn-sm erp-modal-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px;">
+                            <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> Fix
+                        </button>
+                    </td>
                 </tr>
             `).join('');
 
-            document.getElementById('modal-erp-warning').classList.remove('hidden');
+            tbody.querySelectorAll('.erp-modal-fix-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.getAttribute('data-idx'), 10);
+                    const tx = invalidTransactions[idx];
+                    if (tx) this.openManualFixFromErp(tx);
+                });
+            });
+
+            const btnExportValidOnly = document.getElementById('btn-erp-export-valid-only');
+            if (btnExportValidOnly) {
+                btnExportValidOnly.disabled = validTransactions.length === 0;
+                btnExportValidOnly.innerHTML = `<i data-lucide="check-circle"></i> Export Valid Only (${validTransactions.length.toLocaleString()})`;
+                btnExportValidOnly.onclick = () => {
+                    document.getElementById('modal-erp-warning').classList.add('hidden');
+                    if (validTransactions.length === 0) {
+                        Toast.show('No valid transactions to export.', 'warning');
+                        return;
+                    }
+                    this.generateErpExcel(validTransactions);
+                };
+            }
 
             const btnContinue = document.getElementById('btn-erp-continue-export');
-            btnContinue.onclick = () => {
-                document.getElementById('modal-erp-warning').classList.add('hidden');
-                this.generateErpExcel(rows);
-            };
+            if (btnContinue) {
+                btnContinue.textContent = `Export All (${rows.length.toLocaleString()})`;
+                btnContinue.onclick = () => {
+                    document.getElementById('modal-erp-warning').classList.add('hidden');
+                    this.generateErpExcel(rows);
+                };
+            }
+
+            document.getElementById('modal-erp-warning').classList.remove('hidden');
+            if (window.lucide) lucide.createIcons({ root: document.getElementById('modal-erp-warning') });
         } else {
             this.generateErpExcel(rows);
         }
@@ -6722,6 +6994,23 @@ class App {
                 ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
             }
         });
+        ws['!cols'] = [
+            { wch: 13 }, // Date
+            { wch: 14 }, // Voucher
+            { wch: 10 }, // Company
+            { wch: 14 }, // Account
+            { wch: 18 }, // Name
+            { wch: 52 }, // Description
+            { wch: 10 }, // Debit
+            { wch: 14 }, // Credit
+            { wch: 10 }, // Currency
+            { wch: 18 }, // Offset account type
+            { wch: 24 }, // Offset Non-ledger account
+            { wch: 18 }, // Offset main account
+            { wch: 18 }, // Method of payment
+            { wch: 18 }, // Payment reference
+            { wch: 12 }  // Line number
+        ];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
 
@@ -6739,6 +7028,7 @@ class App {
 
         const batchNum = document.getElementById('erp-batch-number').value.trim();
         const startVoucher = document.getElementById('erp-voucher').value.trim();
+        const validOnly = document.getElementById('erp-record-valid-only')?.checked ?? true;
 
         if (!batchNum) {
             Toast.show('Please enter a Journal Batch Number', 'warning');
@@ -6751,15 +7041,21 @@ class App {
         btn.disabled = true;
 
         try {
-            const unexportedRows = this.erpData.filter(r => !r.erp_batch_number);
+            let unexportedRows = this.erpData.filter(r => !r.erp_batch_number);
             const alreadyExported = this.erpData.length - unexportedRows.length;
+            const skippedInvalid = validOnly ? unexportedRows.filter(r => r.id_status && r.id_status !== 'Valid').length : 0;
+            if (validOnly) {
+                unexportedRows = unexportedRows.filter(r => !r.id_status || r.id_status === 'Valid');
+            }
             
             if (unexportedRows.length === 0) {
-                Toast.show('All selected rows already have ERP references saved.', 'warning');
+                Toast.show(skippedInvalid > 0
+                    ? `No valid unposted rows to stamp (${skippedInvalid} invalid-ID row(s) skipped).`
+                    : 'All selected rows already have ERP references saved.', 'warning');
                 return;
             }
             if (alreadyExported > 0) {
-                if (!await window.customConfirm(`Warning: ${alreadyExported} rows already have ERP references. Only ${unexportedRows.length} new rows will be updated. Continue?`, 'Continue', 'Cancel')) {
+                if (!await window.customConfirm(`Warning: ${alreadyExported} rows already have ERP references. Only ${unexportedRows.length} new rows will be updated${skippedInvalid > 0 ? ` (${skippedInvalid} invalid rows skipped)` : ''}. Continue?`, 'Continue', 'Cancel')) {
                     return;
                 }
             }
@@ -6789,10 +7085,11 @@ class App {
             await this.logAudit('ERP References Recorded', batchNum, {
                 batch_number: batchNum,
                 voucher: startVoucher,
-                count: transactionIds.length
+                count: transactionIds.length,
+                skipped_invalid: skippedInvalid
             });
 
-            Toast.show('Successfully saved ERP references', 'success');
+            Toast.show(`Saved ERP batch "${batchNum}" on ${transactionIds.length.toLocaleString()} row(s)${skippedInvalid > 0 ? ` (${skippedInvalid} invalid skipped)` : ''}`, 'success');
             document.getElementById('erp-batch-number').value = '';
             document.getElementById('erp-voucher').value = '';
             
@@ -6804,6 +7101,7 @@ class App {
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
+            this.updateErpRecordButtonLabel();
             if (window.lucide) lucide.createIcons();
         }
     }

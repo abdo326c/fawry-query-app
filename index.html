@@ -1262,48 +1262,87 @@
             <section id="view-erp-export" class="view">
                 <div class="header">
                     <h1>ERP Export (Dynamics 365)</h1>
-                    <button class="btn btn-primary" id="btn-export-erp-file">
-                        <i data-lucide="download"></i> Download ERP Template
-                    </button>
+                    <div class="header-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
+                        <button class="btn btn-primary" id="btn-export-erp-file">
+                            <i data-lucide="download"></i> Download ERP Template
+                        </button>
+                    </div>
                 </div>
                 
-                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem;">
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Date From</label>
-                        <input type="date" id="erp-filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                <div class="filters-bar glass-card" style="margin-bottom: 1.5rem; padding: 1.1rem 1.25rem;">
+                    <div style="display: flex; gap: 0.85rem; flex-wrap: wrap; align-items: flex-end;">
+                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                            <label style="font-size: 0.75rem">Date From</label>
+                            <input type="date" id="erp-filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                        </div>
+                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                            <label style="font-size: 0.75rem">Date To</label>
+                            <input type="date" id="erp-filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                        </div>
+                        <div class="form-group" style="margin: 0; min-width: 125px; flex: 1;">
+                            <label style="font-size: 0.75rem">Bank</label>
+                            <select id="erp-filter-bank" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                                <option value="">All Banks</option>
+                                <option value="NUADIB64">NUADIB64</option>
+                                <option value="NUADCB136">NUADCB136</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin: 0; min-width: 145px; flex: 1;">
+                            <label style="font-size: 0.75rem">ERP Batch #</label>
+                            <select id="erp-filter-batch" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                                <option value="">All Batches</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin: 0; min-width: 150px; flex: 1.2;">
+                            <label style="font-size: 0.75rem">Item Name</label>
+                            <select id="erp-filter-item-name" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Items</option></select>
+                        </div>
+                        <div class="form-group" style="margin: 0; min-width: 150px; flex: 1.2;">
+                            <label style="font-size: 0.75rem">Mapping</label>
+                            <select id="erp-filter-mapping" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
+                        </div>
                     </div>
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Date To</label>
-                        <input type="date" id="erp-filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.9rem; padding-top: 0.85rem; border-top: 1px solid var(--border-color);">
+                        <div style="flex: 1; min-width: 240px; max-width: 420px;">
+                            <input type="text" id="erp-search" class="input-text" placeholder="Search Ref Number, Account / Student ID, Description, or Batch #..." style="padding: 0.4rem 0.75rem; font-size: 0.84rem;">
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                            <span style="font-size: 0.76rem; color: var(--text-muted); margin-right: 0.2rem;">Quick Dates:</span>
+                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="today" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">Today</button>
+                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="yesterday" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">Yesterday</button>
+                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="7d" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">7d</button>
+                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="this_month" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">This Month</button>
+                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="last_month" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">Last Month</button>
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-clear-erp-filters" style="padding: 0.18rem 0.65rem; font-size: 0.74rem; height: 28px;">Reset</button>
+                        </div>
                     </div>
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Bank</label>
-                        <select id="erp-filter-bank" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
-                            <option value="">All Banks</option>
-                            <option value="NUADIB64">NUADIB64</option>
-                            <option value="NUADCB136">NUADCB136</option>
-                        </select>
-                    </div>
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Item Name</label>
-                        <select id="erp-filter-item-name" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Items</option></select>
-                    </div>
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Mapping</label>
-                        <select id="erp-filter-mapping" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
+
+                    <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
+                        <span style="font-size: 0.78rem; color: var(--text-muted); margin-right: 0.25rem;">Filter Lines:</span>
+                        <button type="button" class="btn btn-outline btn-sm active" data-erp-filter="all" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">All</button>
+                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="ready" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Ready to Export (Valid &amp; Unposted)</button>
+                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="unposted" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Unposted Only</button>
+                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="recorded" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Already in ERP</button>
+                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="invalid" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Invalid IDs Only</button>
+                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="settled" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Settled Only</button>
                     </div>
                 </div>
 
                 <!-- ERP Batch Summary Bar -->
                 <div id="erp-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
-                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span style="color: var(--text-muted); font-size: 0.85rem;">Total Lines:</span>
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Filtered Lines:</span>
                             <strong id="erp-stat-total" style="font-size: 1.05rem; color: var(--text-main);">0</strong>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
                             <span style="color: var(--text-muted); font-size: 0.85rem;">Total Credit:</span>
                             <strong id="erp-stat-amount" style="font-size: 1.05rem; color: var(--primary);">EGP 0.00</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.85rem;">Ready to Export:</span>
+                            <strong id="erp-stat-ready" style="font-size: 1.05rem; color: #38bdf8;">0</strong>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
                             <span class="status-badge valid-id" style="font-size: 0.75rem;">Valid IDs</span>
@@ -1320,16 +1359,17 @@
                     </div>
                 </div>
 
-                <div class="glass-card table-container">
-                    <table class="data-table" id="erp-preview-table">
+                <div class="glass-card table-container" style="padding: 0;">
+                    <table class="data-table" id="erp-preview-table" style="min-width: 100%;">
                         <thead>
                             <tr>
                                 <th>Date</th>
-                                <th>Account</th>
+                                <th>Account / Status</th>
                                 <th>Description</th>
-                                <th>Credit</th>
-                                <th>Offset Non-ledger account</th>
-                                <th>Line number</th>
+                                <th style="text-align: right;">Credit</th>
+                                <th>Offset Bank</th>
+                                <th>ERP Status / Action</th>
+                                <th style="text-align: right;">Line #</th>
                             </tr>
                         </thead>
                         <tbody id="erp-preview-body">
@@ -1339,19 +1379,27 @@
                 </div>
 
                 <div class="glass-card mt-4" style="margin-top: 1.5rem; padding: 1.5rem;">
-                    <h3 style="margin-bottom: 0.5rem;">Record ERP Posting Details</h3>
-                    <p style="color: var(--text-muted); font-size: 0.9rem;">After importing the template into Dynamics 365, record the generated Batch Number and Voucher numbers for these transactions.</p>
-                    <div style="display: flex; gap: 1rem; align-items: flex-end; margin-top: 1rem;">
-                        <div class="form-group" style="margin: 0; flex: 1;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem;">
+                        <div>
+                            <h3 style="margin: 0 0 0.35rem 0;">Record ERP Posting Details</h3>
+                            <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0;">After importing the template into Dynamics 365, record the generated Batch Number and Voucher numbers for these transactions.</p>
+                        </div>
+                        <label style="display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.84rem; color: var(--text-muted); cursor: pointer;">
+                            <input type="checkbox" id="erp-record-valid-only" checked style="width: 15px; height: 15px; cursor: pointer;">
+                            <span>Only stamp <strong>Valid ID</strong> rows</span>
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem;">
+                        <div class="form-group" style="margin: 0; flex: 1; min-width: 200px;">
                             <label>Journal Batch Number</label>
                             <input type="text" id="erp-batch-number" class="input-text" placeholder="e.g. BATCH-2026-09">
                         </div>
-                        <div class="form-group" style="margin: 0; flex: 1;">
+                        <div class="form-group" style="margin: 0; flex: 1; min-width: 200px;">
                             <label>Starting Voucher (Optional)</label>
                             <input type="text" id="erp-voucher" class="input-text" placeholder="e.g. VCH-0001">
                         </div>
                         <button class="btn btn-success" id="btn-record-erp" style="padding: 0.5rem 1.5rem;">
-                            <i data-lucide="check-circle"></i> Save References
+                            <i data-lucide="check-circle"></i> <span id="btn-record-erp-label">Save References</span>
                         </button>
                     </div>
                 </div>
@@ -1752,23 +1800,24 @@
 
     <!-- ERP Warning Modal -->
     <div id="modal-erp-warning" class="modal hidden" style="z-index: 10020;">
-        <div class="modal-content glass-card" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-content glass-card" style="max-width: 820px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
                 <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
                     <i data-lucide="alert-triangle" style="width: 30px; height: 30px;"></i>
                 </div>
             </div>
             <div class="modal-body" style="padding-top: 0; overflow-y: auto; flex: 1;">
-                <h2 style="margin-bottom: 1rem; text-align: center;">Transactions with Invalid IDs found!</h2>
-                <p style="color: var(--text-muted); margin-bottom: 1rem; text-align: center;">Some transactions in this batch have errors in their ID column (e.g., missing ID or contains a name instead of an ID). Exporting these to Dynamics 365 will cause errors. Do you want to fix them first or continue anyway?</p>
+                <h2 style="margin-bottom: 0.5rem; text-align: center;">Transactions with Invalid IDs Found!</h2>
+                <p style="color: var(--text-muted); margin-bottom: 1rem; text-align: center; font-size: 0.9rem;">Some transactions in this selection have invalid or missing Student IDs. You can fix them directly below, export only the valid rows now, or export all rows anyway.</p>
                 <div class="table-container" style="margin-bottom: 1rem;">
-                    <table class="data-table">
+                    <table class="data-table" style="min-width: 100%;">
                         <thead>
                             <tr>
                                 <th>Ref Number</th>
-                                <th>Account/ID</th>
-                                <th>Amount</th>
+                                <th>Account / ID</th>
+                                <th style="text-align: right;">Amount</th>
                                 <th>Status</th>
+                                <th style="text-align: right;">Action</th>
                             </tr>
                         </thead>
                         <tbody id="erp-warning-table-body">
@@ -1777,9 +1826,12 @@
                     </table>
                 </div>
             </div>
-            <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: center; gap: 1rem;">
-                <button class="btn btn-primary" onclick="document.getElementById('modal-erp-warning').classList.add('hidden')">Cancel & Fix Errors</button>
-                <button class="btn btn-outline" id="btn-erp-continue-export" style="color: var(--danger); border-color: var(--danger);">Continue Export Anyway</button>
+            <div class="modal-footer" style="padding: 1.25rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: center; gap: 0.75rem; flex-wrap: wrap;">
+                <button class="btn btn-outline" onclick="document.getElementById('modal-erp-warning').classList.add('hidden')">Cancel</button>
+                <button class="btn btn-primary" id="btn-erp-export-valid-only" style="background: var(--success); border-color: var(--success);">
+                    <i data-lucide="check-circle"></i> Export Valid Only
+                </button>
+                <button class="btn btn-outline" id="btn-erp-continue-export" style="color: var(--danger); border-color: var(--danger);">Export All (Include Invalid)</button>
             </div>
         </div>
     </div>
