@@ -1762,6 +1762,9 @@ class App {
                 document.getElementById('modal-mapping').classList.add('hidden');
                 this.resetMappingModal();
                 this.loadMappings();
+                if (document.getElementById('view-transactions')?.classList.contains('active')) {
+                    this.loadTransactions();
+                }
             } catch (err) {
                 Toast.show('Error saving mapping: ' + err.message, 'error');
             } finally {
@@ -2392,20 +2395,112 @@ class App {
 
 
     initFilters() {
+        this.txQuickFilter = 'all';
+        this.txSortCol = 'payment_date';
+        this.txSortAsc = false;
+
+        const setDateInput = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = val;
+            if (el._flatpickr) el._flatpickr.setDate(val || '', false);
+        };
+
+        const syncQuickFilterButtons = () => {
+            document.querySelectorAll('[data-tx-quick-filter]').forEach(btn => {
+                const isActive = btn.getAttribute('data-tx-quick-filter') === (this.txQuickFilter || 'all');
+                btn.classList.toggle('btn-primary', isActive);
+                btn.classList.toggle('btn-outline', !isActive);
+            });
+        };
+
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             this.currentPage = 1;
             this.renderFilterChips('transactions');
             this.loadTransactions();
         });
         document.getElementById('btn-clear-filters').addEventListener('click', () => {
-            document.getElementById('filter-date-from').value = '';
-            document.getElementById('filter-date-to').value = '';
+            setDateInput('filter-date-from', '');
+            setDateInput('filter-date-to', '');
             document.getElementById('search-input').value = '';
             this.headerFilters.transactions = {};
+            this.txQuickFilter = 'all';
+            syncQuickFilterButtons();
             document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.currentPage = 1;
             this.renderFilterChips('transactions');
             this.loadTransactions();
+        });
+
+        // Date Range Presets
+        document.querySelectorAll('[data-tx-date-preset]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const preset = btn.getAttribute('data-tx-date-preset');
+                const now = new Date();
+                const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+                if (preset === 'today') {
+                    const s = fmtDate(now);
+                    setDateInput('filter-date-from', s);
+                    setDateInput('filter-date-to', s);
+                } else if (preset === '7d') {
+                    const past = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+                    setDateInput('filter-date-from', fmtDate(past));
+                    setDateInput('filter-date-to', fmtDate(now));
+                } else if (preset === 'this_month') {
+                    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+                    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                    setDateInput('filter-date-from', fmtDate(first));
+                    setDateInput('filter-date-to', fmtDate(last));
+                } else if (preset === 'last_month') {
+                    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                    const last = new Date(now.getFullYear(), now.getMonth(), 0);
+                    setDateInput('filter-date-from', fmtDate(first));
+                    setDateInput('filter-date-to', fmtDate(last));
+                } else {
+                    setDateInput('filter-date-from', '');
+                    setDateInput('filter-date-to', '');
+                }
+                this.currentPage = 1;
+                this.loadTransactions();
+            });
+        });
+
+        // Quick Filter Pills
+        document.querySelectorAll('[data-tx-quick-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = btn.getAttribute('data-tx-quick-filter') || 'all';
+                this.txQuickFilter = (this.txQuickFilter === target && target !== 'all') ? 'all' : target;
+                syncQuickFilterButtons();
+                this.currentPage = 1;
+                this.loadTransactions();
+            });
+        });
+
+        // Column Sorting Triggers
+        document.querySelectorAll('.th-sort-trigger').forEach(trigger => {
+            trigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const col = trigger.getAttribute('data-sort-col');
+                if (!col) return;
+                if (this.txSortCol === col) {
+                    this.txSortAsc = !this.txSortAsc;
+                } else {
+                    this.txSortCol = col;
+                    this.txSortAsc = (col === 'item_name' || col === 'student_id' || col === 'reference_number');
+                }
+                document.querySelectorAll('.th-sort-trigger').forEach(t => {
+                    const ind = t.querySelector('.sort-indicator');
+                    if (!ind) return;
+                    if (t.getAttribute('data-sort-col') === this.txSortCol) {
+                        ind.textContent = this.txSortAsc ? '▲' : '▼';
+                    } else {
+                        ind.textContent = '';
+                    }
+                });
+                this.currentPage = 1;
+                this.loadTransactions();
+            });
         });
 
         document.getElementById('btn-clear-automatcher')?.addEventListener('click', () => {
@@ -2433,12 +2528,12 @@ class App {
 
         const searchInput = document.getElementById('search-input');
         let searchTimeout;
-        searchInput?.addEventListener('input', (e) => {
+        searchInput?.addEventListener('input', () => {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
                 this.currentPage = 1;
                 this.loadTransactions();
-            }, 500);
+            }, 400);
         });
 
         // Make date filters auto-update on change like the search input
@@ -2524,6 +2619,9 @@ class App {
                         };
                     }
                     options = [...this.distinctCache[currentColumn].values];
+                    if (currentColumn === 'mapping' || currentColumn === 'second_mapping') {
+                        options.unshift('(Empty / Unmapped)');
+                    }
                 } catch (e) {
                     console.error('Error fetching distinct filter values', e);
                 }
@@ -2668,6 +2766,87 @@ class App {
                 this.loadTransactions();
             });
         }
+
+        const jumpToPage = () => {
+            const input = document.getElementById('tx-jump-page');
+            if (!input) return;
+            const target = parseInt(input.value, 10);
+            const maxPage = this.txTotalPages || 1;
+            if (!target || target < 1 || target > maxPage) {
+                Toast.show(`Enter a page number between 1 and ${maxPage}`, 'warning');
+                return;
+            }
+            this.currentPage = target;
+            input.value = '';
+            this.loadTransactions();
+        };
+        document.getElementById('btn-tx-jump-page')?.addEventListener('click', jumpToPage);
+        document.getElementById('tx-jump-page')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                jumpToPage();
+            }
+        });
+    }
+
+    applyTransactionFiltersToQuery(query) {
+        const dateFrom = document.getElementById('filter-date-from')?.value;
+        const dateTo = document.getElementById('filter-date-to')?.value;
+        const search = document.getElementById('search-input')?.value?.trim();
+
+        if (dateFrom) query = query.gte('payment_date', dateFrom);
+        if (dateTo) query = query.lte('payment_date', dateTo);
+
+        // Quick Filter Pill
+        const qf = this.txQuickFilter || 'all';
+        if (qf === 'missing_id') {
+            query = query.ilike('id_status', '%Missing ID%');
+        } else if (qf === 'error_id') {
+            query = query.ilike('id_status', '%Error%');
+        } else if (qf === 'unmapped') {
+            query = query.or('mapping.is.null,mapping.eq.');
+        } else if (qf === 'unsettled') {
+            query = query.or('is_settled.is.null,is_settled.eq.false');
+        }
+
+        // Column Header Popover Filters
+        for (const [col, values] of Object.entries(this.headerFilters.transactions || {})) {
+            if (values && values.length > 0) {
+                if (col === 'id_status') {
+                    const filters = [];
+                    if (values.includes('Valid')) filters.push('id_status.eq.Valid');
+                    if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
+                    if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
+                    if (filters.length > 0) query = query.or(filters.join(','));
+                } else if (col === 'is_settled') {
+                    const filters = [];
+                    if (values.includes('Yes')) filters.push('is_settled.eq.true');
+                    if (values.includes('No')) filters.push('is_settled.is.null', 'is_settled.eq.false');
+                    if (filters.length > 0) query = query.or(filters.join(','));
+                } else if ((col === 'mapping' || col === 'second_mapping') && values.includes('(Empty / Unmapped)')) {
+                    const nonEmpty = values.filter(v => v !== '(Empty / Unmapped)');
+                    const clauses = [`${col}.is.null`, `${col}.eq.`];
+                    nonEmpty.forEach(v => {
+                        const safeVal = sanitizeForFilter(v);
+                        if (safeVal) clauses.push(`${col}.eq.${safeVal}`);
+                    });
+                    query = query.or(clauses.join(','));
+                } else {
+                    query = query.in(col, values);
+                }
+            }
+        }
+
+        // Unified Search (supports partial Reference Number, Student ID, Mobile, Item Name, Mapping, 2nd Mapping)
+        if (search) {
+            const safeSearch = sanitizeForFilter(search);
+            if (safeSearch) {
+                query = query.or(
+                    `student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,customer_mobile.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%,mapping.ilike.%${safeSearch}%,second_mapping.ilike.%${safeSearch}%`
+                );
+            }
+        }
+        return query;
     }
 
     initExport() {
@@ -2683,43 +2862,9 @@ class App {
                 const pageSize = 1000;
                 let fetchMore = true;
 
-                const dateFrom = document.getElementById('filter-date-from').value;
-                const dateTo = document.getElementById('filter-date-to').value;
-                const search = document.getElementById('search-input').value;
-
-                // Fetch all data in pages
+                // Fetch all data in pages using the exact active filter logic
                 while (fetchMore) {
-                    let query = supabase.from('transactions').select('*');
-                    
-                    if (dateFrom) query = query.gte('payment_date', dateFrom);
-                    if (dateTo) query = query.lte('payment_date', dateTo);
-                    
-                    for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
-                        if (values && values.length > 0) {
-                            if (col === 'id_status') {
-                                const filters = [];
-                                if (values.includes('Valid')) filters.push('id_status.eq.Valid');
-                                if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
-                                if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
-                                if (filters.length > 0) query = query.or(filters.join(','));
-                            } else if (col === 'is_settled') {
-                                const filters = [];
-                                if (values.includes('Yes')) filters.push('is_settled.eq.true');
-                                if (values.includes('No')) filters.push('is_settled.is.null', 'is_settled.eq.false');
-                                if (filters.length > 0) query = query.or(filters.join(','));
-                            } else {
-                                query = query.in(col, values);
-                            }
-                        }
-                    }
-                    if (search) {
-                        const safeSearch = sanitizeForFilter(search);
-                        if (/^\d+$/.test(safeSearch)) {
-                            query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
-                        } else {
-                            query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%`);
-                        }
-                    }
+                    let query = this.applyTransactionFiltersToQuery(supabase.from('transactions').select('*'));
 
                     const { data, error } = await query
                         .order('payment_date', { ascending: true })
@@ -2862,53 +3007,25 @@ class App {
         const tbody = document.getElementById('transactions-body');
         tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(10) + '</tr>').join('');
 
-        const dateFrom = document.getElementById('filter-date-from')?.value;
-        const dateTo = document.getElementById('filter-date-to')?.value;
-        const search = document.getElementById('search-input')?.value;
-
-        let query = supabase.from('transactions').select('*', { count: 'exact' });
-
-        if (dateFrom) query = query.gte('payment_date', dateFrom);
-        if (dateTo) query = query.lte('payment_date', dateTo);
-        for (const [col, values] of Object.entries(this.headerFilters.transactions)) {
-            if (values && values.length > 0) {
-                if (col === 'id_status') {
-                    const filters = [];
-                    if (values.includes('Valid')) filters.push('id_status.eq.Valid');
-                    if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
-                    if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
-                    if (filters.length > 0) query = query.or(filters.join(','));
-                } else if (col === 'is_settled') {
-                    const filters = [];
-                    if (values.includes('Yes')) filters.push('is_settled.eq.true');
-                    if (values.includes('No')) filters.push('is_settled.is.null', 'is_settled.eq.false');
-                    if (filters.length > 0) query = query.or(filters.join(','));
-                } else {
-                    query = query.in(col, values);
-                }
-            }
-        }
-        if (search) {
-            const safeSearch = sanitizeForFilter(search);
-            if (/^\d+$/.test(safeSearch)) {
-                query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.eq.${safeSearch}`);
-            } else {
-                query = query.or(`student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%`);
-            }
-        }
+        let query = this.applyTransactionFiltersToQuery(
+            supabase.from('transactions').select('*', { count: 'exact' })
+        );
 
         const fromRange = (this.currentPage - 1) * this.pageSize;
         const toRange = fromRange + this.pageSize - 1;
+        const sortCol = this.txSortCol || 'payment_date';
+        const sortAsc = Boolean(this.txSortAsc);
 
         const { data, count: totalCount, error } = await query
-            .order('payment_date', { ascending: false })
-            .order('id', { ascending: false })
+            .order(sortCol, { ascending: sortAsc })
+            .order('id', { ascending: sortAsc })
             .range(fromRange, toRange);
 
         // A newer request was started while this one was running – ignore this (stale) result
         if (requestId !== this.txRequestId) return;
 
         const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
+        this.txTotalPages = totalPages;
 
         // Update pagination UI
         document.getElementById('page-info').innerText = totalCount 
@@ -2916,6 +3033,14 @@ class App {
             : `Page ${this.currentPage}`;
         document.getElementById('btn-prev').disabled = this.currentPage === 1;
         document.getElementById('btn-next').disabled = this.currentPage >= totalPages;
+        const jumpInput = document.getElementById('tx-jump-page');
+        if (jumpInput) jumpInput.max = String(totalPages);
+
+        // Update Live Summary Bar
+        const elCount = document.getElementById('tx-stat-count');
+        const elPageAmt = document.getElementById('tx-stat-page-amount');
+        const elHealth = document.getElementById('tx-stat-page-health');
+        if (elCount) elCount.textContent = (totalCount || 0).toLocaleString();
 
         if (error) {
             tbody.innerHTML = `<tr><td colspan="10" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
@@ -2923,12 +3048,26 @@ class App {
         }
 
         if (!data || data.length === 0) {
+            if (elPageAmt) elPageAmt.textContent = 'EGP 0.00';
+            if (elHealth) elHealth.textContent = '0 Valid';
             tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
             if (window.lucide) lucide.createIcons();
             return;
         }
 
-        tbody.innerHTML = data.map(t => {
+        const pageAmount = data.reduce((sum, r) => sum + (parseFloat(r.item_price || 0) || 0), 0);
+        const pageValidCount = data.filter(r => r.id_status === 'Valid').length;
+        const pageIssueCount = data.length - pageValidCount;
+        if (elPageAmt) elPageAmt.textContent = `EGP ${formatMoney(pageAmount)}`;
+        if (elHealth) {
+            elHealth.innerHTML = pageIssueCount > 0
+                ? `<span style="color: var(--success);">${pageValidCount} Valid</span> &bull; <span style="color: var(--danger);">${pageIssueCount} Issue${pageIssueCount === 1 ? '' : 's'}</span>`
+                : `<span style="color: var(--success);">${pageValidCount} Valid</span>`;
+        }
+
+        this.currentPageTransactions = data;
+
+        tbody.innerHTML = data.map((t, idx) => {
             let statusClass = 'valid';
             if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
             if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
@@ -2936,23 +3075,36 @@ class App {
             const statusText = escapeHTML(t.id_status || '');
             const statusTitle = statusClass === 'error' ? ` title="${statusText}"` : '';
             const shortStatus = statusClass === 'error' ? 'Error' : statusText;
+            const errorDetail = statusClass === 'error'
+                ? `<div style="font-size: 0.68rem; color: var(--danger); margin-top: 0.15rem; line-height: 1.15;">${escapeHTML(String(t.id_status).replace(/^Error:\s*/i, ''))}</div>`
+                : '';
+
+            const origItem = normalizeItemName(originalItemName(t)) || normalizeItemName(t.item_name) || '';
+            const mappingCell = t.mapping
+                ? escapeHTML(t.mapping)
+                : (origItem
+                    ? `<button type="button" class="btn btn-outline btn-sm" data-quick-map-item="${escapeHTML(origItem)}" title="Map '${escapeHTML(origItem)}'" style="padding: 0.12rem 0.45rem; font-size: 0.72rem; color: var(--warning); border-color: rgba(245, 158, 11, 0.4);">+ Map</button>`
+                    : '-');
 
             return `
-                <tr>
-                    <td style="white-space: nowrap;">${escapeHTML(t.reference_number)}</td>
+                <tr data-tx-row-idx="${idx}" style="cursor: pointer;" title="Click to inspect transaction details">
+                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date))}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong></td>
                     <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 200px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.item_name)}</td>
-                    <td style="white-space: nowrap;">${escapeHTML(t.mapping) || '-'}</td>
+                    <td style="white-space: nowrap;">${mappingCell}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.second_mapping) || '-'}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.bank)}</td>
                     <td>
-                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                            <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
-                            <button type="button" class="btn btn-icon" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}" style="padding: 0.15rem 0.3rem; opacity: ${statusClass === 'valid' ? '0.55' : '1'};">
-                                <i data-lucide="wrench" style="width: 13px; height: 13px;"></i>
-                            </button>
+                        <div style="display: inline-flex; flex-direction: column; align-items: flex-start;">
+                            <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                                <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
+                                <button type="button" class="btn btn-icon" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}" style="padding: 0.15rem 0.3rem; opacity: ${statusClass === 'valid' ? '0.55' : '1'};">
+                                    <i data-lucide="wrench" style="width: 13px; height: 13px;"></i>
+                                </button>
+                            </div>
+                            ${errorDetail}
                         </div>
                     </td>
                     <td>${t.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;padding:0.2rem 0.4rem;font-size:0.7rem;">Yes</span>' : '<span style="color:var(--text-muted);font-size:0.8rem;">No</span>'}</td>
@@ -2967,7 +3119,164 @@ class App {
                 this.openQuickFixForRef(ref);
             });
         });
+
+        tbody.querySelectorAll('[data-quick-map-item]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemName = btn.getAttribute('data-quick-map-item');
+                this.openQuickMapForItem(itemName);
+            });
+        });
+
+        tbody.querySelectorAll('tr[data-tx-row-idx]').forEach(row => {
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('button, a, input')) return;
+                const idx = parseInt(row.getAttribute('data-tx-row-idx'), 10);
+                const tx = (this.currentPageTransactions || [])[idx];
+                if (tx) this.openTransactionDetailsModal(tx);
+            });
+        });
+
         if (window.lucide) lucide.createIcons({ root: tbody });
+    }
+
+    async openQuickMapForItem(rawItemName) {
+        const cleanName = normalizeItemName(rawItemName);
+        if (!cleanName) return;
+        try {
+            if (!this.allMappingsData) {
+                this.allMappingsData = await fetchAll('item_mappings', '*', null, 'item_name');
+            }
+            this.updateMappingsStatsAndDropdowns(this.allMappingsData);
+        } catch (e) {
+            // ignore
+        }
+        const conflict = this.findConflictingMapping(cleanName, null);
+        if (conflict) {
+            this.openMappingModalForEdit(conflict.rule);
+            Toast.show(`Loaded existing mapping for "${conflict.rule.item_name}"`, 'info');
+        } else {
+            this.resetMappingModal('Add Mapping');
+            document.getElementById('map-original').value = cleanName;
+            document.getElementById('modal-mapping').classList.remove('hidden');
+            document.getElementById('map-original').dispatchEvent(new Event('input'));
+            setTimeout(() => document.getElementById('map-category')?.focus(), 50);
+        }
+    }
+
+    async openTransactionDetailsModal(tx) {
+        const modal = document.getElementById('modal-tx-details');
+        const body = document.getElementById('modal-tx-details-body');
+        if (!modal || !body || !tx) return;
+
+        const origItem = normalizeItemName(originalItemName(tx)) || normalizeItemName(tx.item_name) || '-';
+        let statusClass = 'valid';
+        if (tx.id_status && tx.id_status.includes('Missing')) statusClass = 'missing';
+        if (tx.id_status && tx.id_status.includes('Error')) statusClass = 'error';
+
+        body.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="color: var(--text-muted); font-size: 0.82rem;">Reference:</span>
+                    <strong style="font-size: 1.05rem;">${escapeHTML(tx.reference_number || '-')}</strong>
+                    <button type="button" class="btn btn-outline btn-sm" id="btn-tx-detail-copy-ref" style="padding: 0.12rem 0.45rem; font-size: 0.72rem;">Copy</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span class="badge ${statusClass}">${escapeHTML(tx.id_status || 'Unknown')}</span>
+                    ${tx.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;">Settled</span>' : '<span class="badge" style="background:rgba(148,163,184,0.2);color:var(--text-muted);">Unsettled</span>'}
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.85rem;">
+                <div class="glass-card" style="padding: 0.85rem; margin: 0;">
+                    <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Student &amp; Customer</h4>
+                    <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div>Student ID: <strong>${escapeHTML(tx.student_id || 'Empty')}</strong></div>
+                        <div id="tx-detail-student-lookup" style="color: var(--text-muted); font-size: 0.8rem;">Looking up Student Master...</div>
+                        <div>Customer Mobile: <strong>${escapeHTML(tx.customer_mobile || '-')}</strong></div>
+                        <div>Payment Date: <strong>${escapeHTML(toDateOnly(tx.payment_date) || '-')}</strong></div>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="padding: 0.85rem; margin: 0;">
+                    <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Financial Breakdown</h4>
+                    <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div>Item Price: <strong style="color: var(--primary);">EGP ${formatMoney(tx.item_price)}</strong></div>
+                        <div>Fawry Fees: <strong>EGP ${formatMoney(tx.fawry_fees)}</strong></div>
+                        <div>Net Amount: <strong>EGP ${formatMoney(tx.net_amount)}</strong></div>
+                        <div>Total Plus Fees: <strong>EGP ${formatMoney(tx.total_amount)}</strong></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card" style="padding: 0.85rem; margin: 0;">
+                <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Item, Mapping &amp; Settlement</h4>
+                <div style="font-size: 0.85rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem;">
+                    <div style="grid-column: 1 / -1;">Current Item Name: <strong>${escapeHTML(tx.item_name || '-')}</strong></div>
+                    <div style="grid-column: 1 / -1; color: var(--text-muted); font-size: 0.8rem;">Original Fawry Item: <strong>${escapeHTML(origItem)}</strong></div>
+                    <div>Mapping: <strong>${escapeHTML(tx.mapping || '-')}</strong></div>
+                    <div>2nd Mapping: <strong>${escapeHTML(tx.second_mapping || '-')}</strong></div>
+                    <div>Bank: <strong>${escapeHTML(tx.bank || '-')}</strong></div>
+                    <div>Merchant: <strong>${escapeHTML(tx.merchant_name || '-')}</strong></div>
+                    <div>Settlement Batch: <strong>${escapeHTML(tx.settlement_batch || '-')}</strong></div>
+                    <div>ERP Batch: <strong>${escapeHTML(tx.erp_batch_number || '-')}</strong></div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 0.65rem; flex-wrap: wrap;">
+                <button type="button" class="btn btn-outline" id="btn-tx-detail-map">
+                    <i data-lucide="layers" style="width: 14px; height: 14px;"></i> Map Item
+                </button>
+                <button type="button" class="btn btn-primary" id="btn-tx-detail-fix">
+                    <i data-lucide="wrench" style="width: 14px; height: 14px;"></i> Manual Fix
+                </button>
+                <button type="button" class="btn btn-outline" onclick="document.getElementById('modal-tx-details').classList.add('hidden')">Close</button>
+            </div>
+        `;
+
+        modal.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons({ root: body });
+
+        document.getElementById('btn-tx-detail-copy-ref')?.addEventListener('click', () => {
+            if (navigator.clipboard && tx.reference_number) {
+                navigator.clipboard.writeText(String(tx.reference_number));
+                Toast.show(`Copied Reference "${tx.reference_number}"`, 'success');
+            }
+        });
+
+        document.getElementById('btn-tx-detail-fix')?.addEventListener('click', () => {
+            modal.classList.add('hidden');
+            this.openQuickFixForRef(tx.reference_number);
+        });
+
+        document.getElementById('btn-tx-detail-map')?.addEventListener('click', () => {
+            modal.classList.add('hidden');
+            this.openQuickMapForItem(origItem);
+        });
+
+        // Live Student Master lookup
+        const lookupEl = document.getElementById('tx-detail-student-lookup');
+        if (lookupEl) {
+            if (!tx.student_id || tx.student_id === 'Empty') {
+                lookupEl.textContent = 'No Student ID on transaction';
+            } else {
+                try {
+                    const { data: st } = await supabase
+                        .from('student_master')
+                        .select('full_name, college, program')
+                        .eq('student_id', String(tx.student_id).trim())
+                        .maybeSingle();
+                    if (st) {
+                        const colProg = [st.college, st.program].filter(Boolean).join(' • ');
+                        lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong>${escapeHTML(st.full_name || 'N/A')}</strong>${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                    } else {
+                        lookupEl.textContent = 'Student ID not found in Student Master';
+                    }
+                } catch (e) {
+                    lookupEl.textContent = '';
+                }
+            }
+        }
     }
 
     async loadMappings() {

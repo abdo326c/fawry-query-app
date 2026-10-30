@@ -302,22 +302,63 @@
                 </div>
                 
                 <!-- Unified Filters & Search Bar -->
-                <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem; align-items: flex-end;">
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Date From</label>
-                        <input type="date" id="filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                <div class="filters-bar glass-card" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding: 1rem;">
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
+                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                            <label style="font-size: 0.75rem">Date From</label>
+                            <input type="date" id="filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                        </div>
+                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                            <label style="font-size: 0.75rem">Date To</label>
+                            <input type="date" id="filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                        </div>
+                        <div class="form-group" style="margin: 0; flex: 2; min-width: 240px;">
+                            <label style="font-size: 0.75rem">Search</label>
+                            <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref Number, Mobile, Item, or Mapping..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem">
+                        </div>
+                        <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
+                            <button class="btn btn-primary" id="btn-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
+                            <button class="btn btn-outline" id="btn-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
+                        </div>
                     </div>
-                    <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                        <label style="font-size: 0.75rem">Date To</label>
-                        <input type="date" id="filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
+                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Date Presets:</span>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="today" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Today</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="7d" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last 7 Days</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="this_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">This Month</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="last_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last Month</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="all" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">All Dates</button>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" id="tx-quick-filter-group">
+                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Quick Filter:</span>
+                            <button type="button" class="btn btn-primary btn-sm" data-tx-quick-filter="all" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">All</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="missing_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Missing ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="error_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Error ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unmapped" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Unmapped Item</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unsettled" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Unsettled</button>
+                        </div>
                     </div>
-                    <div class="form-group" style="margin: 0; flex: 2; min-width: 220px;">
-                        <label style="font-size: 0.75rem">Search</label>
-                        <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref, or Item..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem">
+                </div>
+
+                <!-- Transactions Live Summary Bar -->
+                <div id="transactions-summary-bar" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; padding: 0.75rem 1.25rem; border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <span style="color: var(--text-muted); font-size: 0.82rem;">Matching Records:</span>
+                            <strong id="tx-stat-count" style="font-size: 1rem; color: var(--text-main);">0</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.82rem;">Page Total:</span>
+                            <strong id="tx-stat-page-amount" style="font-size: 1rem; color: var(--primary);">EGP 0.00</strong>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.82rem;">Page Valid / Issues:</span>
+                            <strong id="tx-stat-page-health" style="font-size: 0.9rem; color: var(--success);">0 Valid</strong>
+                        </div>
                     </div>
-                    <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
-                        <button class="btn btn-primary" id="btn-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
-                        <button class="btn btn-outline" id="btn-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
+                    <div style="font-size: 0.78rem; color: var(--text-muted);">
+                        <span>Click any row to view full details, student info &amp; payment breakdown</span>
                     </div>
                 </div>
                 
@@ -328,28 +369,43 @@
                         <thead>
                             <tr>
                                 <th>
-                                    <div class="th-filter-wrapper" data-column="reference_number" data-table="transactions">
-                                        Ref Number <i data-lucide="filter" class="header-filter-icon"></i>
+                                    <div style="display: inline-flex; align-items: center; gap: 0.25rem;">
+                                        <span class="th-sort-trigger" data-sort-col="reference_number" style="cursor: pointer; user-select: none;" title="Sort by Reference Number">Ref Number <span class="sort-indicator"></span></span>
+                                        <div class="th-filter-wrapper" data-column="reference_number" data-table="transactions" style="display: inline-flex;">
+                                            <i data-lucide="filter" class="header-filter-icon"></i>
+                                        </div>
                                     </div>
                                 </th>
                                 <th>
-                                    <div class="th-filter-wrapper" data-column="payment_date" data-table="transactions">
-                                        Date <i data-lucide="filter" class="header-filter-icon"></i>
+                                    <div style="display: inline-flex; align-items: center; gap: 0.25rem;">
+                                        <span class="th-sort-trigger" data-sort-col="payment_date" style="cursor: pointer; user-select: none;" title="Sort by Date">Date <span class="sort-indicator">▼</span></span>
+                                        <div class="th-filter-wrapper" data-column="payment_date" data-table="transactions" style="display: inline-flex;">
+                                            <i data-lucide="filter" class="header-filter-icon"></i>
+                                        </div>
                                     </div>
                                 </th>
                                 <th>
-                                    <div class="th-filter-wrapper" data-column="student_id" data-table="transactions">
-                                        Student ID <i data-lucide="filter" class="header-filter-icon"></i>
+                                    <div style="display: inline-flex; align-items: center; gap: 0.25rem;">
+                                        <span class="th-sort-trigger" data-sort-col="student_id" style="cursor: pointer; user-select: none;" title="Sort by Student ID">Student ID <span class="sort-indicator"></span></span>
+                                        <div class="th-filter-wrapper" data-column="student_id" data-table="transactions" style="display: inline-flex;">
+                                            <i data-lucide="filter" class="header-filter-icon"></i>
+                                        </div>
                                     </div>
                                 </th>
                                 <th>
-                                    <div class="th-filter-wrapper" data-column="item_price" data-table="transactions">
-                                        Item Price <i data-lucide="filter" class="header-filter-icon"></i>
+                                    <div style="display: inline-flex; align-items: center; gap: 0.25rem;">
+                                        <span class="th-sort-trigger" data-sort-col="item_price" style="cursor: pointer; user-select: none;" title="Sort by Item Price">Item Price <span class="sort-indicator"></span></span>
+                                        <div class="th-filter-wrapper" data-column="item_price" data-table="transactions" style="display: inline-flex;">
+                                            <i data-lucide="filter" class="header-filter-icon"></i>
+                                        </div>
                                     </div>
                                 </th>
                                 <th>
-                                    <div class="th-filter-wrapper" data-column="item_name" data-table="transactions">
-                                        Item Name <i data-lucide="filter" class="header-filter-icon"></i>
+                                    <div style="display: inline-flex; align-items: center; gap: 0.25rem;">
+                                        <span class="th-sort-trigger" data-sort-col="item_name" style="cursor: pointer; user-select: none;" title="Sort by Item Name">Item Name <span class="sort-indicator"></span></span>
+                                        <div class="th-filter-wrapper" data-column="item_name" data-table="transactions" style="display: inline-flex;">
+                                            <i data-lucide="filter" class="header-filter-icon"></i>
+                                        </div>
                                     </div>
                                 </th>
                                 <th>
@@ -383,7 +439,7 @@
                             <!-- Data populated by JS -->
                         </tbody>
                     </table>
-                    <div id="pagination-controls" class="pagination" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div id="pagination-controls" class="pagination" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
                             <label for="page-size" style="font-size: 0.85rem; color: var(--text-muted);">Rows per page:</label>
                             <select id="page-size" class="input-text" style="padding: 0.3rem 1.5rem 0.3rem 0.5rem; font-size: 0.85rem;">
@@ -393,10 +449,14 @@
                                 <option value="100">100</option>
                             </select>
                         </div>
-                        <div style="display: flex; gap: 1rem; align-items: center;">
+                        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
                             <button id="btn-prev" class="btn btn-outline" disabled><i data-lucide="chevron-left"></i> Prev</button>
                             <span id="page-info">Page 1</span>
                             <button id="btn-next" class="btn btn-outline" disabled>Next <i data-lucide="chevron-right"></i></button>
+                            <div style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.25rem;">
+                                <input type="number" id="tx-jump-page" class="input-text" min="1" placeholder="Page #" style="width: 74px; padding: 0.28rem 0.45rem; font-size: 0.82rem;">
+                                <button type="button" id="btn-tx-jump-page" class="btn btn-outline btn-sm" style="padding: 0.3rem 0.55rem;">Go</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1262,6 +1322,19 @@
                     <button class="btn btn-outline" onclick="document.getElementById('modal-fix').classList.add('hidden')">Cancel</button>
                     <button class="btn btn-primary" id="btn-save-fix">Save Fix</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transaction Details Modal -->
+    <div id="modal-tx-details" class="modal hidden" style="z-index: 10020;">
+        <div class="modal-content glass-card" style="max-width: 640px;">
+            <div class="modal-header">
+                <h2 id="modal-tx-details-title">Transaction Details</h2>
+                <button class="btn-close" onclick="document.getElementById('modal-tx-details').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" id="modal-tx-details-body" style="display: flex; flex-direction: column; gap: 1rem;">
+                <!-- Populated by JS -->
             </div>
         </div>
     </div>
