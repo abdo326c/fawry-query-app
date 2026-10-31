@@ -233,4 +233,46 @@ test('App initializes and wires interactive buttons, modals, and pivot export lo
     expect(document.getElementById('btn-detect-duplicates').style.display).toBe('');
     expect(document.getElementById('btn-dedup-mappings').style.display).toBe('');
     expect(document.getElementById('nav-link-users').style.display).toBe('flex');
+
+    // 5. Automated Hygiene & Deduplication Report modal and admin-only controls
+    const modal = document.getElementById('modal-hygiene-report');
+    expect(modal).not.toBeNull();
+    expect(document.getElementById('btn-close-hygiene-modal')).not.toBeNull();
+    expect(document.getElementById('btn-hygiene-acknowledge')).not.toBeNull();
+    expect(document.getElementById('btn-hygiene-revert')).not.toBeNull();
+    expect(document.getElementById('btn-view-hygiene-report')).not.toBeNull();
+
+    // Non-admin users are strictly blocked from seeing the modal
+    window.app.userRole = 'accountant';
+    await window.app.checkAndShowHygieneReportModal({ force: true });
+    expect(modal.classList.contains('hidden')).toBe(true);
+
+    window.app.userRole = 'operator';
+    await window.app.checkAndShowHygieneReportModal({ force: true });
+    expect(modal.classList.contains('hidden')).toBe(true);
+
+    window.app.userRole = 'viewer';
+    await window.app.checkAndShowHygieneReportModal({ force: true });
+    expect(modal.classList.contains('hidden')).toBe(true);
+
+    // Admin user can open and acknowledge the modal
+    window.app.userRole = 'admin';
+    window.app.currentHygieneAudit = {
+        id: 300,
+        created_at: new Date().toISOString(),
+        details: {
+            health_score: '99.2%',
+            total_transactions: 38077,
+            cleaned_mappings: 2,
+            cleaned_fixes: 1,
+            is_reverted: false
+        }
+    };
+
+    modal.classList.remove('hidden');
+    expect(modal.classList.contains('hidden')).toBe(false);
+    
+    document.getElementById('btn-hygiene-acknowledge').click();
+    expect(modal.classList.contains('hidden')).toBe(true);
+    expect(localStorage.getItem('fawry_acknowledged_hygiene_id')).toBe('300');
 });

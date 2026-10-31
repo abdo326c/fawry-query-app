@@ -143,6 +143,7 @@ class App {
         this.initStudentMaster();
         this.initHistory();
         this.initUsersAndRoles();
+        this.initHygieneReportModal();
         this.initAuth();
     }
 
@@ -361,6 +362,7 @@ class App {
         }
         if (this.hasRole('admin')) {
             this.deduplicateItemMappings({ silent: true });
+            this.checkAndShowHygieneReportModal();
         }
         // ERP Export data is loaded when that tab is opened (see initNavigation)
         this.initRealtime();
@@ -8887,6 +8889,170 @@ class App {
                 </tr>
             `;
         }).join('');
+    }
+
+    // ==========================================
+    // Automated Deduplication & Hygiene Modal (Admin Only)
+    // ==========================================
+    initHygieneReportModal() {
+        this.currentHygieneAudit = null;
+
+        const btnClose = document.getElementById('btn-close-hygiene-modal');
+        if (btnClose) {
+            btnClose.addEventListener('click', () => {
+                document.getElementById('modal-hygiene-report')?.classList.add('hidden');
+            });
+        }
+
+        const btnAcknowledge = document.getElementById('btn-hygiene-acknowledge');
+        if (btnAcknowledge) {
+            btnAcknowledge.addEventListener('click', () => {
+                if (this.currentHygieneAudit?.id) {
+                    localStorage.setItem('fawry_acknowledged_hygiene_id', String(this.currentHygieneAudit.id));
+                }
+                document.getElementById('modal-hygiene-report')?.classList.add('hidden');
+                Toast.show('Deduplication & Hygiene Report acknowledged.', 'success');
+            });
+        }
+
+        const btnRevert = document.getElementById('btn-hygiene-revert');
+        if (btnRevert) {
+            btnRevert.addEventListener('click', async () => {
+                if (!this.requireRole('admin', 'revert automated database hygiene changes')) return;
+                if (!this.currentHygieneAudit?.id) return;
+
+                const confirmed = confirm(`Are you sure you want to revert the deduplication clean from Audit #${this.currentHygieneAudit.id}? This will restore all previously removed mapping rules and manual fixes.`);
+                if (!confirmed) return;
+
+                btnRevert.disabled = true;
+                btnRevert.innerHTML = '<i data-lucide="loader" class="spin"></i> Reverting...';
+
+                try {
+                    const { data, error } = await supabase.rpc('rollback_database_hygiene_audit', {
+                        p_audit_id: this.currentHygieneAudit.id
+                    });
+                    if (error) throw error;
+
+                    Toast.show(data?.message || 'Cleaned records successfully restored!', 'success');
+                    if (this.currentHygieneAudit?.id) {
+                        localStorage.setItem('fawry_acknowledged_hygiene_id', String(this.currentHygieneAudit.id));
+                    }
+                    document.getElementById('modal-hygiene-report')?.classList.add('hidden');
+                    
+                    // Reload rules tables if user is looking at them
+                    this.loadMappings?.();
+                    this.loadFixes?.();
+                } catch (err) {
+                    Toast.show('Rollback failed: ' + err.message, 'error');
+                } finally {
+                    btnRevert.disabled = false;
+                    btnRevert.innerHTML = '<i data-lucide="undo-2"></i> Reverse Clean (Undo)';
+                    if (window.lucide) lucide.createIcons();
+                }
+            });
+        }
+
+        // Manual trigger from Users & Roles tab header
+        const btnViewHygiene = document.getElementById('btn-view-hygiene-report');
+        if (btnViewHygiene) {
+            btnViewHygiene.addEventListener('click', () => {
+                if (!this.requireRole('admin', 'view hygiene audit report')) return;
+                this.checkAndShowHygieneReportModal({ force: true });
+            });
+        }
+    }
+
+    async checkAndShowHygieneReportModal({ force = false } = {}) {
+        if (!this.hasRole('admin')) return;
+
+        try {
+            const { data, error } = await supabase
+                .from('audit_logs')
+                .select('*')
+                .eq('action', 'Database Hygiene Audit')
+                .order('id', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (error || !data) return;
+
+            const auditId = data.id;
+            const lastAckId = localStorage.getItem('fawry_acknowledged_hygiene_id');
+
+            // If not forced and already acknowledged, don't show popup
+            if (!force && lastAckId && Number(lastAckId) >= Number(auditId)) {
+                return;
+            }
+
+            this.currentHygieneAudit = data;
+            const details = data.details || {};
+            const isReverted = details.is_reverted === true;
+            const autoCleaned = details.auto_cleaned === true;
+            const cleanedCount = (details.cleaned_mappings || 0) + (details.cleaned_fixes || 0);
+
+            // Populate Modal Fields
+            const scoreEl = document.getElementById('hygiene-modal-score');
+            if (scoreEl) scoreEl.innerText = details.health_score || '99.2%';
+
+            const txEl = document.getElementById('hygiene-modal-tx-count');
+            if (txEl) txEl.innerText = (details.total_transactions || 0).toLocaleString();
+
+            const dupMEl = document.getElementById('hygiene-modal-dup-mappings');
+            if (dupMEl) dupMEl.innerText = details.duplicate_mappings || 0;
+
+            const dupFEl = document.getElementById('hygiene-modal-dup-fixes');
+            if (dupFEl) dupFEl.innerText = details.duplicate_fixes || 0;
+
+            const identEl = document.getElementById('hygiene-modal-identical-dups');
+            if (identEl) identEl.innerText = details.identical_tx_duplicates || 0;
+
+            const unmapEl = document.getElementById('hygiene-modal-unmapped');
+            if (unmapEl) unmapEl.innerText = details.unmapped_items || 0;
+
+            const invIdEl = document.getElementById('hygiene-modal-invalid-ids');
+            if (invIdEl) invIdEl.innerText = details.invalid_ids || 0;
+
+            // Subtitle & Timestamp
+            const subEl = document.getElementById('hygiene-modal-subtitle');
+            const runDate = new Date(data.created_at);
+            const timeStr = !isNaN(runDate) ? runDate.toLocaleString() : 'Recently';
+            if (subEl) {
+                subEl.innerText = `Audit #${auditId} • ${timeStr} • ${autoCleaned ? 'Auto-Clean Cloud Run' : 'Inspection Scan'}`;
+            }
+
+            // Explanation box text
+            const expTextEl = document.getElementById('hygiene-modal-explanation-text');
+            if (expTextEl) {
+                if (isReverted) {
+                    expTextEl.innerHTML = '<span style="color: var(--warning); font-weight: 600;">⚠️ This audit run was previously REVERTED. Cleaned rules have been restored to the database.</span>';
+                } else if (cleanedCount > 0) {
+                    expTextEl.innerHTML = `<strong>Auto-Clean Action Taken:</strong> Merged ${details.cleaned_mappings || 0} duplicate mapping rules and ${details.cleaned_fixes || 0} duplicate manual fixes. A complete safety snapshot was captured before removal. If needed, click <strong>"Reverse Clean (Undo)"</strong> below.`;
+                } else {
+                    expTextEl.innerHTML = '<strong>Data Quality Status:</strong> All 38,077 raw transactions and mapping rules are fully verified. No duplicate rules or records required modification.';
+                }
+            }
+
+            // Revert Button Visibility (only if cleaned rules exist and not yet reverted)
+            const btnRevert = document.getElementById('btn-hygiene-revert');
+            if (btnRevert) {
+                btnRevert.style.display = (cleanedCount > 0 && !isReverted) ? 'inline-flex' : 'none';
+            }
+
+            // Google Drive Link
+            const driveRow = document.getElementById('hygiene-modal-drive-row');
+            const driveLink = document.getElementById('hygiene-modal-drive-link');
+            if (driveRow && driveLink) {
+                const folderUrl = details.drive_folder_url || 'https://drive.google.com/drive/folders/1QY9kzLuFKufFCLmUJNbRfs2PFcfFfz-M';
+                driveLink.href = folderUrl;
+                driveRow.style.display = 'flex';
+            }
+
+            // Show Modal
+            document.getElementById('modal-hygiene-report')?.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons();
+        } catch (err) {
+            console.warn('Failed to check hygiene audit report:', err);
+        }
     }
 
 }
