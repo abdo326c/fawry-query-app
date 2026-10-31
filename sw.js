@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fawry-app-cache-v12';
+const CACHE_NAME = 'fawry-app-cache-v13';
 const urlsToCache = [
   './',
   './index.html',
@@ -9,6 +9,11 @@ const urlsToCache = [
   './settlement.js?v=2.1.0',
   './supabase.js',
   './nu-logo.png',
+  './favicon.svg',
+  './favicon.png',
+  './favicon.ico',
+  './icon-192.png',
+  './icon-512.png',
   './manifest.json'
 ];
 

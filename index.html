@@ -5,12 +5,15 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fawry Payments Database</title>
-    <!-- PWA Requirements -->
+    <!-- Favicon & PWA Requirements -->
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#3b82f6">
+    <meta name="theme-color" content="#0f172a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="apple-touch-icon" href="nu-logo.png">
     <!-- PWA SW Registration -->
     <script>
         if ('serviceWorker' in navigator) {
@@ -27,7 +30,7 @@
             console.error("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
-    <link rel="stylesheet" href="styles.css?v=2.3.0">
+    <link rel="stylesheet" href="styles.css?v=2.3.1">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@0.294.0"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -48,9 +51,14 @@
     <!-- Auth Overlay -->
     <div id="auth-overlay" class="auth-overlay">
         <div class="auth-card">
-            <div class="logo-container" style="justify-content: center; margin-bottom: 2rem; gap: 0.75rem;">
-                <i data-lucide="database" style="width: 32px; height: 32px; color: var(--primary);"></i>
-                <span class="logo-text" style="font-size: 1.75rem; text-align: center; font-weight: 700; tracking: -0.05em;">Fawry Payments Database</span>
+            <div class="app-brand logo-container" style="justify-content: center; margin-bottom: 2rem;">
+                <div class="brand-badge brand-badge-lg">
+                    <i data-lucide="database" class="brand-icon"></i>
+                </div>
+                <div class="brand-info">
+                    <span class="brand-name logo-text" style="font-size: 1.5rem;">Fawry Payments</span>
+                    <span class="brand-tag">DATABASE SYSTEM</span>
+                </div>
             </div>
             <form id="auth-form">
                 <div class="form-group" style="margin-bottom: 1rem;">
@@ -72,30 +80,38 @@
     <div class="app-layout">
         <!-- Mobile Header -->
         <div class="mobile-header">
-            <div class="logo-container" style="margin-bottom: 0; gap: 0.5rem;">
-                <i data-lucide="database" style="width: 24px; height: 24px; color: var(--primary);"></i>
-                <span class="logo-text" style="font-weight: 700;">Fawry Payments Database</span>
+            <div class="app-brand logo-container">
+                <div class="brand-badge">
+                    <i data-lucide="database" class="brand-icon"></i>
+                </div>
+                <div class="brand-info">
+                    <span class="brand-name logo-text">Fawry Payments</span>
+                    <span class="brand-tag">DATABASE</span>
+                </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <div class="mobile-header-actions">
                 <button id="btn-mobile-search" class="btn-icon" title="Quick Search (Ctrl+K)">
-                    <i data-lucide="search" style="width: 20px; height: 20px;"></i>
+                    <i data-lucide="search" style="width: 18px; height: 18px;"></i>
                 </button>
-                <button id="btn-mobile-menu" class="btn-icon">
-                    <i data-lucide="menu" style="width: 24px; height: 24px;"></i>
+                <button id="btn-mobile-menu" class="btn-icon" aria-label="Open Navigation">
+                    <i data-lucide="menu" style="width: 22px; height: 22px;"></i>
                 </button>
             </div>
         </div>
 
         <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
         <aside class="sidebar">
-            <button id="btn-close-sidebar" class="btn-icon" style="display: none; position: absolute; right: 10px; top: 10px;">
-                <i data-lucide="x" style="width: 24px; height: 24px;"></i>
+            <button id="btn-close-sidebar" class="btn-icon" title="Close Sidebar" style="display: none;">
+                <i data-lucide="x" style="width: 20px; height: 20px;"></i>
             </button>
-            <div class="logo-container" style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.25rem; padding-left: 0.5rem; white-space: normal; word-wrap: break-word; overflow: hidden;">
-                <div style="display: flex; align-items: center; justify-content: center; background: rgba(56, 189, 248, 0.1); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.2); flex-shrink: 0;">
-                    <i data-lucide="database" style="width: 24px; height: 24px; color: var(--primary);"></i>
+            <div class="app-brand logo-container">
+                <div class="brand-badge">
+                    <i data-lucide="database" class="brand-icon"></i>
                 </div>
-                <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; line-height: 1.2;">Fawry Payments Database</span>
+                <div class="brand-info">
+                    <span class="brand-name logo-text">Fawry Payments</span>
+                    <span class="brand-tag">DATABASE</span>
+                </div>
             </div>
 
             <button type="button" id="btn-open-global-search" class="sidebar-search-btn" title="Quick Search across Transactions & Students (Ctrl+K)">

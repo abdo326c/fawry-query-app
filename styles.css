@@ -80,13 +80,48 @@ body {
     display: none;
     align-items: center;
     justify-content: space-between;
-    padding: 1rem 1.5rem;
-    background-color: rgba(7, 11, 20, 0.8);
+    padding: 0.75rem 1rem;
+    background-color: rgba(7, 11, 20, 0.85);
     backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     border-bottom: 1px solid var(--border-color);
     position: fixed;
     top: 0; left: 0; right: 0;
     z-index: 1000;
+    gap: 0.75rem;
+}
+
+.mobile-header .app-brand {
+    margin-bottom: 0;
+    padding: 0;
+    max-width: calc(100% - 90px);
+}
+
+.mobile-header .brand-badge {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+}
+
+.mobile-header .brand-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.mobile-header .brand-name {
+    font-size: 0.9rem;
+}
+
+.mobile-header .brand-tag {
+    font-size: 0.62rem;
+    letter-spacing: 0.07em;
+}
+
+.mobile-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
 }
 
 .btn-icon {
@@ -97,6 +132,14 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    border-radius: 8px;
+    padding: 0.35rem;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.btn-icon:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--primary);
 }
 
 /* Sidebar */
@@ -113,24 +156,107 @@ body {
     z-index: 9999;
 }
 
+/* App Brand & Logo Component */
+.app-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+    padding: 0.25rem 0.2rem;
+    min-width: 0;
+    transition: all 0.2s ease;
+    user-select: none;
+    overflow: hidden;
+}
+
+.brand-badge {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.16) 0%, rgba(14, 165, 233, 0.04) 100%);
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    box-shadow: 0 2px 10px rgba(56, 189, 248, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-brand:hover .brand-badge {
+    border-color: rgba(56, 189, 248, 0.45);
+    box-shadow: 0 4px 16px rgba(56, 189, 248, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+.brand-badge-lg {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+}
+
+.brand-badge-lg .brand-icon {
+    width: 28px;
+    height: 28px;
+}
+
+.brand-icon {
+    width: 20px;
+    height: 20px;
+    color: var(--primary);
+    stroke-width: 2.2;
+    filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.45));
+    display: block;
+    transition: filter 0.2s ease;
+}
+
+.brand-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.brand-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-main);
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.brand-tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--primary);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: 1;
+    margin-top: 3px;
+    white-space: nowrap;
+}
+
+/* Backward compatibility aliases */
 .logo-container {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    margin-bottom: 2.5rem;
 }
 
 .logo-icon {
     color: var(--primary);
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     filter: drop-shadow(0 0 8px var(--primary-glow));
 }
 
 .logo-text {
-    font-size: 1.25rem;
     font-weight: 700;
-    letter-spacing: -0.025em;
+    letter-spacing: -0.015em;
     color: var(--text-main);
 }
 
@@ -1020,13 +1146,54 @@ select option {
 .toast-info .toast-icon { color: var(--primary); }
 
 /* Responsive Design */
+@media (max-width: 1200px) {
+    .header {
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+    .header h1 {
+        font-size: 1.65rem;
+    }
+    .header-actions {
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .header-actions .btn {
+        padding: 0.45rem 0.75rem;
+        font-size: 0.82rem;
+    }
+}
+
 @media (max-width: 1024px) {
     .main-content {
-        padding: 1.5rem;
+        padding: 1.25rem;
     }
     
     .dashboard-layout {
         flex-direction: column;
+    }
+
+    .header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.85rem;
+    }
+
+    .header > div:first-child {
+        width: 100%;
+    }
+
+    .header-actions {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .header-actions .btn {
+        flex: 1 1 auto;
+        min-width: fit-content;
+        justify-content: center;
     }
 }
 
@@ -1040,11 +1207,29 @@ select option {
         top: 0; bottom: 0; left: 0;
         transform: translateX(-100%);
         box-shadow: 10px 0 30px rgba(0,0,0,0.8);
-        background-color: rgba(15, 23, 42, 0.95);
+        background-color: rgba(15, 23, 42, 0.98);
+        padding-top: 1.25rem;
     }
 
     .sidebar.open {
         transform: translateX(0);
+    }
+
+    .sidebar .app-brand {
+        padding-right: 2.75rem; /* Room for close button */
+    }
+
+    #btn-close-sidebar {
+        display: flex !important;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        z-index: 10;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border-color);
     }
 
     .main-content {
@@ -1545,6 +1730,24 @@ select option {
 
 :root.light .mobile-header {
     background-color: rgba(250, 250, 249, 0.95);
+}
+
+:root.light .brand-badge {
+    background: linear-gradient(135deg, rgba(2, 132, 199, 0.12) 0%, rgba(2, 132, 199, 0.03) 100%);
+    border-color: rgba(2, 132, 199, 0.25);
+    box-shadow: 0 2px 8px rgba(2, 132, 199, 0.08);
+}
+
+:root.light .brand-icon {
+    filter: none;
+}
+
+:root.light .brand-name {
+    color: #0f172a;
+}
+
+:root.light .brand-tag {
+    color: #0284c7;
 }
 
 :root.light .input-text,

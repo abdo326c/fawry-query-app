@@ -276,3 +276,40 @@ test('App initializes and wires interactive buttons, modals, and pivot export lo
     expect(modal.classList.contains('hidden')).toBe(true);
     expect(localStorage.getItem('fawry_acknowledged_hygiene_id')).toBe('300');
 });
+
+test('App brand icon and responsive header components are properly structured', () => {
+    // Favicon and PWA icons in <head>
+    const svgFavicon = document.querySelector('link[type="image/svg+xml"]');
+    expect(svgFavicon).not.toBeNull();
+    expect(svgFavicon.getAttribute('href')).toBe('favicon.svg');
+
+    const appleTouchIcon = document.querySelector('link[rel="apple-touch-icon"]');
+    expect(appleTouchIcon).not.toBeNull();
+    expect(appleTouchIcon.getAttribute('href')).toBe('apple-touch-icon.png');
+
+    // Sidebar Brand
+    const sidebar = document.querySelector('aside.sidebar');
+    expect(sidebar).not.toBeNull();
+    const sidebarBrand = sidebar.querySelector('.app-brand');
+    expect(sidebarBrand).not.toBeNull();
+    expect(sidebarBrand.querySelector('.brand-badge')).not.toBeNull();
+    expect(sidebarBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
+    expect(sidebarBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
+
+    // Mobile Header Brand
+    const mobileHeader = document.querySelector('.mobile-header');
+    expect(mobileHeader).not.toBeNull();
+    const mobileBrand = mobileHeader.querySelector('.app-brand');
+    expect(mobileBrand).not.toBeNull();
+    expect(mobileBrand.querySelector('.brand-badge')).not.toBeNull();
+    expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
+    expect(mobileBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
+
+    // Auth Overlay Brand
+    const authOverlay = document.getElementById('auth-overlay');
+    expect(authOverlay).not.toBeNull();
+    const authBrand = authOverlay.querySelector('.app-brand');
+    expect(authBrand).not.toBeNull();
+    expect(authBrand.querySelector('.brand-badge-lg')).not.toBeNull();
+    expect(authBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
+});
