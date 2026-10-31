@@ -194,3 +194,40 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.export_database_backup_payload() TO authenticated, anon;
+
+-- 4. Streaming Chunks for Full Raw Transactions & Student Master Backup
+CREATE OR REPLACE FUNCTION public.get_transactions_backup_chunk(p_offset INT, p_limit INT)
+RETURNS JSONB
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb)
+  FROM (
+    SELECT *
+    FROM transactions
+    ORDER BY id
+    OFFSET p_offset
+    LIMIT p_limit
+  ) t;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_transactions_backup_chunk(INT, INT) TO authenticated, anon;
+
+CREATE OR REPLACE FUNCTION public.get_students_backup_chunk(p_offset INT, p_limit INT)
+RETURNS JSONB
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(s)), '[]'::jsonb)
+  FROM (
+    SELECT *
+    FROM student_master
+    ORDER BY student_id
+    OFFSET p_offset
+    LIMIT p_limit
+  ) s;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_students_backup_chunk(INT, INT) TO authenticated, anon;
