@@ -1,0 +1,44 @@
+name: Fawry Daily Database Hygiene & Auto-Deduplication
+
+on:
+  schedule:
+    # Runs daily at 00:00 UTC (02:00 AM Africa/Cairo time)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      apply_fixes:
+        description: 'Auto-clean duplicate mapping rules and manual fixes'
+        type: boolean
+        default: true
+        required: true
+
+jobs:
+  database-hygiene:
+    name: Run Database Deduplication & Hygiene Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run Auto-Deduplication & Health Audit
+        env:
+          GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ' }}
+        run: |
+          if [ "${{ github.event.inputs.apply_fixes }}" = "false" ]; then
+            node scripts/database_hygiene.js
+          else
+            node scripts/database_hygiene.js --fix
+          fi

@@ -25,6 +25,13 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
+      - name: Pre-Backup Database Hygiene & Deduplication
+        env:
+          GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ' }}
+        run: node scripts/database_hygiene.js --fix
+
       - name: Execute Direct-to-Drive Backup
         env:
           GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}

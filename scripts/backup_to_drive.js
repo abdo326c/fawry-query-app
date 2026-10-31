@@ -133,7 +133,7 @@ export function getGoogleCredentials() {
 /**
  * Exchanges Google OAuth2 Refresh Token for a fresh Access Token
  */
-async function getDriveAccessToken(creds) {
+export async function getDriveAccessToken(creds) {
     const res = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -157,7 +157,7 @@ async function getDriveAccessToken(creds) {
 /**
  * Resolves or creates a Google Drive folder via pure REST API v3
  */
-async function getOrCreateDriveFolderRest(accessToken, name, parentId = null) {
+export async function getOrCreateDriveFolderRest(accessToken, name, parentId = null) {
     const qParts = [
         `name = '${name.replace(/'/g, "\\'")}'`,
         `mimeType = 'application/vnd.google-apps.folder'`,
@@ -201,7 +201,7 @@ async function getOrCreateDriveFolderRest(accessToken, name, parentId = null) {
 /**
  * Uploads a local file to a Google Drive folder via native multipart REST API
  */
-async function uploadFileToDriveRest(accessToken, filePath, fileName, mimeType, parentFolderId) {
+export async function uploadFileToDriveRest(accessToken, filePath, fileName, mimeType, parentFolderId) {
     const metadata = {
         name: fileName,
         parents: [parentFolderId]
