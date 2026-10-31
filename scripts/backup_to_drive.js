@@ -1,5 +1,6 @@
 /**
  * Fawry Direct-to-Cloud Automated Backup (Zero Local Disk Footprint)
+ * Compatible with Local Environments and GitHub Actions Cloud Cron
  * 
  * Hierarchy on Google Drive:
  *   Fawry Payments Backup
@@ -11,10 +12,10 @@
  * 
  * Features:
  * 1. Streams 100% of raw database records directly to ephemeral OS temp storage.
- * 2. Compresses all files into a single production zip archive.
- * 3. Uploads directly into the designated Google Drive Year/Month/Week hierarchy.
+ * 2. Compresses all files into a single production zip archive (cross-platform Windows & Linux).
+ * 3. Uploads directly into Google Drive via native REST API v3 (0 CLI dependency).
  * 4. Automatically purges all local temporary files immediately after upload (0 MB left on disk).
- * 5. Logs backup event into database audit trail (`audit_logs`).
+ * 5. Logs backup event into database audit trail (`audit_logs`) and GitHub Step Summary.
  * 
  * Usage:
  *   npm run backup
@@ -26,8 +27,8 @@ import path from 'path';
 import { finished } from 'stream/promises';
 import { execSync } from 'child_process';
 
-const SUPABASE_URL = 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ';
 
 const headers = {
     'apikey': SUPABASE_KEY,
@@ -82,37 +83,160 @@ export function getFolderHierarchy(date = new Date()) {
 }
 
 /**
- * Resolves or creates a Google Drive folder by exact name under parent
+ * Resolves Google Drive OAuth2 Credentials
+ * Supports:
+ *   1. GDRIVE_TOKEN_JSON environment variable (Single string secret in CI/GitHub)
+ *   2. GDRIVE_REFRESH_TOKEN / GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET env vars
+ *   3. Local token.json from Antigravity plugin storage
  */
-function getOrCreateDriveFolder(name, parentId = null) {
-    const listCmd = parentId 
-        ? `gdrive readonly search --parent-id "${parentId}" --name-exact "${name}" --type folder --json`
-        : `gdrive readonly search --name-exact "${name}" --type folder --json`;
-    try {
-        const out = execSync(listCmd, { stdio: 'pipe', encoding: 'utf-8' });
-        const items = JSON.parse(out);
-        if (Array.isArray(items) && items.length > 0) {
+export function getGoogleCredentials() {
+    if (process.env.GDRIVE_TOKEN_JSON) {
+        try {
+            const raw = JSON.parse(process.env.GDRIVE_TOKEN_JSON);
             return {
-                id: items[0].id,
-                name: items[0].name,
-                webViewLink: items[0].webViewLink || `https://drive.google.com/drive/folders/${items[0].id}`
+                clientId: raw.client_id,
+                clientSecret: raw.client_secret,
+                refreshToken: raw.token?.refresh_token || raw.refresh_token
             };
+        } catch (e) {
+            console.warn('⚠️  Could not parse GDRIVE_TOKEN_JSON:', e.message);
         }
-    } catch (e) {
-        // Continue to creation
     }
 
-    const createCmd = parentId 
-        ? `gdrive mutate mkdir "${name}" --parent "${parentId}"` 
-        : `gdrive mutate mkdir "${name}"`;
-    const createOut = execSync(createCmd, { stdio: 'pipe', encoding: 'utf-8' });
-    const match = createOut.match(/ID:\s*([a-zA-Z0-9_-]+)/);
-    const id = match ? match[1] : null;
-    return {
-        id,
+    if (process.env.GDRIVE_REFRESH_TOKEN && process.env.GDRIVE_CLIENT_ID) {
+        return {
+            clientId: process.env.GDRIVE_CLIENT_ID,
+            clientSecret: process.env.GDRIVE_CLIENT_SECRET,
+            refreshToken: process.env.GDRIVE_REFRESH_TOKEN
+        };
+    }
+
+    const localCandidates = [
+        path.join(process.env.USERPROFILE || '', '.gemini', 'antigravity', 'plugin_data', 'gdrive', 'token.json'),
+        path.join(process.env.HOME || '', '.gemini', 'antigravity', 'plugin_data', 'gdrive', 'token.json')
+    ];
+
+    for (const p of localCandidates) {
+        if (p && fs.existsSync(p)) {
+            const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
+            return {
+                clientId: raw.client_id,
+                clientSecret: raw.client_secret,
+                refreshToken: raw.token?.refresh_token || raw.refresh_token
+            };
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Exchanges Google OAuth2 Refresh Token for a fresh Access Token
+ */
+async function getDriveAccessToken(creds) {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+            client_id: creds.clientId,
+            client_secret: creds.clientSecret,
+            refresh_token: creds.refreshToken,
+            grant_type: 'refresh_token'
+        })
+    });
+
+    if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Google OAuth Token Refresh Failed: ${res.status} ${errorText}`);
+    }
+
+    const data = await res.json();
+    return data.access_token;
+}
+
+/**
+ * Resolves or creates a Google Drive folder via pure REST API v3
+ */
+async function getOrCreateDriveFolderRest(accessToken, name, parentId = null) {
+    const qParts = [
+        `name = '${name.replace(/'/g, "\\'")}'`,
+        `mimeType = 'application/vnd.google-apps.folder'`,
+        `trashed = false`
+    ];
+    if (parentId) {
+        qParts.push(`'${parentId}' in parents`);
+    }
+    const q = qParts.join(' and ');
+    const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,webViewLink)`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    const searchJson = await searchRes.json();
+    if (searchJson.files && searchJson.files.length > 0) {
+        return searchJson.files[0];
+    }
+
+    // Create Folder
+    const body = {
         name,
-        webViewLink: `https://drive.google.com/drive/folders/${id}`
+        mimeType: 'application/vnd.google-apps.folder'
     };
+    if (parentId) body.parents = [parentId];
+
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+
+    if (!createRes.ok) {
+        throw new Error(`Failed to create Drive folder "${name}": ${createRes.status} ${await createRes.text()}`);
+    }
+
+    return await createRes.json();
+}
+
+/**
+ * Uploads a local file to a Google Drive folder via native multipart REST API
+ */
+async function uploadFileToDriveRest(accessToken, filePath, fileName, mimeType, parentFolderId) {
+    const metadata = {
+        name: fileName,
+        parents: [parentFolderId]
+    };
+    const fileBuffer = fs.readFileSync(filePath);
+    const boundary = '-------fawrybackup' + Date.now();
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    const multipartBody = Buffer.concat([
+        Buffer.from(
+            delimiter +
+            'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+            JSON.stringify(metadata) +
+            delimiter +
+            `Content-Type: ${mimeType}\r\n\r\n`
+        ),
+        fileBuffer,
+        Buffer.from(closeDelimiter)
+    ]);
+
+    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body: multipartBody
+    });
+
+    if (!res.ok) {
+        throw new Error(`Drive file upload failed ("${fileName}"): ${res.status} ${await res.text()}`);
+    }
+
+    return await res.json();
 }
 
 /**
@@ -136,13 +260,22 @@ export async function runFullDatabaseBackup() {
     console.log(`   >> Month: ${hierarchy.month}`);
     console.log(`   >>> Week: ${hierarchy.week}`);
 
+    // Verify Google Credentials upfront
+    const creds = getGoogleCredentials();
+    if (!creds || !creds.refreshToken) {
+        throw new Error('Google Drive credentials not found. Please provide GDRIVE_TOKEN_JSON or authenticate via gdrive auth login');
+    }
+    const driveAccessToken = await getDriveAccessToken(creds);
+    console.log('  ✓ Google Drive REST API authenticated successfully');
+
     // Create Ephemeral Working Directory in OS Temp
     const tempDir = path.join(os.tmpdir(), `fawry_backup_temp_${timestamp}`);
     fs.mkdirSync(tempDir, { recursive: true });
 
     let zipPath = null;
-    let driveUploaded = false;
     let weekFolder = null;
+    let uploadedArchive = null;
+    let uploadedManifest = null;
 
     try {
         // [1/4] Core Configuration Snapshot
@@ -242,39 +375,47 @@ export async function runFullDatabaseBackup() {
         const manifestPath = path.join(tempDir, 'manifest.json');
         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
 
-        // Package Everything into Single Zip Archive
+        // Package Everything into Single Zip Archive (Cross-Platform)
         console.log('\n[4/5] Packaging database into compressed archive...');
         zipPath = path.join(os.tmpdir(), `fawry_backup_${timestamp}.zip`);
-        execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${tempDir}\\*' -DestinationPath '${zipPath}' -Force"`);
+        
+        if (process.platform === 'win32') {
+            execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${tempDir}\\*' -DestinationPath '${zipPath}' -Force"`);
+        } else {
+            // Linux / macOS (GitHub Actions runner)
+            execSync(`cd "${tempDir}" && zip -q -r "${zipPath}" .`);
+        }
+        
         const zipSizeMb = (fs.statSync(zipPath).size / (1024 * 1024)).toFixed(2);
         console.log(`  ✓ Production Package Created: ${zipSizeMb} MB (transactions, students, config, roles)`);
 
-        // [5/5] Google Drive Upload into Year > Month > Week Hierarchy
+        // [5/5] Google Drive Upload via Native REST API v3
         console.log('\n[5/5] Resolving Google Drive hierarchy and uploading directly...');
-        let authCheck = '';
-        try {
-            authCheck = execSync('gdrive auth status 2>&1', { encoding: 'utf-8' });
-        } catch (e) {
-            authCheck = e.stdout || e.stderr || '';
-        }
-        if (!authCheck.includes('Logged in')) {
-            throw new Error('Google Drive CLI not logged in. Please authenticate with gdrive auth login');
-        }
-
-        const rootFolder = getOrCreateDriveFolder('Fawry Payments Backup');
-        const yearFolder = getOrCreateDriveFolder(hierarchy.year, rootFolder.id);
-        const monthFolder = getOrCreateDriveFolder(hierarchy.month, yearFolder.id);
-        weekFolder = getOrCreateDriveFolder(hierarchy.week, monthFolder.id);
+        const rootFolder = await getOrCreateDriveFolderRest(driveAccessToken, 'Fawry Payments Backup');
+        const yearFolder = await getOrCreateDriveFolderRest(driveAccessToken, hierarchy.year, rootFolder.id);
+        const monthFolder = await getOrCreateDriveFolderRest(driveAccessToken, hierarchy.month, yearFolder.id);
+        weekFolder = await getOrCreateDriveFolderRest(driveAccessToken, hierarchy.week, monthFolder.id);
 
         console.log(`  Uploading backup archive to: ${hierarchy.year} > ${hierarchy.month} > ${hierarchy.week}`);
-        const uploadRes = execSync(`gdrive mutate upload "${zipPath}" --parent "${weekFolder.id}"`, { stdio: 'pipe', encoding: 'utf-8' });
+        uploadedArchive = await uploadFileToDriveRest(
+            driveAccessToken,
+            zipPath,
+            `fawry_backup_${timestamp}.zip`,
+            'application/zip',
+            weekFolder.id
+        );
         console.log('  ✓ Archive uploaded to Google Drive!');
-        console.log('    ' + uploadRes.trim());
+        console.log(`    File ID: ${uploadedArchive.id}`);
 
-        // Also upload manifest so users can read stats directly in Drive
-        const manifestRes = execSync(`gdrive mutate upload "${manifestPath}" --parent "${weekFolder.id}"`, { stdio: 'pipe', encoding: 'utf-8' });
-        console.log('  ✓ Manifest uploaded: ' + manifestRes.trim());
-        driveUploaded = true;
+        uploadedManifest = await uploadFileToDriveRest(
+            driveAccessToken,
+            manifestPath,
+            'manifest.json',
+            'application/json',
+            weekFolder.id
+        );
+        console.log('  ✓ Manifest uploaded to Google Drive!');
+        console.log(`    File ID: ${uploadedManifest.id}`);
 
         // Record Audit Log in Supabase
         try {
@@ -290,7 +431,8 @@ export async function runFullDatabaseBackup() {
                         size_mb: zipSizeMb,
                         hierarchy: `Fawry Payments Backup > ${hierarchy.year} > ${hierarchy.month} > ${hierarchy.week}`,
                         drive_folder_url: weekFolder.webViewLink,
-                        financial_total_egp: totalTxAmount
+                        financial_total_egp: totalTxAmount,
+                        runner: process.env.GITHUB_ACTIONS ? 'github-actions-cloud' : 'local-runtime'
                     }
                 })
             });
@@ -309,6 +451,25 @@ export async function runFullDatabaseBackup() {
         console.log(`   Local Storage: 0 MB (all temporary files purged from disk)`);
         console.log('='.repeat(75));
 
+        // GitHub Actions Step Summary
+        if (process.env.GITHUB_STEP_SUMMARY) {
+            try {
+                const summaryMarkdown = `
+### ☁️ Fawry Payments Automated Cloud Backup Succeeded
+
+- **Status**: Completed in ${(duration / 1000).toFixed(1)}s
+- **Destination**: [Fawry Payments Backup > ${hierarchy.year} > ${hierarchy.month} > ${hierarchy.week}](${weekFolder.webViewLink})
+- **Archive Size**: ${zipSizeMb} MB
+- **Total Transactions**: ${totalTxCount.toLocaleString()} (EGP ${totalTxAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })})
+- **Total Students**: ${totalStudentCount.toLocaleString()}
+- **Archive ID**: \`${uploadedArchive.id}\`
+`;
+                fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryMarkdown);
+            } catch (sumErr) {
+                // Ignore summary write errors
+            }
+        }
+
         return {
             success: true,
             manifest,
@@ -324,7 +485,6 @@ export async function runFullDatabaseBackup() {
             if (zipPath && fs.existsSync(zipPath)) {
                 fs.unlinkSync(zipPath);
             }
-            // Clean up any old leftover local backup files in workspace
             const localBackupsDir = path.resolve('backups');
             if (fs.existsSync(localBackupsDir)) {
                 fs.rmSync(localBackupsDir, { recursive: true, force: true });

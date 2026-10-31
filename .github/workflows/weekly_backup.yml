@@ -1,0 +1,33 @@
+name: Fawry Weekly Cloud Backup to Google Drive
+
+on:
+  schedule:
+    # Runs every Friday at 16:00 UTC (18:00 / 6:00 PM Africa/Cairo time)
+    - cron: '0 16 * * 5'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions dashboard anytime
+
+jobs:
+  cloud-backup:
+    name: Full Database Backup to Google Drive
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Execute Direct-to-Drive Backup
+        env:
+          GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ' }}
+        run: node scripts/backup_to_drive.js
