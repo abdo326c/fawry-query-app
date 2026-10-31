@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'vitest';
+import { getFolderHierarchy } from '../scripts/backup_to_drive.js';
 
 describe('Supabase Free Tier Capacity & Cold Storage Archival Pipeline', () => {
 
@@ -82,5 +83,24 @@ describe('Supabase Free Tier Capacity & Cold Storage Archival Pipeline', () => {
         for (const tbl of protectedTables) {
             expect(pruningTargetTables.includes(tbl)).toBe(false);
         }
+    });
+
+    test('getFolderHierarchy correctly structures Year > Month > Week for Google Drive', () => {
+        const sampleDate = new Date(2026, 9, 31); // October 31, 2026
+        const hierarchy = getFolderHierarchy(sampleDate);
+
+        expect(hierarchy.year).toBe('2026');
+        expect(hierarchy.month).toBe('10 - October');
+        expect(hierarchy.week).toContain('Week 44');
+        expect(hierarchy.week).toContain('Oct 26 - Nov 01');
+    });
+
+    test('getFolderHierarchy accurately computes week boundaries across months', () => {
+        const janDate = new Date(2026, 0, 15); // January 15, 2026
+        const hierarchy = getFolderHierarchy(janDate);
+
+        expect(hierarchy.year).toBe('2026');
+        expect(hierarchy.month).toBe('01 - January');
+        expect(hierarchy.week).toContain('Week 03');
     });
 });
