@@ -20,3 +20,7 @@ desktop.ini
 # Test/scratch files
 *.log
 scratch_*.js
+
+# Local database backups & cold storage archives
+backups/
+cold_storage_archive/
