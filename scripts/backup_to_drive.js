@@ -157,20 +157,42 @@ export async function runFullDatabaseBackup() {
     // [4/4] Google Drive Integration
     console.log('\n[4/4] Syncing backup to Google Drive...');
     let gdriveUploaded = false;
+    let driveFolderUrl = null;
     try {
         const authCheck = execSync('gdrive auth status', { stdio: 'pipe', encoding: 'utf-8' });
-        if (authCheck.includes('Logged in as') || !authCheck.includes('Not logged in')) {
-            console.log('  Uploading compressed transactions & manifest to Google Drive...');
-            const uploadRes = execSync(`gdrive mutate upload "${compressedTxArchive}"`, { stdio: 'pipe', encoding: 'utf-8' });
-            console.log('  ✓ Google Drive upload succeeded!');
+        if (authCheck.includes('Authentication Status: Logged in') || authCheck.includes('Logged in as') || !authCheck.includes('Not logged in')) {
+            // Find or create 'Fawry_Database_Backups' folder
+            let folderId = '1jzo9RbxulXCY2-AiSPWhOfj4Vg85iv-U';
+            try {
+                const searchRes = execSync('gdrive readonly search --name-contains "Fawry_Database_Backups"', { stdio: 'pipe', encoding: 'utf-8' });
+                const match = searchRes.match(/([a-zA-Z0-9_-]{25,})\s+Fawry_Database_Backups/);
+                if (match) {
+                    folderId = match[1];
+                }
+            } catch (e) {
+                // Keep default folder ID
+            }
+
+            console.log(`  Uploading compressed archive & manifest to Drive folder (${folderId})...`);
+            const uploadRes = execSync(`gdrive mutate upload "${compressedTxArchive}" --parent "${folderId}"`, { stdio: 'pipe', encoding: 'utf-8' });
+            console.log('  ✓ Compressed transactions archive uploaded to Google Drive!');
             console.log('    ' + uploadRes.trim());
+
+            const manifestPath = path.join(targetDir, 'manifest.json');
+            if (fs.existsSync(manifestPath)) {
+                const manifestRes = execSync(`gdrive mutate upload "${manifestPath}" --parent "${folderId}"`, { stdio: 'pipe', encoding: 'utf-8' });
+                console.log('  ✓ Manifest uploaded: ' + manifestRes.trim());
+            }
+
+            driveFolderUrl = `https://drive.google.com/drive/folders/${folderId}`;
+            console.log(`  🔗 Google Drive Folder: ${driveFolderUrl}`);
             gdriveUploaded = true;
         } else {
             console.log('  ℹ️ Google Drive CLI not yet logged in.');
             console.log('     Local backup is safely saved. To upload to Google Drive, run: gdrive auth login');
         }
     } catch (err) {
-        console.log('  ℹ️ Google Drive CLI check skipped (' + err.message.split('\n')[0] + ').');
+        console.log('  ℹ️ Google Drive CLI sync skipped (' + err.message.split('\n')[0] + ').');
         console.log('     All raw transactions and tables are securely backed up locally.');
     }
 
@@ -183,13 +205,17 @@ export async function runFullDatabaseBackup() {
     console.log(`   Manual Fixes: ${coreSnapshot.fixes_count} rules`);
     console.log(`   Backup Path:  ${targetDir}`);
     console.log(`   Archive:      ${compressedTxArchive} (${compressedSizeMb} MB)`);
+    if (driveFolderUrl) {
+        console.log(`   Drive Cloud:  ${driveFolderUrl}`);
+    }
     console.log('='.repeat(70));
 
     return {
         manifest,
         backupDirectory: targetDir,
         archivePath: compressedTxArchive,
-        gdriveUploaded
+        gdriveUploaded,
+        driveFolderUrl
     };
 }
 
