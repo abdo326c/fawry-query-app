@@ -726,12 +726,13 @@ AS $function$
       AND t.student_id <> ''
       AND COALESCE(t.item_price, 0) > 0
       AND t.payment_date IS NOT NULL
+      AND LOWER(BTRIM(COALESCE(t.mapping, ''))) = 'tuition'
   ),
   grouped AS (
     SELECT
       v.student_id,
       COALESCE(NULLIF(v.item_name, ''), 'Unknown') AS item_name,
-      COALESCE(NULLIF(v.mapping, ''), 'Unmapped') AS mapping,
+      COALESCE(NULLIF(v.mapping, ''), 'Tuition') AS mapping,
       v.item_price,
       COUNT(DISTINCT v.reference_number) AS ref_count,
       SUM(v.item_price) AS total_amount,
@@ -741,7 +742,7 @@ AS $function$
       ARRAY_AGG(v.bank::text ORDER BY v.payment_date DESC, v.id DESC) AS banks,
       ARRAY_AGG(v.is_settled ORDER BY v.payment_date DESC, v.id DESC) AS settled_flags
     FROM valid_tx v
-    GROUP BY v.student_id, COALESCE(NULLIF(v.item_name, ''), 'Unknown'), COALESCE(NULLIF(v.mapping, ''), 'Unmapped'), v.item_price
+    GROUP BY v.student_id, COALESCE(NULLIF(v.item_name, ''), 'Unknown'), COALESCE(NULLIF(v.mapping, ''), 'Tuition'), v.item_price
     HAVING COUNT(DISTINCT v.reference_number) > 1
        AND (MAX(v.payment_date) - MIN(v.payment_date)) <= GREATEST(0, p_days_window)
   )

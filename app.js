@@ -9124,34 +9124,56 @@ class App {
 
         const q = (document.getElementById('double-payments-search')?.value || '').trim().toLowerCase();
         const filtered = (this.doublePaymentClusters || []).filter(c => {
+            if (String(c.mapping || 'Tuition').trim().toLowerCase() !== 'tuition') return false;
             if (!q) return true;
             const hay = `${c.student_id || ''} ${c.student_name || ''} ${c.item_name || ''} ${c.mapping || ''} ${(c.reference_numbers || []).join(' ')}`.toLowerCase();
             return hay.includes(q);
         });
 
+        const getClusterCount = (c) => parseInt(
+            c.tx_count ?? c.occurrences ?? c.payment_count ?? (Array.isArray(c.reference_numbers) ? c.reference_numbers.length : 0),
+            10
+        ) || 0;
+        const getClusterTotal = (c, cnt) => {
+            const raw = c.total_paid ?? c.total_amount;
+            if (raw !== undefined && raw !== null) return parseFloat(raw) || 0;
+            return (parseFloat(c.item_price || 0) || 0) * cnt;
+        };
+        const getDaysApart = (c) => {
+            if (c.days_apart !== undefined && c.days_apart !== null) return Number(c.days_apart) || 0;
+            if (c.first_date && c.last_date) {
+                const diff = Math.round((new Date(c.last_date) - new Date(c.first_date)) / 86400000);
+                return isNaN(diff) ? 0 : Math.max(0, diff);
+            }
+            return 0;
+        };
+
         const totalExcess = filtered.reduce((acc, c) => {
             const unit = parseFloat(c.item_price || 0) || 0;
-            const cnt = parseInt(c.tx_count || 0, 10) || 0;
+            const cnt = getClusterCount(c);
             return acc + (cnt > 1 ? unit * (cnt - 1) : 0);
         }, 0);
 
         if (summaryEl) {
-            summaryEl.innerHTML = `Found <strong>${filtered.length.toLocaleString()}</strong> cluster(s) &bull; Potential Duplicate Amount: <strong style="color: var(--warning, #f59e0b);">EGP ${formatMoney(totalExcess)}</strong>`;
+            summaryEl.innerHTML = `Found <strong>${filtered.length.toLocaleString()}</strong> Tuition cluster(s) &bull; Potential Duplicate Amount: <strong style="color: var(--warning, #f59e0b);">EGP ${formatMoney(totalExcess)}</strong>`;
         }
 
         if (filtered.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 2rem; color: var(--success);">No potential double payments found for the selected window!</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 2rem; color: var(--success);">No potential double Tuition payments found for the selected window!</td></tr>';
             return;
         }
 
         tbody.innerHTML = filtered.map(c => {
             const refs = Array.isArray(c.reference_numbers) ? c.reference_numbers : [];
+            const txCount = getClusterCount(c);
+            const totalPaid = getClusterTotal(c, txCount);
+            const daysApart = getDaysApart(c);
             const refsHtml = refs.map(ref =>
                 `<a href="#" class="dp-ref-link badge" data-ref="${escapeHTML(ref)}" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-family: monospace; text-decoration: none; margin: 2px;">${escapeHTML(ref)}</a>`
             ).join(' ');
             const dateSpan = c.first_date === c.last_date
                 ? `${escapeHTML(c.first_date)} <span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.68rem;">Same Day</span>`
-                : `${escapeHTML(c.first_date)} &rarr; ${escapeHTML(c.last_date)} <span style="color: var(--text-muted); font-size: 0.75rem;">(${Number(c.days_apart || 0)}d)</span>`;
+                : `${escapeHTML(c.first_date)} &rarr; ${escapeHTML(c.last_date)} <span style="color: var(--text-muted); font-size: 0.75rem;">(${daysApart}d)</span>`;
 
             return `
                 <tr>
@@ -9161,11 +9183,11 @@ class App {
                     </td>
                     <td>
                         <div style="font-weight: 500;">${escapeHTML(c.item_name || '-')}</div>
-                        <span class="badge" style="font-size: 0.7rem; background: rgba(16,185,129,0.12); color: #10b981;">${escapeHTML(c.mapping || 'Unmapped')}</span>
+                        <span class="badge" style="font-size: 0.7rem; background: rgba(16,185,129,0.12); color: #10b981;">${escapeHTML(c.mapping || 'Tuition')}</span>
                     </td>
                     <td style="text-align: right; font-family: monospace;">EGP ${formatMoney(c.item_price)}</td>
-                    <td style="text-align: center;"><span class="badge" style="background: rgba(245,158,11,0.16); color: #f59e0b; font-weight: 700;">${Number(c.tx_count || 0)}x</span></td>
-                    <td style="text-align: right; font-family: monospace; font-weight: 700; color: var(--warning, #f59e0b);">EGP ${formatMoney(c.total_paid)}</td>
+                    <td style="text-align: center;"><span class="badge" style="background: rgba(245,158,11,0.16); color: #f59e0b; font-weight: 700;">${txCount}x</span></td>
+                    <td style="text-align: right; font-family: monospace; font-weight: 700; color: var(--warning, #f59e0b);">EGP ${formatMoney(totalPaid)}</td>
                     <td style="white-space: nowrap; font-size: 0.82rem;">${dateSpan}</td>
                     <td style="max-width: 260px;">${refsHtml}</td>
                 </tr>
@@ -9195,26 +9217,39 @@ class App {
     }
 
     exportDoublePayments() {
-        const rows = this.doublePaymentClusters || [];
+        const rows = (this.doublePaymentClusters || []).filter(
+            c => String(c.mapping || 'Tuition').trim().toLowerCase() === 'tuition'
+        );
         if (rows.length === 0) {
             Toast.show('No double-payment records to export.', 'warning');
             return;
         }
-        const exportData = rows.map(c => ({
-            'Student ID': c.student_id || '',
-            'Student Name': c.student_name || '',
-            'Item Name': c.item_name || '',
-            'Mapping Category': c.mapping || 'Unmapped',
-            'Unit Price (EGP)': Number(c.item_price || 0),
-            'Transaction Count': Number(c.tx_count || 0),
-            'Total Paid (EGP)': Number(c.total_paid || 0),
-            'Potential Duplicate Excess (EGP)': Number((Number(c.item_price || 0) * Math.max(0, Number(c.tx_count || 0) - 1)).toFixed(2)),
-            'First Payment Date': c.first_date || '',
-            'Last Payment Date': c.last_date || '',
-            'Days Apart': Number(c.days_apart || 0),
-            'Banks': (c.banks || []).join(', '),
-            'Reference Numbers': (c.reference_numbers || []).join(', ')
-        }));
+        const exportData = rows.map(c => {
+            const txCount = parseInt(
+                c.tx_count ?? c.occurrences ?? c.payment_count ?? (Array.isArray(c.reference_numbers) ? c.reference_numbers.length : 0),
+                10
+            ) || 0;
+            const unitPrice = Number(c.item_price || 0);
+            const totalPaid = Number(c.total_paid ?? c.total_amount ?? (unitPrice * txCount));
+            const daysApart = c.days_apart !== undefined && c.days_apart !== null
+                ? Number(c.days_apart)
+                : (c.first_date && c.last_date ? Math.max(0, Math.round((new Date(c.last_date) - new Date(c.first_date)) / 86400000)) : 0);
+            return {
+                'Student ID': c.student_id || '',
+                'Student Name': c.student_name || '',
+                'Item Name': c.item_name || '',
+                'Mapping Category': c.mapping || 'Tuition',
+                'Unit Price (EGP)': unitPrice,
+                'Transaction Count': txCount,
+                'Total Paid (EGP)': totalPaid,
+                'Potential Duplicate Excess (EGP)': Number((unitPrice * Math.max(0, txCount - 1)).toFixed(2)),
+                'First Payment Date': c.first_date || '',
+                'Last Payment Date': c.last_date || '',
+                'Days Apart': daysApart,
+                'Banks': (c.banks || []).join(', '),
+                'Reference Numbers': (c.reference_numbers || []).join(', ')
+            };
+        });
 
         const ws = XLSX.utils.json_to_sheet(exportData);
         ws['!cols'] = [
