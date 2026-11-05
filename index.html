@@ -1532,7 +1532,12 @@
                     <!-- Fawry Settlements View -->
             <section id="view-settlement" class="view">
                 <div class="header">
-                    <h1>Fawry Settlement Reconciliation</h1>
+                    <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                        <h1>Fawry Settlement Reconciliation</h1>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-toggle-settlement-history" title="View saved settlement reconciliation runs" style="padding: 0.4rem 0.85rem;">
+                            <i data-lucide="history"></i> Settlement History
+                        </button>
+                    </div>
                     <div id="recon-actions" class="header-actions hidden" style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
                         <button class="btn btn-outline" id="btn-clear-settlement" title="Clear current settlement results">
                             <i data-lucide="rotate-ccw"></i> Clear
@@ -1567,7 +1572,7 @@
                 </div>
 
                 <!-- Saved Settlement Reconciliation Runs History -->
-                <div id="settlement-history-card" class="table-container glass-card" style="margin-bottom: 1.5rem;">
+                <div id="settlement-history-card" class="table-container glass-card hidden" style="margin-bottom: 1.5rem;">
                     <div style="padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
                         <div>
                             <h3 style="margin: 0; font-size: 0.98rem; display: flex; align-items: center; gap: 0.5rem;">
@@ -1576,9 +1581,14 @@
                             </h3>
                             <p style="margin: 0.15rem 0 0 0; font-size: 0.78rem; color: var(--text-muted);">Persistent record of reconciled Fawry payout batches, variances, and discrepancies</p>
                         </div>
-                        <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-settlement-history" style="padding: 0.3rem 0.75rem; font-size: 0.8rem;">
-                            <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Refresh History
-                        </button>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-settlement-history" style="padding: 0.3rem 0.75rem; font-size: 0.8rem;">
+                                <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Refresh
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-close-settlement-history" style="padding: 0.3rem 0.65rem; font-size: 0.8rem;" title="Hide History">
+                                <i data-lucide="x" style="width: 14px; height: 14px;"></i> Close
+                            </button>
+                        </div>
                     </div>
                     <table class="data-table" style="min-width: 100%;">
                         <thead>

@@ -31,7 +31,10 @@ class SettlementProcessor {
 
         this.btnClear = document.getElementById('btn-clear-settlement');
         this.btnSaveRun = document.getElementById('btn-save-settlement-run');
+        this.btnToggleHistory = document.getElementById('btn-toggle-settlement-history');
+        this.btnCloseHistory = document.getElementById('btn-close-settlement-history');
         this.btnRefreshHistory = document.getElementById('btn-refresh-settlement-history');
+        this.historyCard = document.getElementById('settlement-history-card');
         this.historyBody = document.getElementById('settlement-history-body');
         this.btnExportConsolidated = document.getElementById('btn-export-consolidated');
         this.btnExportRecon = document.getElementById('btn-export-recon');
@@ -67,6 +70,19 @@ class SettlementProcessor {
 
         this.btnClear?.addEventListener('click', () => this.clearReconciliation());
         this.btnSaveRun?.addEventListener('click', () => this.saveSettlementRun());
+        this.btnToggleHistory?.addEventListener('click', () => {
+            const card = this.historyCard || document.getElementById('settlement-history-card');
+            if (!card) return;
+            const willShow = card.classList.contains('hidden');
+            card.classList.toggle('hidden', !willShow);
+            if (willShow) {
+                this.loadSettlementHistory();
+            }
+        });
+        this.btnCloseHistory?.addEventListener('click', () => {
+            const card = this.historyCard || document.getElementById('settlement-history-card');
+            card?.classList.add('hidden');
+        });
         this.btnRefreshHistory?.addEventListener('click', () => this.loadSettlementHistory());
         this.btnExportConsolidated?.addEventListener('click', () => this.exportConsolidated());
         this.btnExportRecon?.addEventListener('click', () => this.exportReconciliation());
