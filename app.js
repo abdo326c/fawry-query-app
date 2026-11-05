@@ -142,6 +142,7 @@ class App {
         this.initDashboard();
         this.initStudentMaster();
         this.initHistory();
+        this.initDoublePaymentsDetector();
         this.initUsersAndRoles();
         this.initHygieneReportModal();
         this.initAuth();
@@ -334,6 +335,7 @@ class App {
             'btn-apply-automatch-fixes',
             'btn-confirm-automatch',
             'btn-mark-settled',
+            'btn-save-settlement-run',
             'btn-record-erp'
         ].forEach(id => setElVisible(id, isAccountant));
 
@@ -772,7 +774,13 @@ class App {
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
-                if (tabId === 'settlement' && !window.settlementApp) { window.settlementApp = new SettlementProcessor(supabase); }
+                if (tabId === 'settlement') {
+                    if (!window.settlementApp) {
+                        window.settlementApp = new SettlementProcessor(supabase);
+                    } else if (typeof window.settlementApp.loadSettlementHistory === 'function') {
+                        window.settlementApp.loadSettlementHistory();
+                    }
+                }
                 if (tabId === 'dashboard') this.loadDashboard();
                 if (tabId === 'transactions') this.loadTransactions();
                 if (tabId === 'mappings') this.loadMappings();
@@ -1289,7 +1297,7 @@ class App {
                 let from = 0;
                 while (fetchMore) {
                     let q = supabase.from('transactions')
-                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_journal_number')
+                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number')
                         .gte('payment_date', dateFrom)
                         .lte('payment_date', dateTo)
                         .in('bank', selectedBanks);
@@ -1298,8 +1306,8 @@ class App {
                     else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
                     else if (statusFilter === 'settled') q = q.eq('is_settled', true);
                     else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
-                    else if (statusFilter === 'erp_recorded') q = q.not('erp_journal_number', 'is', null).neq('erp_journal_number', '');
-                    else if (statusFilter === 'erp_unposted') q = q.or('erp_journal_number.is.null,erp_journal_number.eq.');
+                    else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
+                    else if (statusFilter === 'erp_unposted') q = q.or('erp_batch_number.is.null,erp_batch_number.eq.');
 
                     const { data, error } = await q.order('id').range(from, from + 999);
                     
@@ -1587,7 +1595,7 @@ class App {
                 const validQuery = baseFilter().eq('id_status', 'Valid');
                 const totalQuery = baseFilter();
                 const settledQuery = baseFilter().eq('is_settled', true);
-                const erpQuery = baseFilter().not('erp_journal_number', 'is', null).neq('erp_journal_number', '');
+                const erpQuery = baseFilter().not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
                 const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
                 const catPromise = (groupBy === 'mapping')
                     ? Promise.resolve({ data: null })
@@ -1630,7 +1638,7 @@ class App {
                     if (!selectedBanks.includes(tx.bank)) return;
                     if (tx.id_status === 'Valid') validCount++;
                     if (tx.is_settled) settledCount++;
-                    if (tx.erp_journal_number && String(tx.erp_journal_number).trim() !== '') erpRecordedCount++;
+                    if (tx.erp_batch_number && String(tx.erp_batch_number).trim() !== '') erpRecordedCount++;
                     if (!tx.mapping || String(tx.mapping).trim() === '') unmappedCount++;
                     const k = tx.mapping || 'Unmapped';
                     categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
@@ -2452,6 +2460,7 @@ class App {
                 const isRenamingKey = oldEditingKey && oldEditingKey !== original;
                 const lookupKeys = isRenamingKey ? [oldEditingKey, original] : [original];
                 const previouslyRenamedTo = await this.getCurrentAdjustedNames(lookupKeys);
+                const prevRule = (this.allMappingsData || []).find(m => m.item_name === (oldEditingKey || original));
 
                 if (isRenamingKey) {
                     const { error: delErr } = await supabase.from('item_mappings').delete().eq('item_name', oldEditingKey);
@@ -2469,7 +2478,18 @@ class App {
                 await this.logAudit(
                     oldEditingKey ? 'Mapping Updated' : 'Single Mapping Added',
                     original,
-                    { previous_item_name: oldEditingKey || undefined, original, adjusted, category, secondCategory }
+                    {
+                        previous_item_name: oldEditingKey || undefined,
+                        original,
+                        adjusted,
+                        category,
+                        secondCategory,
+                        revert_data: {
+                            table_name: 'item_mappings',
+                            operation: prevRule ? 'upsert' : 'delete',
+                            previous_rows: prevRule ? [prevRule] : [{ item_name: original }]
+                        }
+                    }
                 );
 
                 // Re-apply rules to every affected transaction (fetch everything first, then update)
@@ -2556,10 +2576,20 @@ class App {
                 const { error } = await supabase.from('manual_fixes').upsert([mergedFix], { onConflict: 'reference_number', ignoreDuplicates: false });
                 if (error) throw error;
 
+                const prevFix = isRenamingRef
+                    ? ((this.allFixesData || []).find(f => f.reference_number === oldEditingRef) || existing)
+                    : existing;
                 await this.logAudit(
                     isEditMode ? 'Manual Fix Updated' : 'Single Manual Fix Added',
                     ref,
-                    isRenamingRef ? { ...mergedFix, previous_reference_number: oldEditingRef } : mergedFix
+                    {
+                        ...(isRenamingRef ? { ...mergedFix, previous_reference_number: oldEditingRef } : mergedFix),
+                        revert_data: {
+                            table_name: 'manual_fixes',
+                            operation: prevFix ? 'upsert' : 'delete',
+                            previous_rows: prevFix ? [prevFix] : [{ reference_number: ref }]
+                        }
+                    }
                 );
 
                 // Re-apply all rules to affected reference number(s)
@@ -4245,11 +4275,19 @@ class App {
                 if (!await window.customConfirm(`Delete mapping for "${itemName}"?`, 'Delete', 'Cancel')) return;
                 btn.disabled = true;
                 try {
+                    const prevRule = allData.find(m => m.item_name === itemName);
                     const previouslyRenamedTo = await this.getCurrentAdjustedNames([itemName]);
                     const { error } = await supabase.from('item_mappings').delete().eq('item_name', itemName);
                     if (error) throw error;
 
-                    await this.logAudit('Mapping Deleted', itemName, { item_name: itemName });
+                    await this.logAudit('Mapping Deleted', itemName, {
+                        item_name: itemName,
+                        revert_data: prevRule ? {
+                            table_name: 'item_mappings',
+                            operation: 'upsert',
+                            previous_rows: [prevRule]
+                        } : undefined
+                    });
 
                     const rows = await this.fetchTransactionsForItemNames([itemName], previouslyRenamedTo);
                     const result = await this.reapplyRulesTo(rows);
@@ -4608,10 +4646,18 @@ class App {
                 if (!await window.customConfirm(`Delete fix for reference "${ref}"?`, 'Delete', 'Cancel')) return;
                 btn.disabled = true;
                 try {
+                    const prevFix = allData.find(f => f.reference_number === ref);
                     const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
                     if (error) throw error;
 
-                    await this.logAudit('Manual Fix Deleted', ref, { reference_number: ref });
+                    await this.logAudit('Manual Fix Deleted', ref, {
+                        reference_number: ref,
+                        revert_data: prevFix ? {
+                            table_name: 'manual_fixes',
+                            operation: 'upsert',
+                            previous_rows: [prevFix]
+                        } : undefined
+                    });
 
                     const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
                     const result = await this.reapplyRulesTo(rows);
@@ -7552,9 +7598,18 @@ class App {
                     return;
                 }
                 try {
+                    const prevRow = (this.erpData || []).find(r => String(r.id) === String(id));
                     const { error } = await supabase.from('transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('id', id);
                     if (error) throw error;
-                    await this.logAudit('UPDATE', 'transactions', id, { erp_batch_number: batch }, { erp_batch_number: null, erp_voucher: null });
+                    await this.logAudit('ERP Batch Unlinked', String(prevRow?.reference_number || id), {
+                        transaction_id: id,
+                        cleared_batch: batch,
+                        revert_data: {
+                            table_name: 'transactions_erp',
+                            operation: 'update',
+                            previous_rows: [{ id, erp_batch_number: batch, erp_voucher: prevRow?.erp_voucher || null }]
+                        }
+                    });
                     Toast.show('Cleared ERP batch reference', 'success');
                     await this.loadErpExport({ refresh: true });
                 } catch (err) {
@@ -7812,7 +7867,16 @@ class App {
                 batch_number: batchNum,
                 voucher: startVoucher,
                 count: transactionIds.length,
-                skipped_invalid: skippedInvalid
+                skipped_invalid: skippedInvalid,
+                revert_data: {
+                    table_name: 'transactions_erp',
+                    operation: 'update',
+                    previous_rows: unexportedRows.slice(0, 500).map(r => ({
+                        id: r.id,
+                        erp_batch_number: r.erp_batch_number || null,
+                        erp_voucher: r.erp_voucher || null
+                    }))
+                }
             });
 
             Toast.show(`Saved ERP batch "${batchNum}" on ${transactionIds.length.toLocaleString()} row(s)${skippedInvalid > 0 ? ` (${skippedInvalid} invalid skipped)` : ''}`, 'success');
@@ -8234,9 +8298,13 @@ class App {
 
             const ledgerBody = document.getElementById('student-ledger-body');
             ledgerBody.innerHTML = txs.map((t, idx) => {
+                const bankName = t.bank || t.bank_Style || '';
                 const settledBadge = t.is_settled
-                    ? `<span class="badge badge-success" style="font-size:0.7rem;">Settled</span>`
+                    ? `<span class="badge badge-success" style="font-size:0.7rem;" title="${t.settlement_batch ? 'Settlement: ' + escapeHTML(t.settlement_batch) : 'Settled'}">Settled</span>`
                     : `<span class="badge" style="background:rgba(148,163,184,0.15);color:var(--text-muted);font-size:0.7rem;">Unsettled</span>`;
+                const erpBadge = t.erp_batch_number
+                    ? `<span class="badge" style="background:rgba(245,158,11,0.14);color:#f59e0b;font-size:0.68rem;margin-left:4px;" title="ERP Batch: ${escapeHTML(t.erp_batch_number)}">ERP: ${escapeHTML(t.erp_batch_number)}</span>`
+                    : '';
                 return `
                 <tr>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
@@ -8248,7 +8316,7 @@ class App {
                     <td>${escapeHTML(t.item_name || '-')}</td>
                     <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
                     <td>${escapeHTML(t.second_mapping || '-')}</td>
-                    <td>${t.bank_Style ? `<span style="font-size:0.78rem; margin-right:4px;">${escapeHTML(t.bank_Style)}</span>` : ''}${settledBadge}</td>
+                    <td>${bankName ? `<span style="font-size:0.78rem; margin-right:4px;">${escapeHTML(bankName)}</span>` : ''}${settledBadge}${erpBadge}</td>
                     <td style="text-align: right; font-weight: 600;">${formatMoney(t.item_price || 0)}</td>
                 </tr>
             `;
@@ -8317,8 +8385,10 @@ class App {
             'Item Name': t.item_name || '',
             'Mapping': t.mapping || 'Unmapped',
             '2nd Mapping': t.second_mapping || '',
-            'Bank': t.bank_Style || '',
+            'Bank': t.bank || t.bank_Style || '',
             'Settled': t.is_settled ? 'Yes' : 'No',
+            'Settlement Batch': t.settlement_batch || '',
+            'ERP Batch #': t.erp_batch_number || '',
             'Amount (EGP)': Number(parseFloat(t.item_price || 0).toFixed(2))
         }));
 
@@ -8344,18 +8414,35 @@ class App {
             'Total Amount (EGP)': Number(grandTotal.toFixed(2))
         });
 
+        const profileRows = [
+            { 'Field': 'Student ID', 'Value': sid },
+            { 'Field': 'Full Name', 'Value': st.full_name || '-' },
+            { 'Field': 'Arabic Name', 'Value': st.arabic_name || '-' },
+            { 'Field': 'College', 'Value': st.college || '-' },
+            { 'Field': 'Program', 'Value': st.program || '-' },
+            { 'Field': 'Email', 'Value': st.email || '-' },
+            { 'Field': 'Mobile', 'Value': st.mobile || '-' },
+            { 'Field': 'National ID', 'Value': st.national_id || '-' },
+            { 'Field': 'Total Transactions', 'Value': txs.length },
+            { 'Field': 'Total Paid (EGP)', 'Value': Number(grandTotal.toFixed(2)) },
+            { 'Field': 'Statement Generated On', 'Value': new Date().toLocaleString() }
+        ];
+
         const wb = XLSX.utils.book_new();
         const wsLedger = XLSX.utils.json_to_sheet(ledgerRows.length ? ledgerRows : [{ 'Note': 'No payments recorded for this student' }]);
         wsLedger['!cols'] = [
             { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 26 },
             { wch: 32 }, { wch: 22 }, { wch: 20 }, { wch: 16 },
-            { wch: 10 }, { wch: 16 }
+            { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 16 }
         ];
         const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
         wsSummary['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 20 }];
+        const wsProfile = XLSX.utils.json_to_sheet(profileRows);
+        wsProfile['!cols'] = [{ wch: 24 }, { wch: 36 }];
 
         XLSX.utils.book_append_sheet(wb, wsLedger, 'Statement of Payments');
         XLSX.utils.book_append_sheet(wb, wsSummary, 'Category Summary');
+        XLSX.utils.book_append_sheet(wb, wsProfile, 'Student Profile');
         XLSX.writeFile(wb, `Student_Statement_${sid}_${new Date().toISOString().slice(0, 10)}.xlsx`);
         Toast.show(`Exported statement for ${sid}`, 'success');
     }
@@ -8872,23 +8959,274 @@ class App {
         });
 
         if (logs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No matching audit log entries found.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No matching audit log entries found.</td></tr>';
             return;
         }
 
+        const isAdmin = this.hasRole('admin');
         tbody.innerHTML = logs.map(log => {
             const ts = log.created_at ? new Date(log.created_at).toLocaleString() : '-';
+            const detailsObj = log.details || {};
             const detailsStr = log.details ? JSON.stringify(log.details) : '-';
+            const isReverted = detailsObj.is_reverted === true;
+            const canRevert = isAdmin && !isReverted && (
+                Boolean(detailsObj.revert_data) ||
+                (log.action === 'Database Hygiene Audit' && detailsObj.auto_cleaned === true && ((detailsObj.cleaned_mappings || 0) + (detailsObj.cleaned_fixes || 0) > 0))
+            );
+
+            let actionCell = '<span style="color: var(--text-muted); font-size: 0.75rem;">-</span>';
+            if (isReverted) {
+                actionCell = `<span class="badge" style="background: rgba(245, 158, 11, 0.14); color: #f59e0b; font-size: 0.7rem;">Reverted</span>`;
+            } else if (canRevert) {
+                actionCell = `<button type="button" class="btn btn-outline btn-sm" data-revert-audit-id="${escapeHTML(log.id)}" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; color: var(--warning, #f59e0b); border-color: rgba(245, 158, 11, 0.35);" title="Undo this change and restore previous state">
+                    <i data-lucide="undo-2" style="width: 12px; height: 12px;"></i> Undo
+                </button>`;
+            }
+
             return `
                 <tr>
                     <td style="white-space: nowrap; font-size: 0.8rem; color: var(--text-muted);">${escapeHTML(ts)}</td>
                     <td style="font-size: 0.84rem;"><strong>${escapeHTML(log.user_email || 'System')}</strong></td>
                     <td><span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-size: 0.74rem;">${escapeHTML(log.action || '-')}</span></td>
                     <td style="font-family: monospace; font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHTML(log.affected_references || '')}">${escapeHTML(log.affected_references || '-')}</td>
-                    <td style="font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHTML(detailsStr)}">${escapeHTML(detailsStr)}</td>
+                    <td style="font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHTML(detailsStr)}">${escapeHTML(detailsStr)}</td>
+                    <td style="text-align: right; white-space: nowrap;">${actionCell}</td>
                 </tr>
             `;
         }).join('');
+
+        tbody.querySelectorAll('[data-revert-audit-id]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const auditId = btn.getAttribute('data-revert-audit-id');
+                if (auditId) this.revertAuditLogEntry(auditId, btn);
+            });
+        });
+
+        if (window.lucide) lucide.createIcons({ root: tbody });
+    }
+
+    async revertAuditLogEntry(auditId, btnEl = null) {
+        if (!this.requireRole('admin', 'revert audit log actions')) return;
+        const log = (this.allAuditLogs || []).find(l => String(l.id) === String(auditId));
+        if (!log) return;
+
+        const ok = await window.customConfirm(
+            `Are you sure you want to undo Audit #${auditId} (${log.action}: "${log.affected_references || ''}") and restore the previous database state?`,
+            'Undo Action', 'Cancel'
+        );
+        if (!ok) return;
+
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.innerHTML = '<i data-lucide="loader" class="spin" style="width: 12px; height: 12px;"></i>';
+            if (window.lucide) lucide.createIcons({ root: btnEl });
+        }
+
+        try {
+            let rpcName = 'revert_audit_log_entry';
+            if (log.action === 'Database Hygiene Audit' && !log.details?.revert_data) {
+                rpcName = 'rollback_database_hygiene_audit';
+            }
+
+            const { data, error } = await supabase.rpc(rpcName, { p_audit_id: Number(auditId) });
+            if (error) throw error;
+
+            const tableName = log.details?.revert_data?.table_name;
+            if (tableName === 'item_mappings') {
+                this.mappingSuggestCache = null;
+                this.loadMappings();
+            } else if (tableName === 'manual_fixes') {
+                const ref = log.affected_references;
+                if (ref) {
+                    const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
+                    await this.reapplyRulesTo(rows);
+                }
+                this.loadFixes();
+            } else if (tableName === 'transactions_erp') {
+                if (document.getElementById('view-erp-export')?.classList.contains('active')) {
+                    this.loadErpExport({ refresh: true });
+                }
+            }
+
+            Toast.show(data?.message || `Audit #${auditId} successfully reverted!`, 'success');
+            await this.loadUsersAndRoles({ skipSync: true });
+        } catch (err) {
+            Toast.show('Revert failed: ' + err.message, 'error');
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerHTML = '<i data-lucide="undo-2" style="width: 12px; height: 12px;"></i> Undo';
+                if (window.lucide) lucide.createIcons({ root: btnEl });
+            }
+        }
+    }
+
+    // ==========================================
+    // Double-Payment & Anomaly Detector
+    // ==========================================
+    initDoublePaymentsDetector() {
+        this.doublePaymentClusters = [];
+        const btnOpen = document.getElementById('btn-detect-double-payments');
+        const selWindow = document.getElementById('double-payments-window');
+        const inpSearch = document.getElementById('double-payments-search');
+        const btnExport = document.getElementById('btn-export-double-payments');
+
+        if (btnOpen) {
+            btnOpen.addEventListener('click', () => {
+                document.getElementById('modal-double-payments')?.classList.remove('hidden');
+                if (window.lucide) lucide.createIcons();
+                this.loadDoublePayments();
+            });
+        }
+
+        if (selWindow) {
+            selWindow.addEventListener('change', () => this.loadDoublePayments());
+        }
+
+        if (inpSearch) {
+            inpSearch.addEventListener('input', () => this.renderDoublePaymentsTable());
+        }
+
+        if (btnExport) {
+            btnExport.addEventListener('click', () => this.exportDoublePayments());
+        }
+    }
+
+    async loadDoublePayments() {
+        const tbody = document.getElementById('double-payments-body');
+        const summaryEl = document.getElementById('double-payments-summary');
+        const daysWindow = parseInt(document.getElementById('double-payments-window')?.value ?? '3', 10);
+
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 2rem; color: var(--text-muted);"><i data-lucide="loader" class="spin"></i> Scanning for potential double payments...</td></tr>';
+            if (window.lucide) lucide.createIcons({ root: tbody });
+        }
+        if (summaryEl) summaryEl.textContent = 'Scanning...';
+
+        try {
+            const { data, error } = await supabase.rpc('detect_double_payments', {
+                p_days_window: isNaN(daysWindow) ? 3 : daysWindow
+            });
+            if (error) throw error;
+
+            this.doublePaymentClusters = Array.isArray(data) ? data : [];
+            this.renderDoublePaymentsTable();
+        } catch (err) {
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="padding: 1.5rem; color: var(--danger);">Error scanning double payments: ${escapeHTML(err.message)}</td></tr>`;
+            }
+            if (summaryEl) summaryEl.textContent = 'Scan failed';
+        }
+    }
+
+    renderDoublePaymentsTable() {
+        const tbody = document.getElementById('double-payments-body');
+        const summaryEl = document.getElementById('double-payments-summary');
+        if (!tbody) return;
+
+        const q = (document.getElementById('double-payments-search')?.value || '').trim().toLowerCase();
+        const filtered = (this.doublePaymentClusters || []).filter(c => {
+            if (!q) return true;
+            const hay = `${c.student_id || ''} ${c.student_name || ''} ${c.item_name || ''} ${c.mapping || ''} ${(c.reference_numbers || []).join(' ')}`.toLowerCase();
+            return hay.includes(q);
+        });
+
+        const totalExcess = filtered.reduce((acc, c) => {
+            const unit = parseFloat(c.item_price || 0) || 0;
+            const cnt = parseInt(c.tx_count || 0, 10) || 0;
+            return acc + (cnt > 1 ? unit * (cnt - 1) : 0);
+        }, 0);
+
+        if (summaryEl) {
+            summaryEl.innerHTML = `Found <strong>${filtered.length.toLocaleString()}</strong> cluster(s) &bull; Potential Duplicate Amount: <strong style="color: var(--warning, #f59e0b);">EGP ${formatMoney(totalExcess)}</strong>`;
+        }
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 2rem; color: var(--success);">No potential double payments found for the selected window!</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = filtered.map(c => {
+            const refs = Array.isArray(c.reference_numbers) ? c.reference_numbers : [];
+            const refsHtml = refs.map(ref =>
+                `<a href="#" class="dp-ref-link badge" data-ref="${escapeHTML(ref)}" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-family: monospace; text-decoration: none; margin: 2px;">${escapeHTML(ref)}</a>`
+            ).join(' ');
+            const dateSpan = c.first_date === c.last_date
+                ? `${escapeHTML(c.first_date)} <span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.68rem;">Same Day</span>`
+                : `${escapeHTML(c.first_date)} &rarr; ${escapeHTML(c.last_date)} <span style="color: var(--text-muted); font-size: 0.75rem;">(${Number(c.days_apart || 0)}d)</span>`;
+
+            return `
+                <tr>
+                    <td>
+                        <a href="#" class="dp-student-link" data-sid="${escapeHTML(c.student_id)}" style="font-family: monospace; font-weight: 700; color: var(--primary); text-decoration: none;">${escapeHTML(c.student_id)}</a>
+                        <div style="font-size: 0.78rem; color: var(--text-muted);">${escapeHTML(c.student_name || 'N/A')}</div>
+                    </td>
+                    <td>
+                        <div style="font-weight: 500;">${escapeHTML(c.item_name || '-')}</div>
+                        <span class="badge" style="font-size: 0.7rem; background: rgba(16,185,129,0.12); color: #10b981;">${escapeHTML(c.mapping || 'Unmapped')}</span>
+                    </td>
+                    <td style="text-align: right; font-family: monospace;">EGP ${formatMoney(c.item_price)}</td>
+                    <td style="text-align: center;"><span class="badge" style="background: rgba(245,158,11,0.16); color: #f59e0b; font-weight: 700;">${Number(c.tx_count || 0)}x</span></td>
+                    <td style="text-align: right; font-family: monospace; font-weight: 700; color: var(--warning, #f59e0b);">EGP ${formatMoney(c.total_paid)}</td>
+                    <td style="white-space: nowrap; font-size: 0.82rem;">${dateSpan}</td>
+                    <td style="max-width: 260px;">${refsHtml}</td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('.dp-student-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const sid = link.getAttribute('data-sid');
+                if (!sid) return;
+                document.getElementById('modal-double-payments')?.classList.add('hidden');
+                document.querySelector('.nav-link[data-tab="student-master"]')?.click();
+                this.loadStudentProfile(sid);
+            });
+        });
+
+        tbody.querySelectorAll('.dp-ref-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const ref = link.getAttribute('data-ref');
+                if (ref && typeof this.openTransactionDetailsModal === 'function') {
+                    this.openTransactionDetailsModal(ref);
+                }
+            });
+        });
+    }
+
+    exportDoublePayments() {
+        const rows = this.doublePaymentClusters || [];
+        if (rows.length === 0) {
+            Toast.show('No double-payment records to export.', 'warning');
+            return;
+        }
+        const exportData = rows.map(c => ({
+            'Student ID': c.student_id || '',
+            'Student Name': c.student_name || '',
+            'Item Name': c.item_name || '',
+            'Mapping Category': c.mapping || 'Unmapped',
+            'Unit Price (EGP)': Number(c.item_price || 0),
+            'Transaction Count': Number(c.tx_count || 0),
+            'Total Paid (EGP)': Number(c.total_paid || 0),
+            'Potential Duplicate Excess (EGP)': Number((Number(c.item_price || 0) * Math.max(0, Number(c.tx_count || 0) - 1)).toFixed(2)),
+            'First Payment Date': c.first_date || '',
+            'Last Payment Date': c.last_date || '',
+            'Days Apart': Number(c.days_apart || 0),
+            'Banks': (c.banks || []).join(', '),
+            'Reference Numbers': (c.reference_numbers || []).join(', ')
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        ws['!cols'] = [
+            { wch: 14 }, { wch: 26 }, { wch: 30 }, { wch: 20 },
+            { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 24 },
+            { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 18 }, { wch: 36 }
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Double Payments');
+        XLSX.writeFile(wb, `Double_Payments_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        Toast.show(`Exported ${exportData.length} double-payment cluster(s)`, 'success');
     }
 
     // ==========================================

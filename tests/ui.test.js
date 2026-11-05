@@ -382,3 +382,82 @@ test('Transactions table renders compact .tx-quick-fix-btn with proper classes',
     expect(fixBtns[1].classList.contains('missing')).toBe(true);
     expect(fixBtns[1].getAttribute('data-quick-fix-ref')).toBe('9696284172');
 });
+
+test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo render and behave properly', async () => {
+    await import('../app.js');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    expect(window.app).toBeDefined();
+
+    // 1. Double-Payment Detector UI & Rendering
+    expect(document.getElementById('btn-detect-double-payments')).not.toBeNull();
+    expect(document.getElementById('modal-double-payments')).not.toBeNull();
+    expect(document.getElementById('double-payments-window')).not.toBeNull();
+
+    window.app.doublePaymentClusters = [
+        {
+            student_id: '251001755',
+            student_name: 'Ahmed Hassan',
+            item_name: 'TuitionFees SPRG 2026',
+            mapping: 'Tuition',
+            item_price: 15000,
+            tx_count: 2,
+            total_paid: 30000,
+            first_date: '2026-11-04',
+            last_date: '2026-11-04',
+            days_apart: 0,
+            reference_numbers: ['9696284171', '9696284999'],
+            banks: ['NUADCB136']
+        }
+    ];
+    window.app.renderDoublePaymentsTable();
+    const dpBody = document.getElementById('double-payments-body');
+    expect(dpBody.innerHTML).toContain('251001755');
+    expect(dpBody.innerHTML).toContain('Ahmed Hassan');
+    expect(dpBody.innerHTML).toContain('9696284171');
+    expect(dpBody.innerHTML).toContain('9696284999');
+
+    // 2. Persistent Settlement Reconciliation History UI
+    expect(document.getElementById('settlement-history-card')).not.toBeNull();
+    expect(document.getElementById('btn-save-settlement-run')).not.toBeNull();
+    expect(document.getElementById('settlement-history-body')).not.toBeNull();
+
+    // 3. Universal Audit Log Undo (Admin only)
+    window.app.allAuditLogs = [
+        {
+            id: 501,
+            created_at: new Date().toISOString(),
+            user_email: 'ammahmoud@nu.edu.eg',
+            action: 'Mapping Updated',
+            affected_references: 'TuitionFees SPRG 2026',
+            details: {
+                revert_data: {
+                    table_name: 'item_mappings',
+                    operation: 'upsert',
+                    previous_rows: [{ item_name: 'TuitionFees SPRG 2026', mapping: 'Tuition' }]
+                }
+            }
+        },
+        {
+            id: 502,
+            created_at: new Date().toISOString(),
+            user_email: 'ammahmoud@nu.edu.eg',
+            action: 'Manual Fix Updated',
+            affected_references: '9696284171',
+            details: {
+                is_reverted: true,
+                revert_data: {
+                    table_name: 'manual_fixes',
+                    operation: 'upsert',
+                    previous_rows: [{ reference_number: '9696284171', correct_id: '251001755' }]
+                }
+            }
+        }
+    ];
+
+    window.app.userRole = 'admin';
+    window.app.renderAuditLogsTable();
+    const auditBody = document.getElementById('audit-logs-table-body');
+    expect(auditBody.querySelector('[data-revert-audit-id="501"]')).not.toBeNull();
+    expect(auditBody.querySelector('[data-revert-audit-id="502"]')).toBeNull();
+    expect(auditBody.innerHTML).toContain('Reverted');
+});

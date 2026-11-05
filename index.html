@@ -30,7 +30,7 @@
             console.error("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
-    <link rel="stylesheet" href="styles.css?v=2.3.2">
+    <link rel="stylesheet" href="styles.css?v=2.4.0">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@0.294.0"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -42,7 +42,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
     <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" id="flatpickr-theme">
     <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
-    <script src="settlement.js?v=2.3.0"></script>
+    <script src="settlement.js?v=2.4.0"></script>
 </head>
 <body>
     <!-- Toast Container -->
@@ -416,6 +416,7 @@
                             <i data-lucide="history"></i> Import History
                         </button>
         
+                        <button class="btn btn-outline" id="btn-detect-double-payments" title="Scan for potential duplicate / double payments by the same student"><i data-lucide="copy-check"></i> Double Payments</button>
                         <button class="btn btn-outline" id="btn-reapply-rules">
                             <i data-lucide="refresh-cw"></i> Re-apply Rules
                         </button>
@@ -1536,6 +1537,7 @@
                         <button class="btn btn-outline" id="btn-clear-settlement" title="Clear current settlement results">
                             <i data-lucide="rotate-ccw"></i> Clear
                         </button>
+                        <button class="btn btn-outline" id="btn-save-settlement-run" title="Save this reconciliation run to persistent history"><i data-lucide="bookmark-check"></i> Save Run to History</button>
                         <button class="btn btn-outline" id="btn-export-consolidated">
                             <i data-lucide="download"></i> Export Consolidated Data
                         </button>
@@ -1562,6 +1564,42 @@
                         </label>
                         <div id="settlement-status" style="font-weight: 500; font-size: 0.9rem;"></div>
                     </div>
+                </div>
+
+                <!-- Saved Settlement Reconciliation Runs History -->
+                <div id="settlement-history-card" class="table-container glass-card" style="margin-bottom: 1.5rem;">
+                    <div style="padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+                        <div>
+                            <h3 style="margin: 0; font-size: 0.98rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <i data-lucide="archive" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                                Saved Settlement Reconciliation History
+                            </h3>
+                            <p style="margin: 0.15rem 0 0 0; font-size: 0.78rem; color: var(--text-muted);">Persistent record of reconciled Fawry payout batches, variances, and discrepancies</p>
+                        </div>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-settlement-history" style="padding: 0.3rem 0.75rem; font-size: 0.8rem;">
+                            <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Refresh History
+                        </button>
+                    </div>
+                    <table class="data-table" style="min-width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>Run Date</th>
+                                <th>Batch / Label</th>
+                                <th>Settlement Date Range</th>
+                                <th>Matched / Issues</th>
+                                <th>Settlement Payout</th>
+                                <th>System Total</th>
+                                <th>Net Variance</th>
+                                <th>Saved By</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="settlement-history-body">
+                            <tr>
+                                <td colspan="9" class="text-center" style="color: var(--text-muted); padding: 1.25rem;">Loading saved settlement runs...</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
 
                 <!-- Financial & Status Summary Bar -->
@@ -1755,10 +1793,11 @@
                                 <th>Action</th>
                                 <th>Target / Reference</th>
                                 <th>Details</th>
+                                <th style="text-align: right;">Undo</th>
                             </tr>
                         </thead>
                         <tbody id="audit-logs-table-body">
-                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading audit logs...</td></tr>
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading audit logs...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1894,7 +1933,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.3.2"></script>
+    <script type="module" src="app.js?v=2.4.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">
         <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
@@ -2111,6 +2150,66 @@
             <div class="modal-footer" style="padding: 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 1rem;">
                 <button class="btn btn-outline" onclick="document.getElementById('modal-detect-duplicates').classList.add('hidden')">Cancel</button>
                 <button class="btn btn-primary" id="btn-cleanup-duplicates" style="background-color: var(--danger); border-color: var(--danger);">Clean Up Duplicates</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Double-Payment & Anomaly Detector Modal -->
+    <div id="modal-double-payments" class="modal hidden" style="z-index: 10025;">
+        <div class="modal-content glass-card" style="max-width: 1020px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2 style="margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <i data-lucide="copy-check" style="width: 20px; height: 20px; color: var(--warning, #f59e0b);"></i>
+                        Double-Payment &amp; Potential Refund Detector
+                    </h2>
+                    <p style="margin: 0.2rem 0 0 0; font-size: 0.8rem; color: var(--text-muted);">Identifies students who paid the exact same fee item and amount across multiple Fawry Reference Numbers within a short window</p>
+                </div>
+                <button class="btn-close" onclick="document.getElementById('modal-double-payments').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                        <label style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Max Days Between Payments:</label>
+                        <select id="double-payments-window" class="input-text" style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.84rem;">
+                            <option value="0">Same Day Only (0 days)</option>
+                            <option value="1">Within 1 Day</option>
+                            <option value="3" selected>Within 3 Days (Recommended)</option>
+                            <option value="7">Within 7 Days</option>
+                            <option value="14">Within 14 Days</option>
+                            <option value="30">Within 30 Days</option>
+                        </select>
+                        <input type="text" id="double-payments-search" class="input-text" placeholder="Filter by Student ID, Name, Item, or Ref..." style="width: 240px; padding: 0.35rem 0.65rem; font-size: 0.84rem;">
+                    </div>
+                    <div id="double-payments-summary" style="font-size: 0.84rem; font-weight: 500; color: var(--text-secondary);">Scanning...</div>
+                </div>
+                <div class="table-container" style="margin: 0;">
+                    <table class="data-table" style="min-width: 100%; margin: 0;">
+                        <thead>
+                            <tr>
+                                <th>Student</th>
+                                <th>Item &amp; Category</th>
+                                <th style="text-align: right;">Unit Price</th>
+                                <th style="text-align: center;">Tx Count</th>
+                                <th style="text-align: right;">Total Paid</th>
+                                <th>Date Span</th>
+                                <th>Reference Numbers</th>
+                            </tr>
+                        </thead>
+                        <tbody id="double-payments-body">
+                            <tr><td colspan="7" class="text-center" style="padding: 2rem; color: var(--text-muted);">Scanning transactions...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.25rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                <span style="font-size: 0.78rem; color: var(--text-muted);">Click a Student ID to open their 360° Statement, or click a Reference Number to inspect the transaction.</span>
+                <div style="display: flex; gap: 0.75rem;">
+                    <button class="btn btn-outline" onclick="document.getElementById('modal-double-payments').classList.add('hidden')">Close</button>
+                    <button class="btn btn-primary" id="btn-export-double-payments">
+                        <i data-lucide="download"></i> Export Excel Report
+                    </button>
+                </div>
             </div>
         </div>
     </div>

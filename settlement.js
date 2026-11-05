@@ -19,6 +19,7 @@ class SettlementProcessor {
         this.bankFilter = '';
         this.currentPage = 1;
         this.pageSize = 100;
+        this.savedSettlementRuns = [];
         this.initUI();
     }
 
@@ -29,6 +30,9 @@ class SettlementProcessor {
         this.resultsTable = document.getElementById('settlement-results-body');
 
         this.btnClear = document.getElementById('btn-clear-settlement');
+        this.btnSaveRun = document.getElementById('btn-save-settlement-run');
+        this.btnRefreshHistory = document.getElementById('btn-refresh-settlement-history');
+        this.historyBody = document.getElementById('settlement-history-body');
         this.btnExportConsolidated = document.getElementById('btn-export-consolidated');
         this.btnExportRecon = document.getElementById('btn-export-recon');
         this.btnMarkSettled = document.getElementById('btn-mark-settled');
@@ -62,6 +66,8 @@ class SettlementProcessor {
         });
 
         this.btnClear?.addEventListener('click', () => this.clearReconciliation());
+        this.btnSaveRun?.addEventListener('click', () => this.saveSettlementRun());
+        this.btnRefreshHistory?.addEventListener('click', () => this.loadSettlementHistory());
         this.btnExportConsolidated?.addEventListener('click', () => this.exportConsolidated());
         this.btnExportRecon?.addEventListener('click', () => this.exportReconciliation());
         this.btnMarkSettled?.addEventListener('click', () => this.markAsSettled());
@@ -117,6 +123,8 @@ class SettlementProcessor {
             this.currentPage = 1;
             this.renderResults();
         });
+
+        this.loadSettlementHistory();
     }
 
     clearReconciliation() {
@@ -650,6 +658,9 @@ class SettlementProcessor {
             this.btnMarkSettled.style.display = canSettle ? '' : 'none';
             this.btnMarkSettled.disabled = !canSettle || unsettledMatchedCount === 0;
             this.btnMarkSettled.style.opacity = (!canSettle || unsettledMatchedCount === 0) ? '0.6' : '1';
+            if (this.btnSaveRun) {
+                this.btnSaveRun.style.display = canSettle ? '' : 'none';
+            }
         }
     }
 
@@ -953,6 +964,224 @@ class SettlementProcessor {
         } finally {
             this.updateSummaryAndActions();
             if (window.lucide) lucide.createIcons();
+        }
+    }
+
+    async loadSettlementHistory() {
+        const tbody = this.historyBody || document.getElementById('settlement-history-body');
+        if (!tbody || !this.supabase) return;
+
+        try {
+            const { data, error } = await this.supabase
+                .from('settlement_batches')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(50);
+
+            if (error) throw error;
+            this.savedSettlementRuns = Array.isArray(data) ? data : [];
+            this.renderSettlementHistory();
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center" style="color: var(--text-muted); padding: 1.25rem;">No saved settlement runs available (${settlementEsc(err.message)}).</td></tr>`;
+        }
+    }
+
+    renderSettlementHistory() {
+        const tbody = this.historyBody || document.getElementById('settlement-history-body');
+        if (!tbody) return;
+
+        const rows = this.savedSettlementRuns || [];
+        if (rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center" style="color: var(--text-muted); padding: 1.25rem;">No saved settlement reconciliation runs yet. Upload a settlement batch and click "Save Run to History".</td></tr>';
+            return;
+        }
+
+        const isAdmin = window.app && typeof window.app.hasRole === 'function' ? window.app.hasRole('admin') : false;
+        const esc = settlementEsc;
+
+        tbody.innerHTML = rows.map(r => {
+            const createdStr = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
+            const dateRange = (r.settlement_date_from || r.settlement_date_to)
+                ? `${esc(r.settlement_date_from || '?')} &rarr; ${esc(r.settlement_date_to || '?')}`
+                : '-';
+            const issues = (Number(r.mismatch_count) || 0) + (Number(r.missing_in_system_count) || 0) + (Number(r.missing_in_settlement_count) || 0);
+            const variance = Number(r.net_variance || 0);
+            const varSign = variance > 0.005 ? '+' : '';
+            const varColor = Math.abs(variance) < 0.05 ? 'var(--success)' : 'var(--danger)';
+
+            return `
+                <tr>
+                    <td style="white-space: nowrap; font-size: 0.8rem; color: var(--text-muted);">${esc(createdStr)}</td>
+                    <td>
+                        <strong>${esc(r.batch_label || 'Settlement Run')}</strong>
+                        <span class="badge badge-gray" style="margin-left: 0.35rem; font-size: 0.7rem;">${Number(r.files_count || 1)} file(s)</span>
+                    </td>
+                    <td style="font-size: 0.82rem; white-space: nowrap;">${dateRange}</td>
+                    <td style="white-space: nowrap;">
+                        <span style="color: var(--success); font-weight: 600;">${Number(r.matched_count || 0).toLocaleString()} matched</span>
+                        ${issues > 0 ? `<span class="badge invalid-id" style="margin-left: 0.4rem; font-size: 0.7rem;">${issues.toLocaleString()} issue(s)</span>` : '<span class="badge valid-id" style="margin-left: 0.4rem; font-size: 0.7rem;">0 issues</span>'}
+                    </td>
+                    <td style="font-family: monospace; font-weight: 600;">EGP ${formatStlMoney(r.total_settlement_amount)}</td>
+                    <td style="font-family: monospace;">EGP ${formatStlMoney(r.total_system_amount)}</td>
+                    <td style="font-family: monospace; font-weight: 600; color: ${varColor};">${varSign}${formatStlMoney(variance)}</td>
+                    <td style="font-size: 0.8rem; color: var(--text-muted);">${esc(r.created_by || 'System')}</td>
+                    <td style="text-align: right; white-space: nowrap;">
+                        <button type="button" class="btn btn-outline btn-sm" data-load-stl-run="${esc(r.id)}" style="padding: 0.2rem 0.55rem; font-size: 0.75rem;">
+                            <i data-lucide="eye" style="width: 12px; height: 12px;"></i> View
+                        </button>
+                        ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm" data-delete-stl-run="${esc(r.id)}" style="color: var(--danger); padding: 0.2rem 0.5rem; font-size: 0.75rem; margin-left: 0.3rem;">
+                            <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i>
+                        </button>` : ''}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('[data-load-stl-run]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.getAttribute('data-load-stl-run');
+                this.loadSavedRunIntoView(id);
+            });
+        });
+
+        tbody.querySelectorAll('[data-delete-stl-run]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.getAttribute('data-delete-stl-run');
+                this.deleteSavedRun(id);
+            });
+        });
+
+        if (window.lucide) lucide.createIcons({ root: tbody });
+    }
+
+    async saveSettlementRun() {
+        if (window.app && typeof window.app.requireRole === 'function') {
+            if (!window.app.requireRole('accountant', 'save settlement reconciliation runs')) return;
+        }
+        const all = this.reconciliationResults || [];
+        if (all.length === 0) {
+            Toast.show('No active reconciliation results to save.', 'warning');
+            return;
+        }
+
+        const includeMissingStl = !this.checkMissingStlToggle || this.checkMissingStlToggle.checked;
+        const activePool = includeMissingStl ? all : all.filter(r => r.status !== 'Missing in Settlement');
+
+        const batches = [...new Set(all.map(r => r.settlement_no).filter(Boolean))].sort();
+        const dates = all.map(r => r.payment_date || r.settlement_date).filter(Boolean).sort();
+        const minDate = dates.length > 0 ? dates[0] : null;
+        const maxDate = dates.length > 0 ? dates[dates.length - 1] : null;
+
+        const defaultLabel = batches.length > 0
+            ? (batches.length <= 3 ? `Settlement #${batches.join(', #')}` : `Settlement #${batches[0]} (+${batches.length - 1} more)`)
+            : `Reconciliation (${minDate || new Date().toISOString().slice(0, 10)})`;
+
+        const totalStl = Math.round(activePool.reduce((acc, r) => acc + (Number(r.stl_amount) || 0), 0) * 100) / 100;
+        const totalSys = Math.round(activePool.reduce((acc, r) => acc + (Number(r.sys_amount) || 0), 0) * 100) / 100;
+        const netVar = Math.round((totalStl - totalSys) * 100) / 100;
+
+        const matchedCount = all.filter(r => r.status === 'Matched').length;
+        const mismatchCount = all.filter(r => r.status === 'Amount Mismatch').length;
+        const missingSysCount = all.filter(r => r.status === 'Missing in System').length;
+        const missingStlCount = all.filter(r => r.status === 'Missing in Settlement').length;
+        const discrepancies = all.filter(r => r.status !== 'Matched');
+
+        if (this.btnSaveRun) this.btnSaveRun.disabled = true;
+        try {
+            const payload = {
+                batch_label: defaultLabel,
+                settlement_numbers: batches,
+                files_count: this.processedFilesCount || 1,
+                total_references: activePool.length,
+                matched_count: matchedCount,
+                mismatch_count: mismatchCount,
+                missing_in_system_count: missingSysCount,
+                missing_in_settlement_count: missingStlCount,
+                total_settlement_amount: totalStl,
+                total_system_amount: totalSys,
+                net_variance: netVar,
+                settlement_date_from: minDate,
+                settlement_date_to: maxDate,
+                discrepancies: discrepancies.slice(0, 500),
+                summary_data: {
+                    reconciliation_rows: all.slice(0, 1000)
+                },
+                created_by: window.app?.currentUser?.email || 'Accountant'
+            };
+
+            const { error } = await this.supabase.from('settlement_batches').insert([payload]);
+            if (error) throw error;
+
+            if (window.app && typeof window.app.logAudit === 'function') {
+                await window.app.logAudit('Settlement Run Saved', defaultLabel, {
+                    files_count: payload.files_count,
+                    matched_count: matchedCount,
+                    discrepancies_count: discrepancies.length,
+                    total_settlement_amount: totalStl,
+                    net_variance: netVar
+                });
+            }
+
+            Toast.show(`Saved "${defaultLabel}" to Settlement Reconciliation History!`, 'success');
+            await this.loadSettlementHistory();
+        } catch (err) {
+            Toast.show('Error saving settlement run: ' + err.message, 'error');
+        } finally {
+            if (this.btnSaveRun) this.btnSaveRun.disabled = false;
+        }
+    }
+
+    loadSavedRunIntoView(runId) {
+        const run = (this.savedSettlementRuns || []).find(r => String(r.id) === String(runId));
+        if (!run) return;
+
+        const savedRows = run.summary_data?.reconciliation_rows || run.discrepancies || [];
+        if (savedRows.length === 0) {
+            Toast.show('This saved run has no stored line items to display.', 'info');
+            return;
+        }
+
+        this.reconciliationResults = savedRows.map(r => ({ ...r }));
+        this.processedFilesCount = run.files_count || 1;
+        this.currentPage = 1;
+        this.statusFilter = 'all';
+        document.querySelectorAll('[data-stl-filter]').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-stl-filter') === 'all');
+        });
+
+        if (this.batchSelect) {
+            const batches = [...new Set(this.reconciliationResults.map(r => r.settlement_no).filter(Boolean))].sort();
+            this.batchSelect.innerHTML = '<option value="">All Settlement Nos</option>' +
+                batches.map(b => `<option value="${settlementEsc(b)}">${settlementEsc(b)}</option>`).join('');
+            this.batchFilter = '';
+        }
+
+        this.renderResults();
+        this.setStatus(`<i data-lucide="archive"></i> Viewing saved run: <strong>${settlementEsc(run.batch_label)}</strong> (${new Date(run.created_at).toLocaleString()})`);
+        Toast.show(`Loaded saved run "${run.batch_label}"`, 'info');
+    }
+
+    async deleteSavedRun(runId) {
+        if (window.app && typeof window.app.requireRole === 'function') {
+            if (!window.app.requireRole('admin', 'delete saved settlement runs')) return;
+        }
+        const run = (this.savedSettlementRuns || []).find(r => String(r.id) === String(runId));
+        const label = run?.batch_label || `#${runId}`;
+        const ok = window.customConfirm
+            ? await window.customConfirm(`Delete saved settlement run "${label}" from history?`, 'Delete', 'Cancel')
+            : confirm(`Delete saved settlement run "${label}"?`);
+        if (!ok) return;
+
+        try {
+            const { error } = await this.supabase.from('settlement_batches').delete().eq('id', runId);
+            if (error) throw error;
+            if (window.app && typeof window.app.logAudit === 'function') {
+                await window.app.logAudit('Settlement Run Deleted', label, { id: runId, batch_label: label });
+            }
+            Toast.show(`Deleted saved settlement run "${label}"`, 'info');
+            await this.loadSettlementHistory();
+        } catch (err) {
+            Toast.show('Error deleting settlement run: ' + err.message, 'error');
         }
     }
 

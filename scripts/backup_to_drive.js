@@ -33,7 +33,8 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6Ik
 const headers = {
     'apikey': SUPABASE_KEY,
     'Authorization': `Bearer ${SUPABASE_KEY}`,
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'x-fawry-automation-token': process.env.FAWRY_AUTOMATION_TOKEN || 'fawry-cron-sec-2026-nu'
 };
 
 async function fetchRpc(fn, body = {}) {

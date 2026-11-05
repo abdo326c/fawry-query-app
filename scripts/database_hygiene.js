@@ -50,7 +50,8 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
         headers: {
             'apikey': SUPABASE_KEY,
             'Authorization': `Bearer ${SUPABASE_KEY}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'x-fawry-automation-token': process.env.FAWRY_AUTOMATION_TOKEN || 'fawry-cron-sec-2026-nu'
         },
         body: JSON.stringify({ p_clean: applyFixes })
     });
