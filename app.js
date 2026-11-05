@@ -301,7 +301,15 @@ class App {
         const setElVisible = (id, visible) => {
             const el = document.getElementById(id);
             if (!el) return;
-            el.style.display = visible ? '' : 'none';
+            if (el.tagName === 'INPUT' && el.type === 'file') {
+                el.style.display = 'none';
+                const nextBtn = el.nextElementSibling;
+                if (nextBtn && nextBtn.tagName === 'BUTTON') {
+                    nextBtn.style.display = visible ? '' : 'none';
+                }
+            } else {
+                el.style.display = visible ? '' : 'none';
+            }
             const wrapper = el.closest('label.upload-btn-wrapper');
             if (wrapper) wrapper.style.display = visible ? '' : 'none';
         };
