@@ -8298,13 +8298,7 @@ class App {
 
             const ledgerBody = document.getElementById('student-ledger-body');
             ledgerBody.innerHTML = txs.map((t, idx) => {
-                const bankName = t.bank || t.bank_Style || '';
-                const settledBadge = t.is_settled
-                    ? `<span class="badge badge-success" style="font-size:0.7rem;" title="${t.settlement_batch ? 'Settlement: ' + escapeHTML(t.settlement_batch) : 'Settled'}">Settled</span>`
-                    : `<span class="badge" style="background:rgba(148,163,184,0.15);color:var(--text-muted);font-size:0.7rem;">Unsettled</span>`;
-                const erpBadge = t.erp_batch_number
-                    ? `<span class="badge" style="background:rgba(245,158,11,0.14);color:#f59e0b;font-size:0.68rem;margin-left:4px;" title="ERP Batch: ${escapeHTML(t.erp_batch_number)}">ERP: ${escapeHTML(t.erp_batch_number)}</span>`
-                    : '';
+                const bankName = t.bank || t.bank_Style || '-';
                 return `
                 <tr>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
@@ -8316,7 +8310,7 @@ class App {
                     <td>${escapeHTML(t.item_name || '-')}</td>
                     <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
                     <td>${escapeHTML(t.second_mapping || '-')}</td>
-                    <td>${bankName ? `<span style="font-size:0.78rem; margin-right:4px;">${escapeHTML(bankName)}</span>` : ''}${settledBadge}${erpBadge}</td>
+                    <td>${escapeHTML(bankName)}</td>
                     <td style="text-align: right; font-weight: 600;">${formatMoney(t.item_price || 0)}</td>
                 </tr>
             `;
@@ -8386,9 +8380,6 @@ class App {
             'Mapping': t.mapping || 'Unmapped',
             '2nd Mapping': t.second_mapping || '',
             'Bank': t.bank || t.bank_Style || '',
-            'Settled': t.is_settled ? 'Yes' : 'No',
-            'Settlement Batch': t.settlement_batch || '',
-            'ERP Batch #': t.erp_batch_number || '',
             'Amount (EGP)': Number(parseFloat(t.item_price || 0).toFixed(2))
         }));
 
@@ -8433,7 +8424,7 @@ class App {
         wsLedger['!cols'] = [
             { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 26 },
             { wch: 32 }, { wch: 22 }, { wch: 20 }, { wch: 16 },
-            { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 16 }
+            { wch: 16 }
         ];
         const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
         wsSummary['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 20 }];
