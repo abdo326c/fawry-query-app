@@ -12,6 +12,8 @@ import {
     originalItemName,
     isLockedTransaction,
     escapeHTML,
+    sanitizeExcelValue,
+    sanitizeExcelRows,
     toDateOnly,
     dateToExcelSerial
 } from './rules.js';
@@ -28,6 +30,9 @@ async function runConcurrent(tasks, concurrency = 4) {
 
 // Promise-based confirm dialog using the in-page modal
 window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
+    if (typeof window._activeConfirmCancel === 'function') {
+        window._activeConfirmCancel();
+    }
     return new Promise((resolve) => {
         const modal = document.getElementById('modal-custom-confirm');
         const msgEl = document.getElementById('custom-confirm-message');
@@ -39,6 +44,9 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
         btnCancel.innerText = cancelText;
         
         const cleanup = () => {
+            if (window._activeConfirmCancel === onCancel) {
+                window._activeConfirmCancel = null;
+            }
             modal.classList.add('hidden');
             btnOk.removeEventListener('click', onOk);
             btnCancel.removeEventListener('click', onCancel);
@@ -54,6 +62,7 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
             }
         };
         
+        window._activeConfirmCancel = onCancel;
         btnOk.addEventListener('click', onOk);
         btnCancel.addEventListener('click', onCancel);
         window.addEventListener('keydown', onKeyDown);
@@ -63,6 +72,8 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
 };
 
 window.escapeHTML = escapeHTML;
+window.sanitizeExcelValue = sanitizeExcelValue;
+window.sanitizeExcelRows = sanitizeExcelRows;
 
 // Shared utility: format money
 function formatMoney(num) {
@@ -1149,14 +1160,14 @@ class App {
         const parseCellVal = (td, colIdx) => {
             const raw = (td.textContent || '').trim();
             if (colIdx === 0) {
-                return raw;
+                return sanitizeExcelValue(raw);
             }
             if (td.classList.contains('pivot-share-col') || raw.endsWith('%')) {
-                return raw;
+                return sanitizeExcelValue(raw);
             }
             const cleaned = raw.replace(/,/g, '');
             const num = Number(cleaned);
-            return (!isNaN(num) && cleaned !== '') ? num : raw;
+            return (!isNaN(num) && cleaned !== '') ? num : sanitizeExcelValue(raw);
         };
 
         // Visible Body Rows (if months are collapsed, only month rows are visible; if expanded, month + its visible day rows)
@@ -2143,7 +2154,13 @@ class App {
             let statusClass = 'valid';
             if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
             if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
-            const extraCount = txRows.length > 1 ? ` <span class="text-muted">(+${txRows.length - 1} more row)</span>` : '';
+            const extraCount = txRows.length > 1 ? ` <span class="text-muted">(${txRows.length} items in order)</span>` : '';
+            const multiItemItemsHtml = txRows.length > 1
+                ? `<div style="grid-column: 1 / -1; margin-top: 0.25rem; padding: 0.4rem 0.55rem; border-radius: 6px; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); color: #f59e0b; font-size: 0.76rem;">
+                    <strong>Multi-Item Order (${txRows.length} lines):</strong> ${txRows.map(r => `${escapeHTML(r.item_name || '-')} (EGP ${formatMoney(r.item_price)})`).join(' • ')}<br>
+                    <span style="opacity: 0.9;">Tip: Leave Item Name &amp; Mapping blank to fix only the Student ID while preserving each item's own mapping rule.</span>
+                   </div>`
+                : '';
 
             previewEl.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.35rem;">
@@ -2156,6 +2173,7 @@ class App {
                     <div style="grid-column: 1 / -1;">Item: <strong style="color: var(--text-main);">${escapeHTML(t.item_name || '-')}</strong></div>
                     <div>Mapping: <strong style="color: var(--text-main);">${escapeHTML(t.mapping || '-')}</strong></div>
                     <div>2nd Mapping: <strong style="color: var(--text-main);">${escapeHTML(t.second_mapping || '-')}</strong></div>
+                    ${multiItemItemsHtml}
                 </div>
             `;
         } catch (err) {
@@ -3436,9 +3454,13 @@ class App {
                                 query = query.ilike(currentColumn, `%${searchTerm}%`);
                             }
                         }
-                        const { data, error } = await query.limit(100);
+                        const orderCol = currentColumn === 'payment_date' ? 'payment_date' : 'id';
+                        const { data, error } = await query.order(orderCol, { ascending: false }).limit(500);
                         if (!error && data) {
-                            options = [...new Set(data.map(d => d[currentColumn]).filter(v => v !== null && v !== undefined))].sort();
+                            const distinct = [...new Set(data.map(d => d[currentColumn]).filter(v => v !== null && v !== undefined))];
+                            options = currentColumn === 'payment_date'
+                                ? distinct.map(v => toDateOnly(v) || v).sort((a, b) => String(b).localeCompare(String(a)))
+                                : distinct.sort();
                         }
                     }
                 } catch (e) {
@@ -3703,7 +3725,7 @@ class App {
                     };
                 });
 
-                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                const worksheet = XLSX.utils.json_to_sheet(sanitizeExcelRows(formattedData));
                 // Write integer Excel date serials (z: 'm/d/yyyy') so Excel shows a true Date with zero time component
                 allData.forEach((t, idx) => {
                     const serial = dateToExcelSerial(t.payment_date);
@@ -3716,7 +3738,7 @@ class App {
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
                 
                 // Trigger download
-                XLSX.writeFile(workbook, `Fawry_Query_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+                XLSX.writeFile(workbook, `Fawry_Query_Export_${toDateOnly(new Date())}.xlsx`);
 
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
@@ -3749,10 +3771,10 @@ class App {
                     "2nd Mapping": m.second_mapping || ""
                 }));
 
-                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                const worksheet = XLSX.utils.json_to_sheet(sanitizeExcelRows(formattedData));
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Item Mappings");
-                XLSX.writeFile(workbook, `Item_Mappings_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+                XLSX.writeFile(workbook, `Item_Mappings_Export_${toDateOnly(new Date())}.xlsx`);
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
             }
@@ -3781,10 +3803,10 @@ class App {
                     "2nd Mapping": f.second_mapping || ""
                 }));
 
-                const worksheet = XLSX.utils.json_to_sheet(formattedData);
+                const worksheet = XLSX.utils.json_to_sheet(sanitizeExcelRows(formattedData));
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Manual Fixes");
-                XLSX.writeFile(workbook, `Manual_Fixes_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+                XLSX.writeFile(workbook, `Manual_Fixes_Export_${toDateOnly(new Date())}.xlsx`);
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
             }
@@ -3955,15 +3977,47 @@ class App {
         }
     }
 
-    async openTransactionDetailsModal(tx) {
+    async openTransactionDetailsModal(txOrRef) {
         const modal = document.getElementById('modal-tx-details');
         const body = document.getElementById('modal-tx-details-body');
-        if (!modal || !body || !tx) return;
+        if (!modal || !body || !txOrRef) return;
+
+        let tx = txOrRef;
+        let siblingItems = [];
+        if (typeof txOrRef === 'string' || typeof txOrRef === 'number') {
+            const refStr = String(txOrRef).trim();
+            body.innerHTML = `<div class="text-center" style="padding: 2rem; color: var(--text-muted);"><i data-lucide="loader" class="spin"></i> Loading transaction ${escapeHTML(refStr)}...</div>`;
+            modal.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons({ root: body });
+            try {
+                const { data: rows, error } = await supabase
+                    .from('transactions')
+                    .select('*')
+                    .eq('reference_number', refStr)
+                    .order('id', { ascending: true });
+                if (error) throw error;
+                if (!rows || rows.length === 0) {
+                    body.innerHTML = `<div class="text-center" style="padding: 2rem; color: var(--danger);">No transaction found with reference number <strong>${escapeHTML(refStr)}</strong>.</div>`;
+                    return;
+                }
+                tx = rows[0];
+                if (rows.length > 1) siblingItems = rows;
+            } catch (err) {
+                body.innerHTML = `<div class="text-center" style="padding: 2rem; color: var(--danger);">Error loading transaction: ${escapeHTML(err.message)}</div>`;
+                return;
+            }
+        }
 
         const origItem = normalizeItemName(originalItemName(tx)) || normalizeItemName(tx.item_name) || '-';
         let statusClass = 'valid';
         if (tx.id_status && tx.id_status.includes('Missing')) statusClass = 'missing';
         if (tx.id_status && tx.id_status.includes('Error')) statusClass = 'error';
+        const multiItemSummaryHtml = siblingItems.length > 1
+            ? `<div style="grid-column: 1 / -1; margin-top: 0.35rem; padding: 0.45rem 0.65rem; border-radius: 6px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); font-size: 0.8rem;">
+                <strong>Order Contains ${siblingItems.length} Items:</strong>
+                ${siblingItems.map(r => `${escapeHTML(r.item_name || '-')} (EGP ${formatMoney(r.item_price)})`).join(' &bull; ')}
+               </div>`
+            : '';
 
         body.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);">
@@ -4011,6 +4065,7 @@ class App {
                     <div>Merchant: <strong>${escapeHTML(tx.merchant_name || '-')}</strong></div>
                     <div>Settlement Batch: <strong>${escapeHTML(tx.settlement_batch || '-')}</strong></div>
                     <div>ERP Batch: <strong>${escapeHTML(tx.erp_batch_number || '-')}</strong></div>
+                    ${multiItemSummaryHtml}
                 </div>
             </div>
 
@@ -4022,12 +4077,16 @@ class App {
                 <button type="button" class="btn btn-primary" id="btn-tx-detail-fix">
                     <i data-lucide="wrench" style="width: 14px; height: 14px;"></i> Manual Fix
                 </button>` : ''}
-                <button type="button" class="btn btn-outline" onclick="document.getElementById('modal-tx-details').classList.add('hidden')">Close</button>
+                <button type="button" class="btn btn-outline" id="btn-tx-detail-close">Close</button>
             </div>
         `;
 
         modal.classList.remove('hidden');
         if (window.lucide) lucide.createIcons({ root: body });
+
+        document.getElementById('btn-tx-detail-close')?.addEventListener('click', () => {
+            modal.classList.add('hidden');
+        });
 
         document.getElementById('btn-tx-detail-copy-ref')?.addEventListener('click', () => {
             if (navigator.clipboard && tx.reference_number) {
@@ -4819,7 +4878,7 @@ class App {
                     'Source': s.source || ''
                 }));
 
-                const ws = XLSX.utils.json_to_sheet(rows);
+                const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(rows));
                 ws['!cols'] = [
                     { wch: 14 }, { wch: 28 }, { wch: 26 }, { wch: 28 },
                     { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 24 },
@@ -4827,7 +4886,7 @@ class App {
                 ];
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Students");
-                XLSX.writeFile(wb, `Student_Master_Export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                XLSX.writeFile(wb, `Student_Master_Export_${toDateOnly(new Date())}.xlsx`);
                 Toast.show(`Exported ${rows.length.toLocaleString()} students`, "success");
 
                 btn.innerHTML = oldHtml;
@@ -5021,8 +5080,9 @@ class App {
                     "Amount": Number(tx.original_amount || 0),
                     "Bank": tx.original_bank || ''
                 }));
+                const safeExportRows = sanitizeExcelRows(exportRows);
                 if (typeof XLSX !== 'undefined' && XLSX.utils && typeof XLSX.writeFile === 'function') {
-                    const ws = XLSX.utils.json_to_sheet(exportRows);
+                    const ws = XLSX.utils.json_to_sheet(safeExportRows);
                     ws['!cols'] = [
                         { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 24 },
                         { wch: 26 }, { wch: 22 }, { wch: 30 }, { wch: 36 },
@@ -5030,9 +5090,9 @@ class App {
                     ];
                     const wb = XLSX.utils.book_new();
                     XLSX.utils.book_append_sheet(wb, ws, 'Auto-Matcher Results');
-                    XLSX.writeFile(wb, `Auto_Matcher_Results_${new Date().toISOString().split('T')[0]}.xlsx`);
+                    XLSX.writeFile(wb, `Auto_Matcher_Results_${toDateOnly(new Date())}.xlsx`);
                 } else {
-                    const csv = Papa.unparse(exportRows);
+                    const csv = Papa.unparse(safeExportRows);
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement('a');
                     const url = URL.createObjectURL(blob);
@@ -6794,14 +6854,14 @@ class App {
                     };
                 });
 
-                const ws = XLSX.utils.json_to_sheet(exportRows);
+                const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportRows));
                 ws['!cols'] = [
                     { wch: 42 }, { wch: 15 }, { wch: 18 },
                     { wch: 16 }, { wch: 15 }, { wch: 15 }, { wch: 55 }
                 ];
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Payment Links");
-                XLSX.writeFile(wb, `Payment_Links_Export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                XLSX.writeFile(wb, `Payment_Links_Export_${toDateOnly(new Date())}.xlsx`);
                 Toast.show(`Exported ${exportRows.length.toLocaleString()} links`, "success");
             } catch (err) {
                 Toast.show("Error exporting: " + err.message, "error");
@@ -7775,7 +7835,7 @@ class App {
             'Line number': index + 1
         }));
 
-        const ws = XLSX.utils.json_to_sheet(exportData);
+        const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         rows.forEach((row, idx) => {
             const serial = dateToExcelSerial(row.payment_date);
             if (serial !== null) {
@@ -7803,7 +7863,7 @@ class App {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
 
-        const dateStr = new Date().toISOString().split('T')[0];
+        const dateStr = toDateOnly(new Date());
         XLSX.writeFile(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
         const total = exportData.reduce((sum, r) => sum + r.Credit, 0);
         Toast.show(`ERP file exported: ${exportData.length} lines, total EGP ${formatMoney(total)}`, 'success');
@@ -7879,6 +7939,7 @@ class App {
                 revert_data: {
                     table_name: 'transactions_erp',
                     operation: 'update',
+                    batch_number: batchNum,
                     previous_rows: unexportedRows.slice(0, 500).map(r => ({
                         id: r.id,
                         erp_batch_number: r.erp_batch_number || null,
@@ -8428,21 +8489,22 @@ class App {
         ];
 
         const wb = XLSX.utils.book_new();
-        const wsLedger = XLSX.utils.json_to_sheet(ledgerRows.length ? ledgerRows : [{ 'Note': 'No payments recorded for this student' }]);
+        const safeLedger = sanitizeExcelRows(ledgerRows);
+        const wsLedger = XLSX.utils.json_to_sheet(safeLedger.length ? safeLedger : [{ 'Note': 'No payments recorded for this student' }]);
         wsLedger['!cols'] = [
             { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 26 },
             { wch: 32 }, { wch: 22 }, { wch: 20 }, { wch: 16 },
             { wch: 16 }
         ];
-        const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+        const wsSummary = XLSX.utils.json_to_sheet(sanitizeExcelRows(summaryRows));
         wsSummary['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 20 }];
-        const wsProfile = XLSX.utils.json_to_sheet(profileRows);
+        const wsProfile = XLSX.utils.json_to_sheet(sanitizeExcelRows(profileRows));
         wsProfile['!cols'] = [{ wch: 24 }, { wch: 36 }];
 
         XLSX.utils.book_append_sheet(wb, wsLedger, 'Statement of Payments');
         XLSX.utils.book_append_sheet(wb, wsSummary, 'Category Summary');
         XLSX.utils.book_append_sheet(wb, wsProfile, 'Student Profile');
-        XLSX.writeFile(wb, `Student_Statement_${sid}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        XLSX.writeFile(wb, `Student_Statement_${sid}_${toDateOnly(new Date())}.xlsx`);
         Toast.show(`Exported statement for ${sid}`, 'success');
     }
 
@@ -9251,7 +9313,7 @@ class App {
             };
         });
 
-        const ws = XLSX.utils.json_to_sheet(exportData);
+        const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         ws['!cols'] = [
             { wch: 14 }, { wch: 26 }, { wch: 30 }, { wch: 20 },
             { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 24 },
@@ -9259,7 +9321,7 @@ class App {
         ];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Double Payments');
-        XLSX.writeFile(wb, `Double_Payments_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        XLSX.writeFile(wb, `Double_Payments_Report_${toDateOnly(new Date())}.xlsx`);
         Toast.show(`Exported ${exportData.length} double-payment cluster(s)`, 'success');
     }
 
@@ -9398,9 +9460,10 @@ class App {
                 if (isReverted) {
                     expTextEl.innerHTML = '<span style="color: var(--warning); font-weight: 600;">⚠️ This audit run was previously REVERTED. Cleaned rules have been restored to the database.</span>';
                 } else if (cleanedCount > 0) {
-                    expTextEl.innerHTML = `<strong>Auto-Clean Action Taken:</strong> Merged ${details.cleaned_mappings || 0} duplicate mapping rules and ${details.cleaned_fixes || 0} duplicate manual fixes. A complete safety snapshot was captured before removal. If needed, click <strong>"Reverse Clean (Undo)"</strong> below.`;
+                    expTextEl.innerHTML = `<strong>Auto-Clean Action Taken:</strong> Merged ${Number(details.cleaned_mappings || 0)} duplicate mapping rules and ${Number(details.cleaned_fixes || 0)} duplicate manual fixes. A complete safety snapshot was captured before removal. If needed, click <strong>"Reverse Clean (Undo)"</strong> below.`;
                 } else {
-                    expTextEl.innerHTML = '<strong>Data Quality Status:</strong> All 38,077 raw transactions and mapping rules are fully verified. No duplicate rules or records required modification.';
+                    const totalScanned = Number(details.total_transactions || 0).toLocaleString();
+                    expTextEl.innerHTML = `<strong>Data Quality Status:</strong> All ${escapeHTML(totalScanned)} raw transactions and mapping rules are fully verified. No duplicate rules or records required modification.`;
                 }
             }
 
@@ -9410,12 +9473,23 @@ class App {
                 btnRevert.style.display = (cleanedCount > 0 && !isReverted) ? 'inline-flex' : 'none';
             }
 
-            // Google Drive Link
+            // Google Drive Link (validated to prevent javascript: or untrusted URI injection)
             const driveRow = document.getElementById('hygiene-modal-drive-row');
             const driveLink = document.getElementById('hygiene-modal-drive-link');
             if (driveRow && driveLink) {
-                const folderUrl = details.drive_folder_url || 'https://drive.google.com/drive/folders/1QY9kzLuFKufFCLmUJNbRfs2PFcfFfz-M';
-                driveLink.href = folderUrl;
+                const defaultDriveUrl = 'https://drive.google.com/drive/folders/1QY9kzLuFKufFCLmUJNbRfs2PFcfFfz-M';
+                let safeDriveUrl = defaultDriveUrl;
+                if (typeof details.drive_folder_url === 'string') {
+                    try {
+                        const parsedUrl = new URL(details.drive_folder_url);
+                        if (parsedUrl.protocol === 'https:' && (parsedUrl.hostname === 'drive.google.com' || parsedUrl.hostname === 'docs.google.com')) {
+                            safeDriveUrl = parsedUrl.href;
+                        }
+                    } catch (e) {
+                        // Fall back to default URL
+                    }
+                }
+                driveLink.href = safeDriveUrl;
                 driveRow.style.display = 'flex';
             }
 

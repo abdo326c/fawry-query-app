@@ -380,6 +380,43 @@ export function escapeHTML(str) {
 }
 
 /**
+ * Neutralizes CSV / Excel formula injection in a cell value.
+ * Strings beginning with '=', '+', '-', '@', tab, or CR (except plain negative numbers)
+ * are prefixed with a single quote so spreadsheet apps treat them as text.
+ */
+export function sanitizeExcelValue(val) {
+    if (typeof val !== 'string' || val.length === 0) return val;
+    const trimmed = val.trimStart();
+    if (!trimmed) return val;
+    const first = trimmed[0];
+    if (first === '=' || first === '+' || first === '@' || first === '\t' || first === '\r') {
+        return `'${val}`;
+    }
+    if (first === '-' && !/^-\d+(\.\d+)?$/.test(trimmed) && trimmed !== '-') {
+        return `'${val}`;
+    }
+    return val;
+}
+
+/**
+ * Applies sanitizeExcelValue to every string property of each row object in an array.
+ */
+export function sanitizeExcelRows(rows) {
+    if (!Array.isArray(rows)) return [];
+    return rows.map(row => {
+        if (Array.isArray(row)) {
+            return row.map(v => sanitizeExcelValue(v));
+        }
+        if (!row || typeof row !== 'object') return row;
+        const clean = {};
+        for (const [k, v] of Object.entries(row)) {
+            clean[k] = sanitizeExcelValue(v);
+        }
+        return clean;
+    });
+}
+
+/**
  * Strips any time component from a date value without timezone shifting,
  * returning a pure 'YYYY-MM-DD' string (or null).
  */

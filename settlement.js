@@ -148,6 +148,7 @@ class SettlementProcessor {
         this.reconciliationResults = [];
         this.systemTransactions = [];
         this.processedFilesCount = 0;
+        this.loadedRunMetadata = null;
         this.statusFilter = 'all';
         this.searchTerm = '';
         this.batchFilter = '';
@@ -189,6 +190,7 @@ class SettlementProcessor {
         this.settlementData = [];
         this.reconciliationResults = [];
         this.processedFilesCount = 0;
+        this.loadedRunMetadata = null;
         // Each run starts fresh; only duplicates WITHIN the same selection are skipped.
         const seenInThisRun = new Set();
 
@@ -630,16 +632,25 @@ class SettlementProcessor {
 
         const includeMissingStl = !this.checkMissingStlToggle || this.checkMissingStlToggle.checked;
         const activePool = includeMissingStl ? all : all.filter(r => r.status !== 'Missing in Settlement');
+        const savedMeta = this.loadedRunMetadata && includeMissingStl && Number(this.loadedRunMetadata.total_references || 0) > all.length
+            ? this.loadedRunMetadata
+            : null;
 
-        // Financial totals across active pool
-        const totalStlAmount = activePool.reduce((acc, r) => acc + (Number(r.stl_amount) || 0), 0);
-        const totalSysAmount = activePool.reduce((acc, r) => acc + (Number(r.sys_amount) || 0), 0);
-        const netVariance = Math.round((totalStlAmount - totalSysAmount) * 100) / 100;
+        // Financial totals across active pool (or full saved run totals when viewing a truncated saved run)
+        const totalStlAmount = savedMeta
+            ? (Number(savedMeta.total_settlement_amount) || 0)
+            : activePool.reduce((acc, r) => acc + (Number(r.stl_amount) || 0), 0);
+        const totalSysAmount = savedMeta
+            ? (Number(savedMeta.total_system_amount) || 0)
+            : activePool.reduce((acc, r) => acc + (Number(r.sys_amount) || 0), 0);
+        const netVariance = savedMeta
+            ? (Number(savedMeta.net_variance) || Math.round((totalStlAmount - totalSysAmount) * 100) / 100)
+            : Math.round((totalStlAmount - totalSysAmount) * 100) / 100;
 
-        const matchedCount = all.filter(r => r.status === 'Matched').length;
-        const mismatchCount = all.filter(r => r.status === 'Amount Mismatch').length;
-        const missingSysCount = all.filter(r => r.status === 'Missing in System').length;
-        const missingStlCount = all.filter(r => r.status === 'Missing in Settlement').length;
+        const matchedCount = savedMeta ? Number(savedMeta.matched_count || 0) : all.filter(r => r.status === 'Matched').length;
+        const mismatchCount = savedMeta ? Number(savedMeta.mismatch_count || 0) : all.filter(r => r.status === 'Amount Mismatch').length;
+        const missingSysCount = savedMeta ? Number(savedMeta.missing_in_system_count || 0) : all.filter(r => r.status === 'Missing in System').length;
+        const missingStlCount = savedMeta ? Number(savedMeta.missing_in_settlement_count || 0) : all.filter(r => r.status === 'Missing in Settlement').length;
         const unsettledMatchedCount = all.filter(r => r.status === 'Matched' && !r.is_settled).length;
 
         const setElText = (id, text) => {
@@ -820,10 +831,12 @@ class SettlementProcessor {
             Toast.show('No settlement data to export.', 'warning');
             return;
         }
-        const ws = XLSX.utils.json_to_sheet(this.settlementData);
+        const safeRows = window.sanitizeExcelRows ? window.sanitizeExcelRows(this.settlementData) : this.settlementData;
+        const ws = XLSX.utils.json_to_sheet(safeRows);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Consolidated Settlement");
-        XLSX.writeFile(wb, `Consolidated_Settlement_${new Date().toISOString().split('T')[0]}.xlsx`);
+        const today = SettlementProcessor.toDateOnly(new Date());
+        XLSX.writeFile(wb, `Consolidated_Settlement_${today}.xlsx`);
     }
 
     exportReconciliation() {
@@ -852,8 +865,9 @@ class SettlementProcessor {
             ? this.reconciliationResults
             : this.reconciliationResults.filter(r => r.status !== 'Missing in Settlement');
 
-        const allFormatted = activeRows.map(formatRow);
-        const discrepanciesFormatted = activeRows.filter(r => r.status !== 'Matched').map(formatRow);
+        const sanitizeRows = (rows) => window.sanitizeExcelRows ? window.sanitizeExcelRows(rows) : rows;
+        const allFormatted = sanitizeRows(activeRows.map(formatRow));
+        const discrepanciesFormatted = sanitizeRows(activeRows.filter(r => r.status !== 'Matched').map(formatRow));
 
         const colWidths = [
             { wch: 18 }, { wch: 22 }, { wch: 12 }, { wch: 14 },
@@ -893,7 +907,8 @@ class SettlementProcessor {
         wsSummary['!cols'] = [{ wch: 30 }, { wch: 20 }];
         XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
 
-        XLSX.writeFile(wb, `Settlement_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+        const today = SettlementProcessor.toDateOnly(new Date());
+        XLSX.writeFile(wb, `Settlement_Reconciliation_Report_${today}.xlsx`);
     }
 
     async markAsSettled() {
@@ -1090,7 +1105,7 @@ class SettlementProcessor {
 
         const defaultLabel = batches.length > 0
             ? (batches.length <= 3 ? `Settlement #${batches.join(', #')}` : `Settlement #${batches[0]} (+${batches.length - 1} more)`)
-            : `Reconciliation (${minDate || new Date().toISOString().slice(0, 10)})`;
+            : `Reconciliation (${minDate || SettlementProcessor.toDateOnly(new Date())})`;
 
         const totalStl = Math.round(activePool.reduce((acc, r) => acc + (Number(r.stl_amount) || 0), 0) * 100) / 100;
         const totalSys = Math.round(activePool.reduce((acc, r) => acc + (Number(r.sys_amount) || 0), 0) * 100) / 100;
@@ -1157,6 +1172,7 @@ class SettlementProcessor {
             return;
         }
 
+        this.loadedRunMetadata = run;
         this.reconciliationResults = savedRows.map(r => ({ ...r }));
         this.processedFilesCount = run.files_count || 1;
         this.currentPage = 1;
@@ -1173,7 +1189,11 @@ class SettlementProcessor {
         }
 
         this.renderResults();
-        this.setStatus(`<i data-lucide="archive"></i> Viewing saved run: <strong>${settlementEsc(run.batch_label)}</strong> (${new Date(run.created_at).toLocaleString()})`);
+        const totalRefs = Number(run.total_references || savedRows.length);
+        const truncNote = totalRefs > savedRows.length
+            ? ` • Previewing first ${savedRows.length.toLocaleString()} of ${totalRefs.toLocaleString()} references (full KPIs preserved above)`
+            : '';
+        this.setStatus(`<i data-lucide="archive"></i> Viewing saved run: <strong>${settlementEsc(run.batch_label)}</strong> (${new Date(run.created_at).toLocaleString()})${truncNote}`);
         Toast.show(`Loaded saved run "${run.batch_label}"`, 'info');
     }
 

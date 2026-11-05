@@ -25,16 +25,15 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { finished } from 'stream/promises';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ';
 
 const headers = {
     'apikey': SUPABASE_KEY,
     'Authorization': `Bearer ${SUPABASE_KEY}`,
-    'Content-Type': 'application/json',
-    'x-fawry-automation-token': process.env.FAWRY_AUTOMATION_TOKEN || 'fawry-cron-sec-2026-nu'
+    'Content-Type': 'application/json'
 };
 
 async function fetchRpc(fn, body = {}) {
@@ -159,13 +158,15 @@ export async function getDriveAccessToken(creds) {
  * Resolves or creates a Google Drive folder via pure REST API v3
  */
 export async function getOrCreateDriveFolderRest(accessToken, name, parentId = null) {
+    const safeName = String(name).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     const qParts = [
-        `name = '${name.replace(/'/g, "\\'")}'`,
+        `name = '${safeName}'`,
         `mimeType = 'application/vnd.google-apps.folder'`,
         `trashed = false`
     ];
     if (parentId) {
-        qParts.push(`'${parentId}' in parents`);
+        const safeParent = String(parentId).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        qParts.push(`'${safeParent}' in parents`);
     }
     const q = qParts.join(' and ');
     const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,webViewLink)`, {
@@ -381,10 +382,16 @@ export async function runFullDatabaseBackup() {
         zipPath = path.join(os.tmpdir(), `fawry_backup_${timestamp}.zip`);
         
         if (process.platform === 'win32') {
-            execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${tempDir}\\*' -DestinationPath '${zipPath}' -Force"`);
+            const safeSrc = `${tempDir}\\*`.replace(/'/g, "''");
+            const safeDst = zipPath.replace(/'/g, "''");
+            execFileSync('powershell', [
+                '-NoProfile',
+                '-Command',
+                `Compress-Archive -Path '${safeSrc}' -DestinationPath '${safeDst}' -Force`
+            ]);
         } else {
             // Linux / macOS (GitHub Actions runner)
-            execSync(`cd "${tempDir}" && zip -q -r "${zipPath}" .`);
+            execFileSync('zip', ['-q', '-r', zipPath, '.'], { cwd: tempDir });
         }
         
         const zipSizeMb = (fs.statSync(zipPath).size / (1024 * 1024)).toFixed(2);

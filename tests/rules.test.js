@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, normalizeItemName, buildMappingLookup } from '../rules.js';
+import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -109,3 +109,23 @@ test('normalizeItemName and buildMappingLookup handle whitespace, casing, and ad
 
 
 
+
+test('sanitizeExcelValue and sanitizeExcelRows neutralize formula injection', () => {
+    expect(sanitizeExcelValue('=CMD|\' /C calc\'!A0')).toBe('\'=CMD|\' /C calc\'!A0');
+    expect(sanitizeExcelValue('+1+2')).toBe('\'+1+2');
+    expect(sanitizeExcelValue('-SUM(A1:A5)')).toBe('\'-SUM(A1:A5)');
+    expect(sanitizeExcelValue('@SUM(A1:A5)')).toBe('\'@SUM(A1:A5)');
+    expect(sanitizeExcelValue('\t=1+1')).toBe('\'\t=1+1');
+    expect(sanitizeExcelValue('  =HYPERLINK("http://evil")')).toBe('\'  =HYPERLINK("http://evil")');
+    expect(sanitizeExcelValue('Normal Student Name')).toBe('Normal Student Name');
+    expect(sanitizeExcelValue(41718.5)).toBe(41718.5);
+    expect(sanitizeExcelValue(-150.25)).toBe(-150.25);
+
+    const rows = [
+        { Name: '=EVIL()', Amount: 500, Note: 'Safe' },
+        ['@AT', 100, '+PLUS']
+    ];
+    const cleaned = sanitizeExcelRows(rows);
+    expect(cleaned[0]).toEqual({ Name: '\'=EVIL()', Amount: 500, Note: 'Safe' });
+    expect(cleaned[1]).toEqual(['\'@AT', 100, '\'+PLUS']);
+});

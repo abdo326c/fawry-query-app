@@ -215,17 +215,43 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $function$
+DECLARE
+  v_jwt_email TEXT;
+  v_role TEXT;
 BEGIN
+  BEGIN
+    v_jwt_email := NULLIF(LOWER(TRIM(auth.jwt() ->> 'email')), '');
+  EXCEPTION WHEN OTHERS THEN
+    v_jwt_email := NULL;
+  END;
+
   NEW.user_email := COALESCE(
     (SELECT email FROM auth.users WHERE id = auth.uid()),
+    v_jwt_email,
     NEW.user_email,
     'system@nu.edu.eg'
   );
+
+  -- Only check/restrict client inserts when an authenticated user session is present
+  IF auth.uid() IS NOT NULL THEN
+    v_role := public.current_user_role();
+
+    -- Non-admins cannot forge 'Database Hygiene Audit' or 'Database Hygiene Rollback'
+    IF NEW.action IN ('Database Hygiene Audit', 'Database Hygiene Rollback') AND v_role <> 'admin' THEN
+      RAISE EXCEPTION 'Access denied: only admin or automation can log %', NEW.action;
+    END IF;
+
+    -- Non-accountants cannot attach revert_data, revert_snapshot, or drive_folder_url payloads
+    IF public.role_level(v_role) < public.role_level('accountant') AND NEW.details IS NOT NULL THEN
+      NEW.details := NEW.details - 'revert_data' - 'revert_snapshot' - 'drive_folder_url';
+    END IF;
+  END IF;
+
   RETURN NEW;
 END;
 $function$;
 
--- Helper to authorize either an authenticated Admin or an authorized Automation Job
+-- Helper to authorize either an authenticated Admin or the Supabase service_role (no hardcoded secret)
 CREATE OR REPLACE FUNCTION public.is_admin_or_automation()
 RETURNS boolean
 LANGUAGE plpgsql
@@ -234,32 +260,35 @@ SECURITY INVOKER
 SET search_path = public
 AS $function$
 DECLARE
-  v_token TEXT;
+  v_jwt_role TEXT;
 BEGIN
   IF public.has_min_role('admin') THEN
     RETURN true;
   END IF;
+  IF current_user IN ('postgres', 'service_role', 'supabase_admin') THEN
+    RETURN true;
+  END IF;
   BEGIN
-    v_token := COALESCE(current_setting('request.headers', true)::jsonb ->> 'x-fawry-automation-token', '');
+    v_jwt_role := COALESCE(auth.jwt() ->> 'role', '');
   EXCEPTION WHEN OTHERS THEN
-    v_token := '';
+    v_jwt_role := '';
   END;
-  RETURN v_token = 'fawry-cron-sec-2026-nu';
+  RETURN v_jwt_role = 'service_role';
 END;
 $function$;
 
--- Harden sync_auth_users (Admin only)
+-- Harden sync_auth_users (Admin only, SECURITY INVOKER)
 CREATE OR REPLACE FUNCTION public.sync_auth_users()
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, auth
 AS $function$
 DECLARE
   v_inserted INTEGER := 0;
   v_total    INTEGER := 0;
 BEGIN
-  IF NOT public.has_min_role('admin') THEN
+  IF NOT public.is_admin_or_automation() THEN
     RAISE EXCEPTION 'Access denied: admin role required';
   END IF;
 
@@ -282,11 +311,11 @@ BEGIN
 END;
 $function$;
 
--- Harden backup RPCs with admin / automation check
+-- Harden backup RPCs with admin / service_role check & SECURITY INVOKER
 CREATE OR REPLACE FUNCTION public.export_database_backup_payload()
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $function$
 DECLARE
@@ -320,7 +349,7 @@ BEGIN
 
   RETURN jsonb_build_object(
     'exported_at', NOW(),
-    'version', '2.4.0',
+    'version', '2.4.1',
     'mappings_count', jsonb_array_length(COALESCE(v_mappings, '[]'::jsonb)),
     'fixes_count', jsonb_array_length(COALESCE(v_fixes, '[]'::jsonb)),
     'roles_count', jsonb_array_length(COALESCE(v_roles, '[]'::jsonb)),
@@ -336,7 +365,7 @@ $function$;
 CREATE OR REPLACE FUNCTION public.get_students_backup_chunk(p_offset integer, p_limit integer)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $function$
 BEGIN
@@ -360,7 +389,7 @@ $function$;
 CREATE OR REPLACE FUNCTION public.get_transactions_backup_chunk(p_offset integer, p_limit integer)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $function$
 BEGIN
@@ -384,7 +413,7 @@ $function$;
 CREATE OR REPLACE FUNCTION public.run_database_hygiene_audit(p_clean boolean DEFAULT false)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $function$
 DECLARE
@@ -523,7 +552,7 @@ $function$;
 CREATE OR REPLACE FUNCTION public.rollback_database_hygiene_audit(p_audit_id bigint)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $function$
 DECLARE
@@ -619,9 +648,17 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_auth_user() FROM public, anon, auth
 REVOKE EXECUTE ON FUNCTION public.secure_audit_log_insert() FROM public, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.rls_auto_enable() FROM public, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.sync_auth_users() FROM public, anon;
-GRANT EXECUTE ON FUNCTION public.sync_auth_users() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.sync_auth_users() TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.export_database_backup_payload() FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.export_database_backup_payload() TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.get_students_backup_chunk(integer, integer) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.get_students_backup_chunk(integer, integer) TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.get_transactions_backup_chunk(integer, integer) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.get_transactions_backup_chunk(integer, integer) TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.run_database_hygiene_audit(boolean) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.run_database_hygiene_audit(boolean) TO authenticated, service_role;
 REVOKE EXECUTE ON FUNCTION public.rollback_database_hygiene_audit(bigint) FROM public, anon;
-GRANT EXECUTE ON FUNCTION public.rollback_database_hygiene_audit(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.rollback_database_hygiene_audit(bigint) TO authenticated, service_role;
 
 
 -- ============================================================================
@@ -631,7 +668,9 @@ GRANT EXECUTE ON FUNCTION public.rollback_database_hygiene_audit(bigint) TO auth
 DROP INDEX IF EXISTS public.idx_links_payment_ref;
 DROP INDEX IF EXISTS public.idx_links_reference;
 DROP INDEX IF EXISTS public.idx_transactions_student;
+DROP INDEX IF EXISTS public.idx_transactions_reference;
 DROP INDEX IF EXISTS public.idx_student_master_id;
+DROP INDEX IF EXISTS public.idx_item_mappings_item_name_lower;
 
 CREATE INDEX IF NOT EXISTS idx_transactions_date_bank ON public.transactions (payment_date, bank);
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_id ON public.transactions (batch_id);
@@ -776,16 +815,19 @@ GRANT EXECUTE ON FUNCTION public.detect_double_payments(integer) TO authenticate
 CREATE OR REPLACE FUNCTION public.revert_audit_log_entry(p_audit_id bigint)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public
 AS $function$
 DECLARE
   v_audit RECORD;
+  v_author_role TEXT;
   v_revert JSONB;
   v_table TEXT;
   v_op TEXT;
   v_row JSONB;
+  v_batch TEXT;
   v_restored INTEGER := 0;
+  v_updated_batch INTEGER := 0;
   v_email TEXT;
 BEGIN
   IF NOT public.has_min_role('admin') THEN
@@ -804,6 +846,18 @@ BEGIN
   -- Delegate Database Hygiene Audit to its dedicated rollback RPC
   IF v_audit.action = 'Database Hygiene Audit' THEN
     RETURN public.rollback_database_hygiene_audit(p_audit_id);
+  END IF;
+
+  -- Verify the author of the audit log had at least accountant privileges (or was system/admin)
+  IF LOWER(TRIM(COALESCE(v_audit.user_email, ''))) NOT IN ('system@nu.edu.eg', 'ammahmoud@nu.edu.eg') THEN
+    SELECT role INTO v_author_role
+    FROM public.user_roles
+    WHERE LOWER(TRIM(email)) = LOWER(TRIM(v_audit.user_email))
+    LIMIT 1;
+
+    IF public.role_level(COALESCE(v_author_role, 'viewer')) < public.role_level('accountant') THEN
+      RAISE EXCEPTION 'Security block: cannot execute revert_data authored by non-accountant user (%)', v_audit.user_email;
+    END IF;
   END IF;
 
   v_revert := v_audit.details -> 'revert_data';
@@ -863,6 +917,7 @@ BEGIN
     END IF;
 
   ELSIF v_table = 'transactions_erp' THEN
+    -- First restore explicit previous_rows snapshot
     FOR v_row IN SELECT * FROM jsonb_array_elements(COALESCE(v_revert -> 'previous_rows', '[]'::jsonb))
     LOOP
       UPDATE public.transactions
@@ -872,6 +927,19 @@ BEGIN
       WHERE id = (v_row ->> 'id')::BIGINT;
       v_restored := v_restored + 1;
     END LOOP;
+
+    -- Also clear any remaining rows from the same batch_number beyond the 500-row snapshot cap
+    v_batch := NULLIF(BTRIM(COALESCE(v_revert ->> 'batch_number', '')), '');
+    IF v_batch IS NOT NULL THEN
+      WITH cleared AS (
+        UPDATE public.transactions
+        SET erp_batch_number = NULL, erp_voucher = NULL
+        WHERE erp_batch_number = v_batch
+        RETURNING 1
+      )
+      SELECT COUNT(*) INTO v_updated_batch FROM cleared;
+      v_restored := GREATEST(v_restored, v_restored + v_updated_batch);
+    END IF;
   ELSE
     RETURN jsonb_build_object(
       'success', false,
