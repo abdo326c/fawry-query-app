@@ -3853,8 +3853,8 @@ class App {
                         <div style="display: inline-flex; flex-direction: column; align-items: flex-start;">
                             <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
                                 <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
-                                ${canEditRules ? `<button type="button" class="btn btn-icon" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}" style="padding: 0.15rem 0.3rem; opacity: ${statusClass === 'valid' ? '0.55' : '1'};">
-                                    <i data-lucide="wrench" style="width: 13px; height: 13px;"></i>
+                                ${canEditRules ? `<button type="button" class="tx-quick-fix-btn ${statusClass}" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}">
+                                    <i data-lucide="wrench"></i>
                                 </button>` : ''}
                             </div>
                             ${errorDetail}

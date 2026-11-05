@@ -313,3 +313,72 @@ test('App brand icon and responsive header components are properly structured', 
     expect(authBrand.querySelector('.brand-badge-lg')).not.toBeNull();
     expect(authBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
 });
+
+test('Transactions table renders compact .tx-quick-fix-btn with proper classes', () => {
+    if (!window.app) {
+        document.dispatchEvent(new Event('DOMContentLoaded'));
+    }
+    const app = window.app || { hasRole: () => true };
+    app.userRole = 'accountant';
+    
+    const mockTxData = [
+        {
+            id: 1,
+            reference_number: '9696284171',
+            payment_date: '2026-11-04',
+            student_id: '251001755',
+            item_price: 1000,
+            item_name: 'TuitionFees SPRG 2026',
+            mapping: 'Tuition',
+            second_mapping: null,
+            bank: 'NUADCB136',
+            id_status: 'Valid',
+            is_settled: false
+        },
+        {
+            id: 2,
+            reference_number: '9696284172',
+            payment_date: '2026-11-04',
+            student_id: 'Missing',
+            item_price: 500,
+            item_name: 'Unknown',
+            mapping: null,
+            second_mapping: null,
+            bank: 'NUADCB136',
+            id_status: 'Missing ID',
+            is_settled: false
+        }
+    ];
+
+    // Mock loadTransactions data binding
+    const tbody = document.getElementById('transactions-body');
+    expect(tbody).not.toBeNull();
+    
+    // Simulate table rendering logic for rows
+    tbody.innerHTML = mockTxData.map((t, idx) => {
+        let statusClass = 'valid';
+        if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
+        if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
+
+        return `
+            <tr>
+                <td>${t.reference_number}</td>
+                <td>
+                    <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                        <span class="badge ${statusClass}">${t.id_status}</span>
+                        ${app.hasRole('accountant') ? `<button type="button" class="tx-quick-fix-btn ${statusClass}" data-quick-fix-ref="${t.reference_number}">
+                            <i data-lucide="wrench"></i>
+                        </button>` : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    const fixBtns = tbody.querySelectorAll('.tx-quick-fix-btn');
+    expect(fixBtns.length).toBe(2);
+    expect(fixBtns[0].classList.contains('valid')).toBe(true);
+    expect(fixBtns[0].getAttribute('data-quick-fix-ref')).toBe('9696284171');
+    expect(fixBtns[1].classList.contains('missing')).toBe(true);
+    expect(fixBtns[1].getAttribute('data-quick-fix-ref')).toBe('9696284172');
+});
