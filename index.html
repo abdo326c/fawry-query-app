@@ -2146,6 +2146,74 @@
         </div>
     </div>
 
+    <!-- ERP Export Date Selection Modal -->
+    <div id="modal-erp-date-choice" class="modal hidden" style="z-index: 10025;">
+        <div class="modal-content glass-card" style="max-width: 600px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 0.65rem;">
+                    <div style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="calendar-clock" style="width: 20px; height: 20px;"></i>
+                    </div>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.15rem;">Choose ERP Journal Date</h2>
+                        <p id="erp-date-choice-subtitle" style="margin: 0.15rem 0 0 0; font-size: 0.8rem; color: var(--text-muted);">Select which date to stamp into the Dynamics 365 Date column</p>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" onclick="document.getElementById('modal-erp-date-choice').classList.add('hidden')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;">
+                <!-- Option 1: Auto Settlement Date -->
+                <label class="erp-date-mode-option" data-mode="settlement" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.45); background: rgba(56, 189, 248, 0.06); cursor: pointer; transition: all 0.15s ease;">
+                    <input type="radio" name="erp-export-date-mode" value="settlement" checked style="margin-top: 0.25rem; accent-color: var(--primary);">
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                            <strong style="font-size: 0.92rem; color: var(--text-main);">Settlement Date (Auto-Calculated)</strong>
+                            <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; font-size: 0.7rem;">Recommended</span>
+                        </div>
+                        <p style="margin: 0.25rem 0 0.55rem 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+                            Automatically shifts each order to its bank transfer date: <strong>Sun–Wed &rarr; Next Day (+1d)</strong>, while <strong>Thu, Fri &amp; Sat &rarr; Sunday</strong>.
+                        </p>
+                        <div id="erp-date-choice-preview" style="background: rgba(15, 23, 42, 0.45); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.55rem 0.75rem; font-size: 0.78rem; max-height: 135px; overflow-y: auto;">
+                            <!-- Populated dynamically with Payment Date -> Settlement Date mappings -->
+                        </div>
+                    </div>
+                </label>
+
+                <!-- Option 2: Original Payment Date -->
+                <label class="erp-date-mode-option" data-mode="payment" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.02); cursor: pointer; transition: all 0.15s ease;">
+                    <input type="radio" name="erp-export-date-mode" value="payment" style="margin-top: 0.25rem; accent-color: var(--primary);">
+                    <div style="flex: 1;">
+                        <strong style="font-size: 0.92rem; color: var(--text-main);">Original Payment Date (Order Date)</strong>
+                        <p style="margin: 0.2rem 0 0 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+                            Uses the exact transaction date when the student paid on Fawry without adding settlement days.
+                        </p>
+                    </div>
+                </label>
+
+                <!-- Option 3: Custom Single Date Override -->
+                <label class="erp-date-mode-option" data-mode="custom" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.02); cursor: pointer; transition: all 0.15s ease;">
+                    <input type="radio" name="erp-export-date-mode" value="custom" style="margin-top: 0.25rem; accent-color: var(--primary);">
+                    <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;">
+                            <strong style="font-size: 0.92rem; color: var(--text-main);">Custom Bank Transfer Date</strong>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">Holiday / Single-Day Batch Override</span>
+                        </div>
+                        <p style="margin: 0.2rem 0 0.5rem 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+                            Stamp one specific date across all exported lines (useful when Sunday is an official bank holiday and funds arrive on Monday).
+                        </p>
+                        <input type="date" id="erp-custom-settlement-date" class="input-text" style="max-width: 210px; padding: 0.35rem 0.65rem; font-size: 0.84rem;">
+                    </div>
+                </label>
+            </div>
+            <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 0.75rem;">
+                <button type="button" class="btn btn-outline" onclick="document.getElementById('modal-erp-date-choice').classList.add('hidden')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-erp-date-export">
+                    <i data-lucide="download"></i> Export ERP Template
+                </button>
+            </div>
+        </div>
+    </div>
+
         <!-- Detect Duplicates Modal -->
     <div id="modal-detect-duplicates" class="modal hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 900px; max-height: 90vh; display: flex; flex-direction: column;">

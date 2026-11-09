@@ -583,3 +583,36 @@ export function dateToExcelSerial(val) {
     if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
     return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
 }
+
+/**
+ * Calculates the Fawry bank settlement date for a given transaction payment date:
+ * - Sunday (0), Monday (1), Tuesday (2), Wednesday (3) -> +1 day (next business day Mon-Thu)
+ * - Thursday (4) -> +3 days (settled on Sunday)
+ * - Friday (5)   -> +2 days (settled on Sunday)
+ * - Saturday (6) -> +1 day  (settled on Sunday)
+ *
+ * Uses pure UTC calendar arithmetic so local timezones/DST never shift dates.
+ * Returns a 'YYYY-MM-DD' string (or null if input is invalid).
+ */
+export function calculateSettlementDate(val) {
+    const clean = toDateOnly(val);
+    if (!clean) return null;
+    const parts = clean.split('-');
+    if (parts.length !== 3) return null;
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    const d = parseInt(parts[2], 10);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+
+    const utcDate = new Date(Date.UTC(y, m - 1, d));
+    if (isNaN(utcDate.getTime())) return null;
+
+    const dayOfWeek = utcDate.getUTCDay(); // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+    const daysToAdd = dayOfWeek === 4 ? 3 : dayOfWeek === 5 ? 2 : 1;
+    utcDate.setUTCDate(utcDate.getUTCDate() + daysToAdd);
+
+    const sy = utcDate.getUTCFullYear();
+    const sm = String(utcDate.getUTCMonth() + 1).padStart(2, '0');
+    const sd = String(utcDate.getUTCDate()).padStart(2, '0');
+    return `${sy}-${sm}-${sd}`;
+}

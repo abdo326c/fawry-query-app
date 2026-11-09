@@ -460,4 +460,19 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(auditBody.querySelector('[data-revert-audit-id="501"]')).not.toBeNull();
     expect(auditBody.querySelector('[data-revert-audit-id="502"]')).toBeNull();
     expect(auditBody.innerHTML).toContain('Reverted');
+
+    // 4. ERP Export Date Choice Modal & Settlement Date Resolution
+    expect(document.getElementById('modal-erp-date-choice')).not.toBeNull();
+    const thuTx = { payment_date: '2026-11-05', reference_number: '969800001', student_id: '221000111', item_price: 500, id_status: 'Valid' };
+    const friTx = { payment_date: '2026-11-06', reference_number: '969800002', student_id: '221000112', item_price: 600, id_status: 'Valid' };
+    expect(window.app.resolveErpExportDate(thuTx, 'settlement')).toBe('2026-11-08');
+    expect(window.app.resolveErpExportDate(friTx, 'settlement')).toBe('2026-11-08');
+    expect(window.app.resolveErpExportDate(thuTx, 'payment')).toBe('2026-11-05');
+    expect(window.app.resolveErpExportDate(thuTx, 'custom', '2026-11-09')).toBe('2026-11-09');
+
+    window.app.openErpDateChoiceModal([thuTx, friTx]);
+    const erpDateModal = document.getElementById('modal-erp-date-choice');
+    expect(erpDateModal.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('erp-date-choice-preview').innerHTML).toContain('2026-11-08');
+    erpDateModal.classList.add('hidden');
 });

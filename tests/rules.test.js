@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
+import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -128,4 +128,28 @@ test('sanitizeExcelValue and sanitizeExcelRows neutralize formula injection', ()
     const cleaned = sanitizeExcelRows(rows);
     expect(cleaned[0]).toEqual({ Name: '\'=EVIL()', Amount: 500, Note: 'Safe' });
     expect(cleaned[1]).toEqual(['\'@AT', 100, '\'+PLUS']);
+});
+
+test('calculateSettlementDate shifts Sun-Wed by +1 day and Thu/Fri/Sat to Sunday', () => {
+    expect(calculateSettlementDate(null)).toBeNull();
+    expect(calculateSettlementDate('')).toBeNull();
+
+    // Nov 2026 calendar week:
+    // 2026-11-01 = Sunday    -> 2026-11-02 (Monday, +1d)
+    // 2026-11-02 = Monday    -> 2026-11-03 (Tuesday, +1d)
+    // 2026-11-03 = Tuesday   -> 2026-11-04 (Wednesday, +1d)
+    // 2026-11-04 = Wednesday -> 2026-11-05 (Thursday, +1d)
+    // 2026-11-05 = Thursday  -> 2026-11-08 (Sunday, +3d)
+    // 2026-11-06 = Friday    -> 2026-11-08 (Sunday, +2d)
+    // 2026-11-07 = Saturday  -> 2026-11-08 (Sunday, +1d)
+    expect(calculateSettlementDate('2026-11-01')).toBe('2026-11-02');
+    expect(calculateSettlementDate('2026-11-02')).toBe('2026-11-03');
+    expect(calculateSettlementDate('2026-11-03')).toBe('2026-11-04');
+    expect(calculateSettlementDate('2026-11-04')).toBe('2026-11-05');
+    expect(calculateSettlementDate('2026-11-05')).toBe('2026-11-08');
+    expect(calculateSettlementDate('2026-11-06')).toBe('2026-11-08');
+    expect(calculateSettlementDate('2026-11-07')).toBe('2026-11-08');
+
+    // Month/Year rollover on Thursday (2026-12-31 is Thursday -> settles Sunday 2027-01-03)
+    expect(calculateSettlementDate('2026-12-31T14:22:00Z')).toBe('2027-01-03');
 });

@@ -15,7 +15,8 @@ import {
     sanitizeExcelValue,
     sanitizeExcelRows,
     toDateOnly,
-    dateToExcelSerial
+    dateToExcelSerial,
+    calculateSettlementDate
 } from './rules.js';
 
 // Helper to run async task functions with bounded concurrency
@@ -7730,8 +7731,17 @@ class App {
                 erpStatusHtml = `<span class="badge" style="background: rgba(16, 185, 129, 0.14); color: #10b981; font-size: 0.72rem;">Ready</span>`;
             }
 
+            const payDate = toDateOnly(row.payment_date) || '';
+            const stlDate = calculateSettlementDate(row.payment_date) || '';
+            const stlDay = this.erpDayShort(stlDate);
+            const dateCellHtml = `
+                <div style="line-height: 1.25;">
+                    <div style="font-weight: 500;">${escapeHTML(payDate)}</div>
+                    ${stlDate ? `<div style="font-size: 0.7rem; color: #38bdf8; margin-top: 2px;" title="Auto-calculated Fawry bank settlement date (Sun-Wed +1d, Thu/Fri/Sat -> Sun)">Settles: ${escapeHTML(stlDate)}${stlDay ? ` (${escapeHTML(stlDay)})` : ''}</div>` : ''}
+                </div>`;
+
             tr.innerHTML = `
-                <td style="white-space: nowrap;">${escapeHTML(toDateOnly(row.payment_date))}</td>
+                <td style="white-space: nowrap;">${dateCellHtml}</td>
                 <td>${accountCellHtml}</td>
                 <td>
                     <a href="#" class="erp-ref-inspect-link" data-idx="${index}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction details">${escapeHTML(row.reference_number || '')}</a><span style="color: var(--text-secondary);">${escapeHTML(descriptionTail)}</span>
@@ -7847,6 +7857,26 @@ class App {
         return /^\d+$/.test(id) ? id.padStart(9, '0') : id;
     }
 
+    erpDayShort(dateStr) {
+        const clean = toDateOnly(dateStr);
+        if (!clean) return '';
+        const parts = clean.split('-');
+        if (parts.length !== 3) return '';
+        const d = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+        if (isNaN(d.getTime())) return '';
+        return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()] || '';
+    }
+
+    resolveErpExportDate(row, dateMode = 'settlement', customDate = null) {
+        if (dateMode === 'custom' && customDate) {
+            return toDateOnly(customDate) || toDateOnly(row?.payment_date);
+        }
+        if (dateMode === 'payment') {
+            return toDateOnly(row?.payment_date);
+        }
+        return calculateSettlementDate(row?.payment_date) || toDateOnly(row?.payment_date);
+    }
+
     async downloadErpExport() {
         if (!this.erpData || this.erpData.length === 0) {
             Toast.show('No data to export', 'warning');
@@ -7905,7 +7935,7 @@ class App {
                         Toast.show('No valid transactions to export.', 'warning');
                         return;
                     }
-                    this.generateErpExcel(validTransactions);
+                    this.openErpDateChoiceModal(validTransactions);
                 };
             }
 
@@ -7914,20 +7944,120 @@ class App {
                 btnContinue.textContent = `Export All (${rows.length.toLocaleString()})`;
                 btnContinue.onclick = () => {
                     document.getElementById('modal-erp-warning').classList.add('hidden');
-                    this.generateErpExcel(rows);
+                    this.openErpDateChoiceModal(rows);
                 };
             }
 
             document.getElementById('modal-erp-warning').classList.remove('hidden');
             if (window.lucide) lucide.createIcons({ root: document.getElementById('modal-erp-warning') });
         } else {
-            this.generateErpExcel(rows);
+            this.openErpDateChoiceModal(rows);
         }
     }
 
-    generateErpExcel(rows = this.erpData) {
+    openErpDateChoiceModal(rows = this.erpData) {
+        const modal = document.getElementById('modal-erp-date-choice');
+        if (!modal) {
+            this.generateErpExcel(rows, { dateMode: 'settlement' });
+            return;
+        }
+
+        const subtitleEl = document.getElementById('erp-date-choice-subtitle');
+        if (subtitleEl) {
+            subtitleEl.textContent = `${rows.length.toLocaleString()} transaction line${rows.length === 1 ? '' : 's'} ready for Dynamics 365 export`;
+        }
+
+        // Build distinct payment_date -> settlement_date mapping preview
+        const dateCounts = new Map();
+        rows.forEach(r => {
+            const pDate = toDateOnly(r.payment_date) || 'Unknown';
+            dateCounts.set(pDate, (dateCounts.get(pDate) || 0) + 1);
+        });
+
+        const sortedPayDates = [...dateCounts.keys()].sort();
+        const previewEl = document.getElementById('erp-date-choice-preview');
+        if (previewEl) {
+            if (sortedPayDates.length === 0) {
+                previewEl.innerHTML = `<span style="color: var(--text-muted);">No dates in selection</span>`;
+            } else {
+                previewEl.innerHTML = sortedPayDates.map(pDate => {
+                    const count = dateCounts.get(pDate);
+                    const sDate = calculateSettlementDate(pDate) || pDate;
+                    const pDay = this.erpDayShort(pDate);
+                    const sDay = this.erpDayShort(sDate);
+                    const isWeekendBatch = pDay === 'Thu' || pDay === 'Fri' || pDay === 'Sat';
+                    return `
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.22rem 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.12);">
+                            <span style="font-family: monospace; color: var(--text-secondary);">
+                                Paid: <strong>${escapeHTML(pDate)}</strong> ${pDay ? `<span style="color: ${isWeekendBatch ? '#f59e0b' : 'var(--text-muted)'};">(${escapeHTML(pDay)})</span>` : ''}
+                            </span>
+                            <span style="color: var(--text-muted);">&rarr;</span>
+                            <span style="font-family: monospace; color: #38bdf8; font-weight: 600;">
+                                Settles: ${escapeHTML(sDate)} ${sDay ? `(${escapeHTML(sDay)})` : ''}
+                            </span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted); white-space: nowrap;">${count.toLocaleString()} line${count === 1 ? '' : 's'}</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        const customDateInput = document.getElementById('erp-custom-settlement-date');
+        if (customDateInput && !customDateInput.value) {
+            const firstPay = sortedPayDates[0];
+            customDateInput.value = (firstPay && calculateSettlementDate(firstPay)) || toDateOnly(new Date());
+        }
+
+        const updateCardStyles = () => {
+            const selected = modal.querySelector('input[name="erp-export-date-mode"]:checked')?.value || 'settlement';
+            modal.querySelectorAll('.erp-date-mode-option').forEach(label => {
+                const isActive = label.getAttribute('data-mode') === selected;
+                label.style.borderColor = isActive ? 'rgba(56, 189, 248, 0.55)' : 'var(--border-color)';
+                label.style.background = isActive ? 'rgba(56, 189, 248, 0.08)' : 'rgba(255, 255, 255, 0.02)';
+            });
+        };
+
+        modal.querySelectorAll('input[name="erp-export-date-mode"]').forEach(radio => {
+            radio.onchange = updateCardStyles;
+        });
+
+        if (customDateInput) {
+            const selectCustomMode = () => {
+                const customRadio = modal.querySelector('input[name="erp-export-date-mode"][value="custom"]');
+                if (customRadio) {
+                    customRadio.checked = true;
+                    updateCardStyles();
+                }
+            };
+            customDateInput.onfocus = selectCustomMode;
+            customDateInput.onchange = selectCustomMode;
+        }
+
+        updateCardStyles();
+
+        const btnConfirm = document.getElementById('btn-confirm-erp-date-export');
+        if (btnConfirm) {
+            btnConfirm.onclick = () => {
+                const dateMode = modal.querySelector('input[name="erp-export-date-mode"]:checked')?.value || 'settlement';
+                const customDate = customDateInput?.value?.trim() || '';
+                if (dateMode === 'custom' && !customDate) {
+                    Toast.show('Please pick a custom bank transfer date', 'warning');
+                    customDateInput?.focus();
+                    return;
+                }
+                modal.classList.add('hidden');
+                this.generateErpExcel(rows, { dateMode, customDate });
+            };
+        }
+
+        modal.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons({ root: modal });
+    }
+
+    generateErpExcel(rows = this.erpData, { dateMode = 'settlement', customDate = null } = {}) {
+        const effectiveDates = rows.map(row => this.resolveErpExportDate(row, dateMode, customDate));
         const exportData = rows.map((row, index) => ({
-            'Date': toDateOnly(row.payment_date),
+            'Date': effectiveDates[index],
             'Voucher': '',
             'Company': 'NU',
             'Account': this.erpAccount(row),
@@ -7945,8 +8075,8 @@ class App {
         }));
 
         const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
-        rows.forEach((row, idx) => {
-            const serial = dateToExcelSerial(row.payment_date);
+        effectiveDates.forEach((effDate, idx) => {
+            const serial = dateToExcelSerial(effDate);
             if (serial !== null) {
                 const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 0 });
                 ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
@@ -7975,7 +8105,8 @@ class App {
         const dateStr = toDateOnly(new Date());
         XLSX.writeFile(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
         const total = exportData.reduce((sum, r) => sum + r.Credit, 0);
-        Toast.show(`ERP file exported: ${exportData.length} lines, total EGP ${formatMoney(total)}`, 'success');
+        const modeLabel = dateMode === 'payment' ? 'Payment Date' : dateMode === 'custom' ? `Custom Date ${toDateOnly(customDate)}` : 'Settlement Date';
+        Toast.show(`ERP file exported (${modeLabel}): ${exportData.length} lines, total EGP ${formatMoney(total)}`, 'success');
     }
 
     async recordErpReferences() {
