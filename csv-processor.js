@@ -366,18 +366,30 @@ export class FawryProcessor {
 
                     this.log(`Found ${uniqueLinks.length} unique links. Saving to database...`);
 
-                    // Upsert links
+                    // Upsert links in parallel batches
                     const chunkSize = 500;
+                    const concurrency = 4;
                     let insertedCount = 0;
                     let lastError = null;
+                    const linkChunks = [];
                     for (let i = 0; i < uniqueLinks.length; i += chunkSize) {
-                        const chunk = uniqueLinks.slice(i, i + chunkSize);
-                        const { error } = await supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false });
-                        if (error) {
-                            lastError = error.message;
-                            this.log(`Error saving links: ${error.message}`);
-                        } else {
-                            insertedCount += chunk.length;
+                        linkChunks.push(uniqueLinks.slice(i, i + chunkSize));
+                    }
+                    for (let i = 0; i < linkChunks.length; i += concurrency) {
+                        const batch = linkChunks.slice(i, i + concurrency);
+                        const results = await Promise.all(
+                            batch.map(chunk =>
+                                supabase.from('links').upsert(chunk, { onConflict: 'payment_reference_number', ignoreDuplicates: false })
+                                    .then(({ error }) => ({ error, len: chunk.length }))
+                            )
+                        );
+                        for (const { error, len } of results) {
+                            if (error) {
+                                lastError = error.message;
+                                this.log(`Error saving links: ${error.message}`);
+                            } else {
+                                insertedCount += len;
+                            }
                         }
                     }
 
@@ -402,7 +414,12 @@ export class FawryProcessor {
 
                     let enrichError = null;
                     try {
-                        const existingTx = await fetchByIn('transactions', '*', 'reference_number', Array.from(linkLookup.keys()));
+                        const existingTx = await fetchByIn(
+                            'transactions',
+                            'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number',
+                            'reference_number',
+                            Array.from(linkLookup.keys())
+                        );
                         const updates = [];
                         let lockedSkipped = 0;
                         for (const tx of existingTx) {
@@ -410,7 +427,7 @@ export class FawryProcessor {
                             const diff = diffTransaction(tx, { link: linkLookup.get(ref), fix: fixesMap.get(ref), lookupMapping });
                             if (!diff.changed) continue;
                             if (diff.locked) { lockedSkipped++; continue; }
-                            updates.push({ id: tx.id, fields: diff.fields });
+                            updates.push({ id: tx.id, fields: diff.fields, diff });
                         }
                         const updated = await updateRuleFields(updates);
                         this.log(`Updated ${updated} existing transactions.`);

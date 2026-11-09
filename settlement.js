@@ -394,24 +394,35 @@ class SettlementProcessor {
         const txMap = new Map(); // deduplicate by id
         const detectedBanks = new Set();
 
-        // 1. Fetch all references in the settlement explicitly to guarantee we don't miss them, and to DETECT the bank
-        const chunkSize = 150;
+        // 1. Fetch all references in the settlement in parallel batches to guarantee we don't miss them, and to DETECT the bank
+        const chunkSize = 250;
+        const concurrency = 6;
+        const refChunks = [];
         for (let i = 0; i < settlementRefs.length; i += chunkSize) {
-            const chunk = settlementRefs.slice(i, i + chunkSize);
-            let refTx;
-            try {
-                refTx = await this.fetchAllPages(() => this.supabase
-                    .from('transactions')
-                    .select('*')
-                    .in('reference_number', chunk));
-            } catch (refErr) {
-                this.setStatus('Error fetching DB transactions by reference: ' + settlementEsc(refErr.message), true);
-                return;
+            refChunks.push(settlementRefs.slice(i, i + chunkSize));
+        }
+
+        try {
+            for (let i = 0; i < refChunks.length; i += concurrency) {
+                const slice = refChunks.slice(i, i + concurrency);
+                const batchResults = await Promise.all(
+                    slice.map(chunk =>
+                        this.fetchAllPages(() => this.supabase
+                            .from('transactions')
+                            .select('id, reference_number, payment_date, item_price, student_id, bank, is_settled, settlement_batch')
+                            .in('reference_number', chunk))
+                    )
+                );
+                for (const refTx of batchResults) {
+                    refTx.forEach(tx => {
+                        txMap.set(tx.id, tx);
+                        if (tx.bank) detectedBanks.add(tx.bank);
+                    });
+                }
             }
-            refTx.forEach(tx => {
-                txMap.set(tx.id, tx);
-                if (tx.bank) detectedBanks.add(tx.bank);
-            });
+        } catch (refErr) {
+            this.setStatus('Error fetching DB transactions by reference: ' + settlementEsc(refErr.message), true);
+            return;
         }
 
         const bankArray = detectedBanks.size > 0 ? Array.from(detectedBanks) : ['NUADCB136', 'NUADIB64'];
@@ -422,7 +433,7 @@ class SettlementProcessor {
             try {
                 dateTx = await this.fetchAllPages(() => this.supabase
                     .from('transactions')
-                    .select('*')
+                    .select('id, reference_number, payment_date, item_price, student_id, bank, is_settled, settlement_batch')
                     .in('bank', bankArray)
                     .gte('payment_date', minTrxDateStr)
                     .lte('payment_date', maxTrxDateStr));
@@ -1223,15 +1234,39 @@ class SettlementProcessor {
 
     // Runs a query repeatedly with .range() until every row is fetched (Supabase returns max 1,000 per request)
     async fetchAllPages(buildQuery, pageSize = 1000) {
-        let all = [];
-        let from = 0;
-        while (true) {
+        const fetchPage = async (from) => {
             const { data, error } = await buildQuery().order('id').range(from, from + pageSize - 1);
             if (error) throw error;
-            if (!data || data.length === 0) break;
-            all = all.concat(data);
-            if (data.length < pageSize) break;
-            from += pageSize;
+            return data || [];
+        };
+
+        const firstPage = await fetchPage(0);
+        if (firstPage.length < pageSize) return firstPage;
+
+        const all = firstPage.slice();
+        let from = pageSize;
+        const BATCH_PAGES = 5;
+
+        while (true) {
+            const batchPromises = [];
+            for (let p = 0; p < BATCH_PAGES; p++) {
+                batchPromises.push(fetchPage(from + p * pageSize));
+            }
+            const pages = await Promise.all(batchPromises);
+            let done = false;
+            for (const page of pages) {
+                if (page.length === 0) {
+                    done = true;
+                    break;
+                }
+                for (let i = 0; i < page.length; i++) all.push(page[i]);
+                if (page.length < pageSize) {
+                    done = true;
+                    break;
+                }
+            }
+            if (done) break;
+            from += BATCH_PAGES * pageSize;
         }
         return all;
     }

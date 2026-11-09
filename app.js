@@ -378,11 +378,7 @@ class App {
         this.fetchUniqueFilters();
         this.loadTransactions();
         this.updateSidebarBadges();
-        if (this.hasRole('operator')) {
-            this.stripDatabaseTransactionTimes();
-        }
         if (this.hasRole('admin')) {
-            this.deduplicateItemMappings({ silent: true });
             this.checkAndShowHygieneReportModal();
         }
         // ERP Export data is loaded when that tab is opened (see initNavigation)
@@ -392,10 +388,11 @@ class App {
     /**
      * Checks if any database transactions have a time component in payment_date
      * and strips it in-place to pure YYYY-MM-DD without shifting the calendar date.
+     * Since payment_date is a DATE column in PostgreSQL, this is a no-op unless force=true.
      */
-    async stripDatabaseTransactionTimes() {
+    async stripDatabaseTransactionTimes({ force = false } = {}) {
+        if (!force) return 0;
         try {
-            // Only needed if payment_date is stored as text/timestamp with > 10 chars
             const rows = await fetchAll('transactions', 'id, payment_date', null, 'id');
             const byDate = new Map();
             for (const r of rows) {
@@ -442,6 +439,7 @@ class App {
      */
     async deduplicateItemMappings({ silent = true } = {}) {
         try {
+            this._mappingsDedupedOnce = true;
             const rawMappings = await fetchAll('item_mappings', '*', null, 'item_name');
             if (!rawMappings || rawMappings.length === 0) {
                 if (!silent) Toast.show('No item mappings found in database.', 'info');
@@ -1312,30 +1310,24 @@ class App {
             
             // Fallback (RPC missing / failed, or a specific transaction subset filter is active)
             if (!rpcSucceeded) {
-                let fetchMore = true;
-                let from = 0;
-                while (fetchMore) {
-                    let q = supabase.from('transactions')
-                        .select('payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number')
-                        .gte('payment_date', dateFrom)
-                        .lte('payment_date', dateTo)
-                        .in('bank', selectedBanks);
+                allData = await fetchAll(
+                    'transactions',
+                    'payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number',
+                    q => {
+                        q = q.gte('payment_date', dateFrom)
+                            .lte('payment_date', dateTo)
+                            .in('bank', selectedBanks);
 
-                    if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
-                    else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
-                    else if (statusFilter === 'settled') q = q.eq('is_settled', true);
-                    else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
-                    else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
-                    else if (statusFilter === 'erp_unposted') q = q.or('erp_batch_number.is.null,erp_batch_number.eq.');
-
-                    const { data, error } = await q.order('id').range(from, from + 999);
-                    
-                    if (error) throw error;
-                    if (!data || data.length === 0) break;
-                    allData = allData.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
+                        if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
+                        else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
+                        else if (statusFilter === 'settled') q = q.eq('is_settled', true);
+                        else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
+                        else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
+                        else if (statusFilter === 'erp_unposted') q = q.or('erp_batch_number.is.null,erp_batch_number.eq.');
+                        return q;
+                    },
+                    'id'
+                );
             }
 
             const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1852,17 +1844,21 @@ class App {
         const normTargets = [...new Set(rawTargets.map(n => normalizeItemName(n)).filter(Boolean))];
         const searchNames = [...new Set([...rawTargets, ...normTargets])];
 
-        const byItemName = await fetchByIn('transactions', '*', 'item_name', searchNames, 'id', 50);
+        const ruleCols = 'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+        const byItemNamePromise = fetchByIn('transactions', ruleCols, 'item_name', searchNames, 'id', 100);
 
         // Also fetch by check_column suffix for single/small batches so previously renamed items are never missed
-        let byCheckCol = [];
+        // Exclude rows where item_name === name since byItemNamePromise already fetches them
+        let byCheckColPromise = Promise.resolve([]);
         if (normTargets.length <= 15) {
             const checkTasks = normTargets.map(name => async () => {
                 const safe = name.replace(/[%_]/g, '\\$&');
-                return await fetchAll('transactions', '*', q => q.ilike('check_column', `%-${safe}`), 'id');
+                return await fetchAll('transactions', ruleCols, q => q.ilike('check_column', `%-${safe}`).neq('item_name', name), 'id');
             });
-            byCheckCol = (await runConcurrent(checkTasks, 4)).flat();
+            byCheckColPromise = runConcurrent(checkTasks, 4).then(res => res.flat());
         }
+
+        const [byItemName, byCheckCol] = await Promise.all([byItemNamePromise, byCheckColPromise]);
 
         const dedup = new Map();
         for (const r of [...byItemName, ...byCheckCol]) {
@@ -3051,20 +3047,20 @@ class App {
             btn.disabled = true;
 
             try {
-                await this.stripDatabaseTransactionTimes();
-                await this.deduplicateItemMappings({ silent: true });
-                const [mappings, fixes, links] = await Promise.all([
+                if (this.hasRole('admin') && !this._mappingsDedupedOnce) {
+                    await this.deduplicateItemMappings({ silent: true });
+                }
+                const ruleCols = 'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+                const [mappings, fixes, links, txs] = await Promise.all([
                     fetchAll('item_mappings', '*', null, 'item_name'),
                     fetchAll('manual_fixes', '*', null, 'reference_number'),
-                    fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number')
+                    fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number'),
+                    fetchAll('transactions', ruleCols, null, 'id')
                 ]);
 
                 const fixesMap = new Map(fixes.map(f => [String(f.reference_number), f]));
                 const linksMap = new Map(links.map(l => [String(l.payment_reference_number), l]));
                 const lookupMapping = buildMappingLookup(mappings);
-
-                // Fetch every transaction (sequential pages – a failed page stops the run instead of being skipped)
-                const txs = await fetchAll('transactions', '*', null, 'id');
 
                 // Same pure function as import / fix save / mapping save: starts from the ORIGINAL
                 // imported ID and item name, so removed links, fixes and rules are undone too.
@@ -3111,14 +3107,13 @@ class App {
                 }
 
                 modal.classList.remove('hidden');
-                if (window.lucide) lucide.createIcons();
 
             } catch (err) {
                 Toast.show('Error computing rules: ' + err.message, 'error');
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
-                if (window.lucide) lucide.createIcons();
+                if (window.lucide) lucide.createIcons({ root: btn });
             }
         });
 
@@ -3154,7 +3149,7 @@ class App {
             btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Applying...';
             btn.disabled = true;
             try {
-                const updatedCount = await updateRuleFields(selected.map(p => ({ id: p.tx.id, fields: p.diff.fields })));
+                const updatedCount = await updateRuleFields(selected.map(p => ({ id: p.tx.id, fields: p.diff.fields, diff: p.diff })));
                 this.invalidateDistinctCache();
 
                 await this.logAudit('Rules Re-applied', `Batch of ${updatedCount} transactions`, {
@@ -3665,32 +3660,49 @@ class App {
         document.getElementById('btn-export').addEventListener('click', async () => {
             const btn = document.getElementById('btn-export');
             const originalText = btn.innerHTML;
-            btn.innerHTML = '<i data-lucide="loader"></i> Exporting...';
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Exporting...';
             btn.disabled = true;
 
             try {
-                let allData = [];
-                let from = 0;
+                const exportCols = 'reference_number, payment_date, student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
                 const pageSize = 1000;
-                let fetchMore = true;
-
-                // Fetch all data in pages using the exact active filter logic
-                while (fetchMore) {
-                    let query = this.applyTransactionFiltersToQuery(supabase.from('transactions').select('*'));
-
+                const fetchExportPage = async (from) => {
+                    const query = this.applyTransactionFiltersToQuery(supabase.from('transactions').select(exportCols));
                     const { data, error } = await query
                         .order('payment_date', { ascending: true })
                         .order('id', { ascending: true })
                         .range(from, from + pageSize - 1);
-
                     if (error) throw error;
-                    
-                    allData = allData.concat(data);
-                    
-                    if (data.length < pageSize) {
-                        fetchMore = false;
-                    } else {
-                        from += pageSize;
+                    return data || [];
+                };
+
+                const firstPage = await fetchExportPage(0);
+                const allData = firstPage.slice();
+
+                if (firstPage.length === pageSize) {
+                    let from = pageSize;
+                    const BATCH_PAGES = 5;
+                    while (true) {
+                        const batchPromises = [];
+                        for (let p = 0; p < BATCH_PAGES; p++) {
+                            batchPromises.push(fetchExportPage(from + p * pageSize));
+                        }
+                        const pages = await Promise.all(batchPromises);
+                        let done = false;
+                        for (const page of pages) {
+                            if (page.length === 0) {
+                                done = true;
+                                break;
+                            }
+                            for (let i = 0; i < page.length; i++) allData.push(page[i]);
+                            if (page.length < pageSize) {
+                                done = true;
+                                break;
+                            }
+                        }
+                        btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Exporting (${allData.length.toLocaleString()})...`;
+                        if (done) break;
+                        from += BATCH_PAGES * pageSize;
                     }
                 }
 
@@ -3698,6 +3710,9 @@ class App {
                     Toast.show('No data to export.', 'warning');
                     return;
                 }
+
+                btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Building Excel (${allData.length.toLocaleString()})...`;
+                await new Promise(r => setTimeout(r, 0));
 
                 // Format exactly like the original Power Query Excel (strictly date-only, no time component)
                 const formattedData = allData.map(t => {
@@ -3745,22 +3760,15 @@ class App {
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
-                if (window.lucide) lucide.createIcons();
+                if (window.lucide) lucide.createIcons({ root: btn });
             }
         });
 
         document.getElementById('btn-export-mappings').addEventListener('click', async () => {
             try {
-                let allData = [];
-                let from = 0;
-                let fetchMore = true;
-                while (fetchMore) {
-                    const { data, error } = await supabase.from('item_mappings').select('*').order('item_name').range(from, from + 999);
-                    if (error) throw error;
-                    allData = allData.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
+                const allData = (this.allMappingsData && this.allMappingsData.length > 0)
+                    ? this.allMappingsData
+                    : await fetchAll('item_mappings', '*', null, 'item_name');
 
                 if (allData.length === 0) return Toast.show('No mappings to export.', 'warning');
 
@@ -3782,16 +3790,9 @@ class App {
 
         document.getElementById('btn-export-fixes').addEventListener('click', async () => {
             try {
-                let allData = [];
-                let from = 0;
-                let fetchMore = true;
-                while (fetchMore) {
-                    const { data, error } = await supabase.from('manual_fixes').select('*').order('reference_number').range(from, from + 999);
-                    if (error) throw error;
-                    allData = allData.concat(data);
-                    if (data.length < 1000) fetchMore = false;
-                    else from += 1000;
-                }
+                const allData = (this.allFixesData && this.allFixesData.length > 0)
+                    ? this.allFixesData
+                    : await fetchAll('manual_fixes', '*', null, 'reference_number');
 
                 if (allData.length === 0) return Toast.show('No fixes to export.', 'warning');
 
@@ -4136,7 +4137,7 @@ class App {
             tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(5) + '</tr>').join('');
         }
         try {
-            if (this.hasRole('admin')) {
+            if (this.hasRole('admin') && !this._mappingsDedupedOnce) {
                 await this.deduplicateItemMappings({ silent: true });
             }
             const allData = await fetchAll('item_mappings', '*', null, 'item_name');
@@ -4408,6 +4409,7 @@ class App {
 
     async deduplicateManualFixes({ silent = true } = {}) {
         try {
+            this._fixesDedupedOnce = true;
             const allRows = await fetchAll('manual_fixes', '*', null, 'reference_number');
             if (!allRows || allRows.length === 0) {
                 if (!silent) Toast.show('No manual fixes found to check.', 'info');
@@ -4507,7 +4509,7 @@ class App {
             tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
         }
         try {
-            if (this.hasRole('admin')) {
+            if (this.hasRole('admin') && !this._fixesDedupedOnce) {
                 await this.deduplicateManualFixes({ silent: true });
             }
             const allData = await fetchAll('manual_fixes', '*', null, 'reference_number');
@@ -5659,13 +5661,18 @@ class App {
             status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${mergedRecords.length} records to database...`;
             
             let insertedCount = 0;
+            const upsertTasks = [];
             for (let i = 0; i < mergedRecords.length; i += 1000) {
                 const batch = mergedRecords.slice(i, i + 1000);
-                const { error } = await supabase.from('student_master').upsert(batch);
-                if (error) throw error;
-                insertedCount += batch.length;
-                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.round((i / mergedRecords.length) * 100)}%`;
+                upsertTasks.push(async () => {
+                    const { error } = await supabase.from('student_master').upsert(batch);
+                    if (error) throw error;
+                    insertedCount += batch.length;
+                    status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.min(100, Math.round((insertedCount / mergedRecords.length) * 100))}%`;
+                    return batch.length;
+                });
             }
+            await runConcurrent(upsertTasks, 4);
 
             // Clean up any old 0-padded duplicate rows in student_master that have now been merged into their normalized IDs
             if (legacyIdsToDelete.length > 0) {
@@ -5760,7 +5767,8 @@ class App {
                 console.warn("Large targeted filter, fetching all and filtering locally.");
             }
 
-            let invalidTx = await fetchAll('transactions', '*', queryFn);
+            const matcherCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, item_name, item_price, mapping, second_mapping, bank, id_status, is_settled, erp_batch_number';
+            let invalidTx = await fetchAll('transactions', matcherCols, queryFn);
             
             // If the targeted match list was very large and bypassed the .in(), filter locally
             if (this.targetedMatchRefs && this.targetedMatchRefs.length > 500) {
@@ -5790,120 +5798,28 @@ class App {
 
             let filteredTx = invalidTx;
 
-            // Fetch Master List safely without bulk PII download
-            const requiredMobiles = new Set();
-            const requiredIds = new Set();
-            const requiredEmails = new Set();
-
-            for (const tx of filteredTx) {
-                if (tx.customer_mobile) {
-                    const cleanMob = String(tx.customer_mobile).replace(/[^0-9]/g, '');
-                    if (cleanMob.length >= 10) requiredMobiles.add(cleanMob.slice(-10));
-                }
-                if (tx.student_id) {
-                    const tId = String(tx.student_id).trim();
-                    requiredIds.add(tId);
-                    const normTid = this.normalizeStudentId(tId);
-                    if (normTid) requiredIds.add(normTid);
-                    if (tId.includes('@')) {
-                        requiredEmails.add(tId.toLowerCase());
-                    } else {
-                        const digitsOnly = tId.replace(/[^0-9]/g, '');
-                        if (digitsOnly.length >= 4) {
-                            requiredIds.add(digitsOnly);
-                            const normDigits = this.normalizeStudentId(digitsOnly);
-                            if (normDigits) requiredIds.add(normDigits);
-                        }
-                        if (digitsOnly.length >= 10) {
-                            requiredMobiles.add(digitsOnly.slice(-10));
-                        }
-                    }
-                }
-            }
-            
-            // Get links first to extract their PII (parallelized chunks)
-            const invalidRefs = filteredTx.map(t => String(t.reference_number));
-            const refChunks = [];
-            for (let i = 0; i < invalidRefs.length; i += 500) {
-                refChunks.push(invalidRefs.slice(i, i + 500));
-            }
-            const linkChunkResults = await runConcurrent(refChunks.map(refChunk => async () => {
-                const { data, error } = await supabase.from('links').select('*').in('payment_reference_number', refChunk);
-                if (error) throw error;
-                return data || [];
-            }), 4);
-            let links = linkChunkResults.flat();
-            
-            for (const l of links) {
-                if (l.customer_national_id) requiredIds.add(String(l.customer_national_id).trim());
-                if (l.custom_input_value) {
-                    const rawVal = String(l.custom_input_value).trim();
-                    requiredIds.add(rawVal);
-                    const normVal = this.normalizeStudentId(rawVal);
-                    if (normVal) requiredIds.add(normVal);
-                }
-                if (l.customer_mobile) requiredMobiles.add(String(l.customer_mobile).replace(/[^0-9]/g, '').slice(-10));
-                if (l.customer_email) requiredEmails.add(String(l.customer_email).toLowerCase().trim());
-            }
-
             const enableNameMatch = document.getElementById('automatch-enable-name')?.checked;
-            let nameStudents = [];
-            let fetchMoreStudents = enableNameMatch;
-            let sFrom = 0;
-            while(fetchMoreStudents) {
-                const { data, error } = await supabase.from('student_master').select('student_id, full_name').order('student_id').range(sFrom, sFrom + 999);
-                if (error) throw error;
-                nameStudents = nameStudents.concat(data || []);
-                if (!data || data.length < 1000) fetchMoreStudents = false;
-                else sFrom += 1000;
-            }
+            const invalidRefs = filteredTx.map(t => String(t.reference_number));
 
-            const studentTasks = [];
-            const idArr = Array.from(requiredIds);
-            for (let i = 0; i < idArr.length; i += 200) {
-                const chunk = idArr.slice(i, i + 200);
-                studentTasks.push(async () => {
-                    const { data: d1, error: e1 } = await supabase.from('student_master').select('*').in('student_id', chunk);
-                    if (e1) throw e1;
-                    return d1 || [];
-                });
-                studentTasks.push(async () => {
-                    const { data: d2, error: e2 } = await supabase.from('student_master').select('*').in('national_id', chunk);
-                    if (e2) throw e2;
-                    return d2 || [];
-                });
-            }
-            
-            const emailArr = Array.from(requiredEmails);
-            for (let i = 0; i < emailArr.length; i += 200) {
-                const chunk = emailArr.slice(i, i + 200);
-                studentTasks.push(async () => {
-                    const { data, error } = await supabase.from('student_master').select('*').in('email', chunk);
-                    if (error) throw error;
-                    return data || [];
-                });
-            }
+            // Fetch links for invalid references and ensure student_master directory is cached in memory concurrently
+            const [links, loadedStudents] = await Promise.all([
+                fetchByIn(
+                    'links',
+                    'payment_reference_number, custom_input_value, customer_national_id, customer_mobile, customer_email, customer_name',
+                    'payment_reference_number',
+                    invalidRefs,
+                    'payment_reference_number',
+                    350
+                ),
+                (this.allStudentsData && this.allStudentsData.length > 0)
+                    ? Promise.resolve(this.allStudentsData)
+                    : fetchAll('student_master', '*', null, 'student_id').then(rows => {
+                        this.allStudentsData = (rows || []).map(s => this.indexStudentRecord(s));
+                        return this.allStudentsData;
+                    })
+            ]);
 
-            const mobileArr = Array.from(requiredMobiles);
-            for (let i = 0; i < mobileArr.length; i += 20) {
-                const chunk = mobileArr.slice(i, i + 20);
-                const orFilters = chunk.filter(m => m.length >= 7).map(m => `mobile.ilike.%${m}%,guardian_mobile.ilike.%${m}%`).join(',');
-                if (orFilters) {
-                    studentTasks.push(async () => {
-                        const { data, error } = await supabase.from('student_master').select('*').or(orFilters);
-                        if (error) throw error;
-                        return data || [];
-                    });
-                }
-            }
-
-            let students = (await runConcurrent(studentTasks, 4)).flat();
-
-            // Deduplicate students
-            const uniqueStudents = new Map();
-            for (const s of nameStudents) uniqueStudents.set(s.student_id, s);
-            for (const s of students) uniqueStudents.set(s.student_id, s);
-            students = Array.from(uniqueStudents.values());
+            const students = loadedStudents || [];
 
             // Build lookups
             const linksMap = {};
@@ -5939,9 +5855,10 @@ class App {
                 }
             });
 
-            // Initialize AI Fuzzy Matcher for Names
-            let nameFuse;
-            if (typeof Fuse !== 'undefined') {
+            // Initialize AI Fuzzy Matcher for Names only when Name Matching is enabled
+            let nameFuse = null;
+            const fuzzyCache = new Map();
+            if (enableNameMatch && typeof Fuse !== 'undefined') {
                 nameFuse = new Fuse(students, {
                     keys: ['full_name'],
                     includeScore: true,
@@ -5952,11 +5869,14 @@ class App {
             this.automatchProposals = [];
 
             let loopCount = 0;
+            let lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
             for (const tx of filteredTx) {
                 loopCount++;
-                if (loopCount % 25 === 0) {
+                const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                if (now - lastYield > 24) {
                     btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
-                    await new Promise(r => setTimeout(r, 0)); // Yield to browser to prevent freezing
+                    await new Promise(r => setTimeout(r, 0)); // Yield to browser only when frame budget exceeded
+                    lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
                 }
 
                 const link = linksMap[tx.reference_number];
@@ -6071,18 +5991,21 @@ class App {
                         }
                     }
 
-                    // --- FUZZY MATCH LOGIC ---
+                    // --- FUZZY MATCH LOGIC (with memoization cache) ---
                     if (!proposedStudent && searchStr && nameFuse) {
-                        const results = nameFuse.search(searchStr);
-                        if (results.length > 0) {
-                            const bestMatch = results[0];
-                            // 0.0 is a perfect match; anything scoring below 0.20 is accepted
-                            if (bestMatch.score < 0.20) {
-                                proposedStudent = bestMatch.item;
-                                const confidence = Math.round((1 - bestMatch.score) * 100);
-                                matchReason = `Fuzzy Name Match (Confidence: ${confidence}%): "${proposedStudent.full_name}"`;
-                                confidenceTier = 'name';
-                            }
+                        const cacheKey = searchStr.toLowerCase();
+                        let bestMatch = fuzzyCache.get(cacheKey);
+                        if (bestMatch === undefined) {
+                            const results = nameFuse.search(searchStr);
+                            bestMatch = results.length > 0 ? results[0] : null;
+                            fuzzyCache.set(cacheKey, bestMatch);
+                        }
+                        // 0.0 is a perfect match; anything scoring below 0.20 is accepted
+                        if (bestMatch && bestMatch.score < 0.20) {
+                            proposedStudent = bestMatch.item;
+                            const confidence = Math.round((1 - bestMatch.score) * 100);
+                            matchReason = `Fuzzy Name Match (Confidence: ${confidence}%): "${proposedStudent.full_name}"`;
+                            confidenceTier = 'name';
                         }
                     }
                 }
@@ -6476,27 +6399,31 @@ class App {
                 appliedRefs.push(proposal.original_ref);
             }
 
-            // Execute batched updates
+            // Execute batched updates concurrently across student groups
+            const txUpdateTasks = [];
             for (const [sid, txIds] of Object.entries(updateGroups)) {
-                // Batch up to 500 ids per request to avoid huge URLs
-                for (let i = 0; i < txIds.length; i += 500) {
-                    const chunk = txIds.slice(i, i + 500);
-                    const { error } = await supabase
-                        .from('transactions')
-                        .update({ 
-                            student_id: sid,
-                            id_status: validateID(sid)
-                        })
-                        .in('id', chunk);
-                    if (error) throw error;
+                const statusVal = validateID(sid);
+                for (let i = 0; i < txIds.length; i += 300) {
+                    const chunk = txIds.slice(i, i + 300);
+                    txUpdateTasks.push(async () => {
+                        const { error } = await supabase
+                            .from('transactions')
+                            .update({
+                                student_id: sid,
+                                id_status: statusVal
+                            })
+                            .in('id', chunk);
+                        if (error) throw error;
+                    });
                 }
             }
+            await runConcurrent(txUpdateTasks, 6);
 
             // Insert into manual_fixes (preserve existing item_name, mapping, second_mapping if any)
             if (manualFixesToInsert.length > 0) {
                 // De-duplicate by reference (a reference can have several items) – an upsert cannot touch the same row twice
                 const uniqueFixesMap = new Map(manualFixesToInsert.map(f => [String(f.reference_number), f]));
-                const existingFixes = await fetchByIn('manual_fixes', 'reference_number', Array.from(uniqueFixesMap.keys()));
+                const existingFixes = await fetchByIn('manual_fixes', '*', 'reference_number', Array.from(uniqueFixesMap.keys()), 'reference_number');
                 const existingFixMap = new Map((existingFixes || []).map(ef => [String(ef.reference_number), ef]));
 
                 const uniqueFixes = Array.from(uniqueFixesMap.values()).map(f => {
@@ -6510,10 +6437,15 @@ class App {
                     } : f;
                 });
 
+                const fixTasks = [];
                 for (let i = 0; i < uniqueFixes.length; i += 500) {
-                    const { error } = await supabase.from('manual_fixes').upsert(uniqueFixes.slice(i, i + 500), { onConflict: 'reference_number', ignoreDuplicates: false });
-                    if (error) throw new Error('IDs were updated, but saving them as manual fixes failed: ' + error.message);
+                    const chunk = uniqueFixes.slice(i, i + 500);
+                    fixTasks.push(async () => {
+                        const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
+                        if (error) throw new Error('IDs were updated, but saving them as manual fixes failed: ' + error.message);
+                    });
                 }
+                await runConcurrent(fixTasks, 4);
             }
 
             // Audit Log
@@ -6535,8 +6467,12 @@ class App {
             }
 
             this.runAutoMatcher();
-            this.loadDashboard();
-            this.loadTransactions();
+            if (document.getElementById('view-dashboard')?.classList.contains('active')) {
+                this.loadDashboard();
+            }
+            if (document.getElementById('view-transactions')?.classList.contains('active')) {
+                this.loadTransactions();
+            }
             this.updateSidebarBadges();
         } catch (err) {
             Toast.show('Error applying fixes: ' + err.message, 'error');
@@ -7429,12 +7365,26 @@ class App {
         if (refresh || !this.erpBaseData || this.erpBaseKey !== baseKey) {
             let baseData = [];
             try {
-                baseData = await fetchAll('transactions', '*', q => {
+                const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, check_column, item_price, mapping, second_mapping, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher, erp_recorded_at';
+                baseData = await fetchAll('transactions', erpCols, q => {
                     if (dateFrom) q = q.gte('payment_date', dateFrom);
                     if (dateTo) q = q.lte('payment_date', dateTo);
                     if (bank) q = q.eq('bank', bank);
                     return q;
                 }, 'id');
+                for (let i = 0; i < baseData.length; i++) {
+                    const t = baseData[i];
+                    t._erpSearchHaystack = [
+                        t.reference_number,
+                        t.student_id,
+                        this.erpAccount(t),
+                        t.item_name,
+                        t.mapping,
+                        t.second_mapping,
+                        t.erp_batch_number,
+                        t.erp_voucher
+                    ].filter(Boolean).join('\n').toLowerCase();
+                }
             } catch (err) {
                 if (requestId !== this.erpRequestId) return;
                 // Never keep partial data – exporting it would silently miss transactions
@@ -7487,16 +7437,17 @@ class App {
             if (statusFilter === 'settled' && !t.is_settled) return false;
 
             if (q) {
-                const ref = String(t.reference_number || '').toLowerCase();
-                const sid = String(t.student_id || '').toLowerCase();
-                const acct = String(this.erpAccount(t) || '').toLowerCase();
-                const item = String(t.item_name || '').toLowerCase();
-                const map = String(t.mapping || '').toLowerCase();
-                const map2 = String(t.second_mapping || '').toLowerCase();
-                const batch = String(t.erp_batch_number || '').toLowerCase();
-                const vch = String(t.erp_voucher || '').toLowerCase();
-                const match = ref.includes(q) || sid.includes(q) || acct.includes(q) || item.includes(q) || map.includes(q) || map2.includes(q) || batch.includes(q) || vch.includes(q);
-                if (!match) return false;
+                const hay = t._erpSearchHaystack ?? [
+                    t.reference_number,
+                    t.student_id,
+                    this.erpAccount(t),
+                    t.item_name,
+                    t.mapping,
+                    t.second_mapping,
+                    t.erp_batch_number,
+                    t.erp_voucher
+                ].filter(Boolean).join('\n').toLowerCase();
+                if (!hay.includes(q)) return false;
             }
             return true;
         });
@@ -8011,16 +7962,37 @@ class App {
         if (window.lucide) lucide.createIcons();
     }
 
+    indexStudentRecord(s) {
+        if (!s || typeof s !== 'object') return s;
+        const sid = String(s.student_id || '').toLowerCase();
+        s._normSid = this.normalizeStudentId(sid).toLowerCase();
+        s._sourceLower = String(s.source || '').toLowerCase();
+        s._searchHaystack = [
+            sid,
+            s._normSid,
+            s.full_name,
+            s.arabic_name,
+            s.email,
+            s.mobile,
+            s.guardian_mobile,
+            s.guardian_name,
+            s.national_id,
+            s.college,
+            s.program
+        ].filter(Boolean).join('\n').toLowerCase();
+        return s;
+    }
+
     async loadStudents({ forceReload = false, skipAutoProfile = false } = {}) {
         const tbody = document.getElementById('students-table-body');
         try {
             if (!this.allStudentsData || forceReload) {
                 if (tbody) {
                     tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="loader" class="spin" style="width:36px;height:36px;opacity:0.6;"></i><h3>Loading student directory...</h3></div></td></tr>';
-                    if (window.lucide) lucide.createIcons();
+                    if (window.lucide) lucide.createIcons({ root: tbody });
                 }
                 const data = await fetchAll('student_master', '*', null, 'student_id');
-                this.allStudentsData = data || [];
+                this.allStudentsData = (data || []).map(s => this.indexStudentRecord(s));
                 this.updateStudentsStatsAndDropdowns();
             }
 
@@ -8029,6 +8001,7 @@ class App {
             const normTerm = termRaw ? this.normalizeStudentId(termRaw).toLowerCase() : '';
             const collegeFilter = document.getElementById('student-filter-college')?.value || '';
             const sourceFilter = document.getElementById('student-filter-source')?.value || '';
+            const sourceFilterLower = sourceFilter.toLowerCase();
 
             const clearBtn = document.getElementById('btn-clear-student-filters');
             if (clearBtn) {
@@ -8038,32 +8011,10 @@ class App {
 
             this.filteredStudentsData = (this.allStudentsData || []).filter(s => {
                 if (collegeFilter && (s.college || '') !== collegeFilter) return false;
-                if (sourceFilter && !(s.source || '').toLowerCase().includes(sourceFilter.toLowerCase())) return false;
+                if (sourceFilterLower && !(s._sourceLower ?? String(s.source || '').toLowerCase()).includes(sourceFilterLower)) return false;
                 if (term) {
-                    const sid = String(s.student_id || '').toLowerCase();
-                    const normSid = this.normalizeStudentId(sid).toLowerCase();
-                    const fullName = String(s.full_name || '').toLowerCase();
-                    const arabicName = String(s.arabic_name || '').toLowerCase();
-                    const email = String(s.email || '').toLowerCase();
-                    const mobile = String(s.mobile || '').toLowerCase();
-                    const gMobile = String(s.guardian_mobile || '').toLowerCase();
-                    const gName = String(s.guardian_name || '').toLowerCase();
-                    const natId = String(s.national_id || '').toLowerCase();
-                    const college = String(s.college || '').toLowerCase();
-                    const program = String(s.program || '').toLowerCase();
-
-                    const match =
-                        sid.includes(term) ||
-                        (normTerm && normSid === normTerm) ||
-                        fullName.includes(term) ||
-                        arabicName.includes(term) ||
-                        email.includes(term) ||
-                        mobile.includes(term) ||
-                        gMobile.includes(term) ||
-                        gName.includes(term) ||
-                        natId.includes(term) ||
-                        college.includes(term) ||
-                        program.includes(term);
+                    if (!s._searchHaystack) this.indexStudentRecord(s);
+                    const match = (normTerm && s._normSid === normTerm) || s._searchHaystack.includes(term);
                     if (!match) return false;
                 }
                 return true;
@@ -8185,8 +8136,6 @@ class App {
                 }
             });
         }
-
-        if (window.lucide) lucide.createIcons();
     }
 
     setupPrintButton() {

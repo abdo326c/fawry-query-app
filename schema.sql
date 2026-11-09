@@ -63,12 +63,26 @@ ALTER TABLE transactions
   USING (NULLIF(SPLIT_PART(SPLIT_PART(TRIM(payment_date::TEXT), ' ', 1), 'T', 1), ''))::DATE;
 
 -- Indexes for fast querying
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_transactions_payment_date ON transactions(payment_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_date_id ON transactions(payment_date ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_transactions_reference ON transactions(reference_number);
 CREATE INDEX IF NOT EXISTS idx_transactions_student ON transactions(student_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_item_name ON transactions(item_name);
+CREATE INDEX IF NOT EXISTS idx_transactions_mapping ON transactions(mapping);
+CREATE INDEX IF NOT EXISTS idx_transactions_second_mapping ON transactions(second_mapping);
+CREATE INDEX IF NOT EXISTS idx_transactions_erp_batch ON transactions(erp_batch_number);
+CREATE INDEX IF NOT EXISTS idx_transactions_settlement_batch ON transactions(settlement_batch);
+CREATE INDEX IF NOT EXISTS idx_transactions_is_settled ON transactions(is_settled);
 CREATE INDEX IF NOT EXISTS idx_transactions_bank_date ON transactions(bank, payment_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_date_bank ON transactions(payment_date, bank);
 CREATE INDEX IF NOT EXISTS idx_transactions_id_status ON transactions(id_status);
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_id ON transactions(batch_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_ref_trgm ON transactions USING gin (reference_number gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transactions_student_trgm ON transactions USING gin (student_id gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transactions_mobile_trgm ON transactions USING gin (customer_mobile gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transactions_item_trgm ON transactions USING gin (item_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transactions_check_col_trgm ON transactions USING gin (check_column gin_trgm_ops);
 
 -- 3. Links Table
 CREATE TABLE IF NOT EXISTS links (

@@ -176,32 +176,68 @@ export function buildMappingLookup(mappings) {
  * @param {string} [orderByCol] a unique, stable column to page by
  */
 export async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id') {
-    let allData = [];
-    let from = 0;
-    while (true) {
+    const fetchPage = async (from) => {
         let query = supabase.from(table).select(selectCols);
         if (queryFn) query = queryFn(query);
         query = query.order(orderByCol).range(from, from + PAGE_SIZE - 1);
         const { data, error } = await query;
         if (error) throw error;
-        if (!data || data.length === 0) break;
-        allData = allData.concat(data);
-        if (data.length < PAGE_SIZE) break;
-        from += PAGE_SIZE;
+        return data || [];
+    };
+
+    // Fast path: fetch the first page alone so small tables (< 1,000 rows) only make 1 request
+    const firstPage = await fetchPage(0);
+    if (firstPage.length < PAGE_SIZE) return firstPage;
+
+    const allData = firstPage.slice();
+    let from = PAGE_SIZE;
+    const BATCH_PAGES = 5;
+
+    while (true) {
+        const batchPromises = [];
+        for (let p = 0; p < BATCH_PAGES; p++) {
+            batchPromises.push(fetchPage(from + p * PAGE_SIZE));
+        }
+        const pages = await Promise.all(batchPromises);
+        let done = false;
+        for (const page of pages) {
+            if (page.length === 0) {
+                done = true;
+                break;
+            }
+            for (let i = 0; i < page.length; i++) allData.push(page[i]);
+            if (page.length < PAGE_SIZE) {
+                done = true;
+                break;
+            }
+        }
+        if (done) break;
+        from += BATCH_PAGES * PAGE_SIZE;
     }
     return allData;
 }
 
 /**
- * Fetch every row whose `column` is in `values`, chunking the IN list and paginating each chunk.
+ * Fetch every row whose `column` is in `values`, chunking the IN list and paginating each chunk in parallel.
  */
-export async function fetchByIn(table, selectCols, column, values, orderByCol = 'id', chunkSize = 200) {
+export async function fetchByIn(table, selectCols, column, values, orderByCol = 'id', chunkSize = 250, concurrency = 6) {
     const unique = [...new Set((values || []).filter(v => v !== null && v !== undefined && v !== '').map(String))];
-    let all = [];
+    if (unique.length === 0) return [];
+
+    const chunks = [];
     for (let i = 0; i < unique.length; i += chunkSize) {
-        const chunk = unique.slice(i, i + chunkSize);
-        const rows = await fetchAll(table, selectCols, q => q.in(column, chunk), orderByCol);
-        all = all.concat(rows);
+        chunks.push(unique.slice(i, i + chunkSize));
+    }
+
+    const all = [];
+    for (let i = 0; i < chunks.length; i += concurrency) {
+        const slice = chunks.slice(i, i + concurrency);
+        const batchResults = await Promise.all(
+            slice.map(chunk => fetchAll(table, selectCols, q => q.in(column, chunk), orderByCol))
+        );
+        for (const rows of batchResults) {
+            for (let j = 0; j < rows.length; j++) all.push(rows[j]);
+        }
     }
     return all;
 }
@@ -287,8 +323,10 @@ export async function recomputeTransactions(txs, { mappings, includeLocked = fal
     const refs = txs.map(t => String(t.reference_number));
 
     const [fixes, links, allMappings] = await Promise.all([
-        fetchByIn('manual_fixes', '*', 'reference_number', refs, 'reference_number'),
-        fetchByIn('links', 'payment_reference_number, custom_input_value', 'payment_reference_number', refs, 'payment_reference_number'),
+        refs.length > 500
+            ? fetchAll('manual_fixes', '*', null, 'reference_number')
+            : fetchByIn('manual_fixes', '*', 'reference_number', refs, 'reference_number'),
+        fetchByIn('links', 'payment_reference_number, custom_input_value', 'payment_reference_number', refs, 'payment_reference_number', 350),
         mappings ? Promise.resolve(mappings) : fetchAll('item_mappings', '*', null, 'item_name')
     ]);
 
@@ -317,13 +355,21 @@ export async function recomputeTransactions(txs, { mappings, includeLocked = fal
  * @returns {Promise<number>} rows updated
  * @throws on the first error
  */
-export async function updateRuleFields(updates, { idChunkSize = 200, concurrency = 4 } = {}) {
+export async function updateRuleFields(updates, { idChunkSize = 300, concurrency = 6 } = {}) {
     const groups = new Map();
     for (const u of updates || []) {
         if (u.id === null || u.id === undefined) throw new Error('Cannot update a transaction without an id');
+        const changedSet = (u.diff && Array.isArray(u.diff.changes) && u.diff.changes.length > 0)
+            ? new Set(u.diff.changes.map(c => c.field))
+            : null;
+        const targetFields = changedSet
+            ? RULE_FIELDS.filter(f => changedSet.has(f))
+            : RULE_FIELDS;
+        if (targetFields.length === 0) continue;
+
         const values = {};
-        RULE_FIELDS.forEach(f => { values[f] = u.fields[f] ?? null; });
-        const key = JSON.stringify(RULE_FIELDS.map(f => values[f]));
+        targetFields.forEach(f => { values[f] = u.fields[f] ?? null; });
+        const key = JSON.stringify(targetFields.map(f => [f, values[f]]));
         if (!groups.has(key)) groups.set(key, { values, ids: [] });
         groups.get(key).ids.push(u.id);
     }
@@ -352,16 +398,24 @@ export async function updateRuleFields(updates, { idChunkSize = 200, concurrency
  * Upserts full transaction rows in chunks and throws on the first error.
  * (Used by imports only – rule re-applies use updateRuleFields.)
  */
-export async function upsertTransactions(rows, chunkSize = 500) {
-    let saved = 0;
+export async function upsertTransactions(rows, chunkSize = 500, concurrency = 4) {
+    if (!rows || rows.length === 0) return 0;
+    const tasks = [];
     for (let i = 0; i < rows.length; i += chunkSize) {
         const chunk = rows.slice(i, i + chunkSize);
-        const { error } = await supabase.from('transactions').upsert(chunk, {
-            onConflict: 'reference_number,item_price,check_column',
-            ignoreDuplicates: false
+        tasks.push(async () => {
+            const { error } = await supabase.from('transactions').upsert(chunk, {
+                onConflict: 'reference_number,item_price,check_column',
+                ignoreDuplicates: false
+            });
+            if (error) throw error;
+            return chunk.length;
         });
-        if (error) throw error;
-        saved += chunk.length;
+    }
+    let saved = 0;
+    for (let i = 0; i < tasks.length; i += concurrency) {
+        const results = await Promise.all(tasks.slice(i, i + concurrency).map(fn => fn()));
+        saved += results.reduce((a, b) => a + b, 0);
     }
     return saved;
 }

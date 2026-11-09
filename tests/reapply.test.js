@@ -150,6 +150,30 @@ test('updateRuleFields sends only rule columns, grouped by identical values', as
     expect(updateCalls.find(c => c.values.student_id === 'A').ids).toEqual([1, 2]);
 });
 
+test('updateRuleFields groups mapping-only changes across distinct student_ids into a single batch update', async () => {
+    const lookupMapping = buildMappingLookup([{ item_name: 'Fees', adjusted_item_name: 'Tuition Fees', mapping: 'Tuition', second_mapping: 'UG' }]);
+    const rows = [
+        stored({ id: 10, student_id: '231000001', original_student_id: '231000001' }),
+        stored({ id: 11, student_id: '231000002', original_student_id: '231000002' }),
+        stored({ id: 12, student_id: '231000003', original_student_id: '231000003' })
+    ];
+    const updates = rows.map(tx => {
+        const diff = diffTransaction(tx, { lookupMapping });
+        return { id: tx.id, fields: diff.fields, diff };
+    });
+
+    const saved = await updateRuleFields(updates);
+    expect(saved).toBe(3);
+    // Despite 3 distinct student_ids, only item_name, mapping, and second_mapping changed, so all 3 rows collapse into 1 update call!
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].ids).toEqual([10, 11, 12]);
+    expect(updateCalls[0].values).toEqual({
+        item_name: 'Tuition Fees',
+        mapping: 'Tuition',
+        second_mapping: 'UG'
+    });
+});
+
 test('updateRuleFields refuses rows without an id', async () => {
     await expect(updateRuleFields([{ fields: { student_id: 'A' } }])).rejects.toThrow('without an id');
 });
