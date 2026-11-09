@@ -5051,6 +5051,21 @@ class App {
         const tbodyGlobal = document.getElementById('students-table-body');
         if (tbodyGlobal) {
             tbodyGlobal.addEventListener('click', async (e) => {
+                const copySidBtn = e.target.closest('.copyable-student-id');
+                if (copySidBtn) {
+                    e.stopPropagation();
+                    const sidVal = copySidBtn.getAttribute('data-copy-sid');
+                    if (sidVal) {
+                        try {
+                            await navigator.clipboard.writeText(sidVal);
+                            Toast.show(`Student ID "${sidVal}" copied!`, 'success');
+                        } catch (err) {
+                            Toast.show('Failed to copy Student ID.', 'error');
+                        }
+                    }
+                    return;
+                }
+
                 const target = e.target.closest('.copyable-email');
                 if (target) {
                     e.stopPropagation();
@@ -8246,14 +8261,22 @@ class App {
 
         tbody.innerHTML = pageItems.map(s => `
             <tr class="student-row" style="cursor: pointer;" data-sid="${escapeHTML(s.student_id)}">
-                <td><strong>${escapeHTML(s.student_id)}</strong></td>
-                <td>${escapeHTML(s.full_name)}</td>
+                <td style="white-space: nowrap;">
+                    <div style="display: inline-flex; align-items: center; gap: 0.45rem;">
+                        <strong style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.92rem; color: var(--text-main);">${escapeHTML(s.student_id)}</strong>
+                        <button type="button" class="btn-icon copyable-student-id" data-copy-sid="${escapeHTML(s.student_id)}" title="Copy Student ID" style="padding: 2px; width: 22px; height: 22px; opacity: 0.7; border-radius: 4px;">
+                            <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                        </button>
+                    </div>
+                </td>
+                <td><strong>${escapeHTML(s.full_name)}</strong></td>
                 <td><span class="copyable-email" style="color: var(--primary); font-weight: 500;" data-email="${escapeHTML(s.email || '')}" title="Click to copy">${escapeHTML(s.email)}</span></td>
                 <td>${escapeHTML(s.mobile)}</td>
                 <td>${escapeHTML(s.college)}</td>
                 <td>${escapeHTML(s.program)}</td>
             </tr>
         `).join('');
+        if (window.lucide) lucide.createIcons({ root: tbody });
 
         if (paginationEl) {
             paginationEl.innerHTML = `
@@ -8384,95 +8407,274 @@ class App {
             document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 1.5rem; color: var(--text-muted);">Loading payment history...</td></tr>';
 
             const normSid = this.normalizeStudentId(sid);
+            const paddedErpSid = /^\d+$/.test(normSid) && normSid.length < 9 ? normSid.padStart(9, '0') : null;
             const sidVariants = Array.from(new Set([
                 String(sid).trim(),
                 normSid,
-                /^\d+$/.test(normSid) && normSid.length < 9 ? normSid.padStart(9, '0') : null
+                paddedErpSid
             ].filter(Boolean)));
 
-            // Fetch student profile record from cache or student_master
-            let st = (this.allStudentsData || []).find(s => sidVariants.includes(String(s.student_id)));
-            if (!st) {
-                const { data: students } = await supabase.from('student_master')
-                    .select('*')
-                    .in('student_id', sidVariants)
-                    .limit(1);
-                st = (students && students[0]) || null;
-            }
-            this.currentProfileStudent = st;
+            const profileTxCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, item_price, fawry_fees, net_amount, total_amount, check_column, mapping, second_mapping, bank, merchant_name, id_status, is_settled, settlement_batch, erp_batch_number';
 
-            // Fetch Transactions using fetchAll pagination
-            const txs = await fetchAll('transactions', '*', q => q.in('student_id', sidVariants).order('payment_date', { ascending: false }), 'payment_date');
-            this.currentProfileTransactions = txs || [];
+            // Fetch student profile record (from cache or DB) + student transactions in parallel
+            const cachedSt = (this.allStudentsData || []).find(s => sidVariants.includes(String(s.student_id)));
+            const [st, fetchedTxs] = await Promise.all([
+                cachedSt
+                    ? Promise.resolve(cachedSt)
+                    : supabase.from('student_master').select('*').in('student_id', sidVariants).limit(1).then(res => (res.data && res.data[0]) || null),
+                fetchAll('transactions', profileTxCols, q => q.in('student_id', sidVariants), 'id')
+            ]);
+
+            this.currentProfileStudent = st;
+            const txs = (fetchedTxs || []).sort((a, b) => {
+                const da = toDateOnly(a.payment_date) || '';
+                const db = toDateOnly(b.payment_date) || '';
+                if (da !== db) return db.localeCompare(da);
+                return (b.id || 0) - (a.id || 0);
+            });
+            this.currentProfileTransactions = txs;
 
             let totalPaid = 0;
-            (this.currentProfileTransactions || []).forEach(t => {
+            let settledCount = 0;
+            let erpPostedCount = 0;
+            txs.forEach(t => {
                 totalPaid += parseFloat(t.item_price || 0) || 0;
+                if (t.is_settled) settledCount++;
+                if (t.erp_batch_number && String(t.erp_batch_number).trim() !== '') erpPostedCount++;
             });
+            const latestDate = txs.length > 0 ? (toDateOnly(txs[0].payment_date) || '-') : 'No payments';
 
             const headerEl = document.getElementById('student-profile-header');
             if (headerEl) {
                 const name = st?.full_name || 'Student Record';
                 const arabicName = st?.arabic_name || '';
-                const college = st?.college || '-';
-                const program = st?.program || '-';
-                const email = st?.email || '-';
-                const mobile = st?.mobile || '-';
-                const natId = st?.national_id || '-';
-                const guardian = st?.guardian_name ? `${st.guardian_name}${st.guardian_mobile ? ` (${st.guardian_mobile})` : ''}` : '-';
+                const college = st?.college || '';
+                const program = st?.program || '';
+                const email = st?.email || '';
+                const mobile = st?.mobile || '';
+                const natId = st?.national_id || '';
+                const guardianName = st?.guardian_name || '';
+                const guardianMobile = st?.guardian_mobile || '';
                 const src = st?.source || 'Master';
 
+                const initials = name
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map(w => w[0].toUpperCase())
+                    .join('') || 'ST';
+
+                const renderCopyableField = (val, label) => {
+                    if (!val || val === '-') {
+                        return `<span style="color: var(--text-muted); font-style: italic; font-size: 0.82rem;">Not provided</span>`;
+                    }
+                    return `
+                        <button type="button" class="student-copy-chip" data-profile-copy="${escapeHTML(val)}" data-profile-copy-label="${escapeHTML(label)}" title="Click to copy ${escapeHTML(label)}">
+                            <span style="font-weight: 600;">${escapeHTML(val)}</span>
+                            <i data-lucide="copy" style="width: 12px; height: 12px; opacity: 0.75;"></i>
+                        </button>
+                    `;
+                };
+
                 headerEl.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
-                        <div style="flex: 1; min-width: 260px;">
-                            <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
-                                <h3 style="margin: 0; font-size: 1.25rem; color: var(--text-main);">${escapeHTML(name)}</h3>
-                                <span class="badge" style="background: rgba(99,102,241,0.15); color: var(--primary); font-family: monospace; font-size: 0.85rem; font-weight: 700;">ID: ${escapeHTML(sid)}</span>
-                                <span class="badge" style="background: rgba(16,185,129,0.14); color: #10b981; font-size: 0.75rem;">${escapeHTML(src)}</span>
-                            </div>
-                            ${arabicName ? `<div style="font-size: 0.92rem; color: var(--text-muted); margin-top: 0.3rem;">${escapeHTML(arabicName)}</div>` : ''}
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.6rem 1.5rem; margin-top: 1rem; font-size: 0.85rem; color: var(--text-secondary);">
-                                <div><strong style="color: var(--text-muted);">College:</strong> ${escapeHTML(college)}</div>
-                                <div><strong style="color: var(--text-muted);">Program:</strong> ${escapeHTML(program)}</div>
-                                <div><strong style="color: var(--text-muted);">Email:</strong> ${escapeHTML(email)}</div>
-                                <div><strong style="color: var(--text-muted);">Mobile:</strong> ${escapeHTML(mobile)}</div>
-                                <div><strong style="color: var(--text-muted);">National ID:</strong> ${escapeHTML(natId)}</div>
-                                <div><strong style="color: var(--text-muted);">Guardian:</strong> ${escapeHTML(guardian)}</div>
+                    <div class="student-dossier-banner">
+                        <div class="student-identity-main">
+                            <div class="student-avatar-monogram">${escapeHTML(initials)}</div>
+                            <div style="flex: 1; min-width: 220px;">
+                                <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                                    <h2 style="margin: 0; font-size: 1.4rem; font-weight: 700; color: var(--text-main); letter-spacing: -0.01em;">${escapeHTML(name)}</h2>
+                                    <span class="badge" style="background: rgba(16,185,129,0.14); color: #10b981; font-size: 0.73rem; border: 1px solid rgba(16,185,129,0.28);">${escapeHTML(src)}</span>
+                                </div>
+                                ${arabicName ? `<div style="font-size: 0.96rem; color: var(--text-secondary); margin-top: 0.2rem; font-weight: 500;" dir="auto">${escapeHTML(arabicName)}</div>` : ''}
+
+                                <!-- High-Visibility Copyable Student ID Bar -->
+                                <div class="student-id-hero-bar">
+                                    <button type="button" class="student-id-copy-pill" id="btn-copy-profile-sid" data-profile-copy="${escapeHTML(sid)}" data-profile-copy-label="Student ID" title="Click to copy Student ID (${escapeHTML(sid)})">
+                                        <span class="sid-label">Student ID</span>
+                                        <span class="sid-value">${escapeHTML(sid)}</span>
+                                        <span class="sid-action" id="btn-copy-profile-sid-label">
+                                            <i data-lucide="copy" style="width: 13px; height: 13px;"></i> Copy ID
+                                        </span>
+                                    </button>
+                                    ${paddedErpSid && paddedErpSid !== String(sid).trim() ? `
+                                        <button type="button" class="student-copy-chip" data-profile-copy="${escapeHTML(paddedErpSid)}" data-profile-copy-label="9-Digit ERP Account" title="Copy 9-digit zero-padded ERP Account number" style="padding: 0.35rem 0.65rem; font-family: monospace;">
+                                            <span style="color: var(--text-muted); font-family: var(--font-family); font-size: 0.74rem;">ERP 9-Digit:</span>
+                                            <strong>${escapeHTML(paddedErpSid)}</strong>
+                                            <i data-lucide="copy" style="width: 12px; height: 12px; opacity: 0.75;"></i>
+                                        </button>
+                                    ` : ''}
+                                    <button type="button" class="btn btn-outline btn-sm" id="btn-profile-view-in-tx" title="Filter Orders Transactions by this Student ID" style="padding: 0.35rem 0.65rem; font-size: 0.76rem; height: auto;">
+                                        <i data-lucide="external-link" style="width: 12px; height: 12px;"></i> View in Transactions
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                        <div style="display: flex; gap: 1rem; align-items: center; background: var(--bg-secondary); padding: 0.85rem 1.25rem; border-radius: 10px; border: 1px solid var(--border-color);">
-                            <div style="text-align: right;">
-                                <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Total Paid</div>
-                                <div style="font-size: 1.35rem; font-weight: 700; color: #10b981;">${formatMoney(totalPaid)} EGP</div>
-                                <div style="font-size: 0.78rem; color: var(--text-muted);">${this.currentProfileTransactions.length} transaction(s)</div>
+
+                        <!-- Right Financial KPI Strip -->
+                        <div class="student-kpi-strip">
+                            <div class="student-kpi-box" style="border-color: rgba(16, 185, 129, 0.3); background: rgba(16, 185, 129, 0.06);">
+                                <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Total Paid</div>
+                                <div style="font-size: 1.4rem; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', ui-monospace, monospace; margin-top: 0.15rem;">${formatMoney(totalPaid)} <span style="font-size: 0.82rem; font-weight: 600;">EGP</span></div>
+                                <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem;">${txs.length} transaction(s)</div>
+                            </div>
+                            <div class="student-kpi-box">
+                                <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Reconciliation</div>
+                                <div style="font-size: 0.98rem; font-weight: 700; color: var(--text-main); margin-top: 0.22rem;">${settledCount} / ${txs.length} Settled</div>
+                                <div style="font-size: 0.76rem; color: var(--primary); margin-top: 0.18rem;">${erpPostedCount} posted to ERP</div>
+                            </div>
+                            <div class="student-kpi-box">
+                                <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Latest Payment</div>
+                                <div style="font-size: 0.98rem; font-weight: 700; color: var(--text-main); margin-top: 0.22rem; font-family: monospace;">${escapeHTML(latestDate)}</div>
+                                <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.18rem;">${txs.length > 0 ? `EGP ${formatMoney(txs[0].item_price || 0)}` : 'No activity'}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4-Tile Structured Dossier Metadata Grid -->
+                    <div class="student-dossier-grid">
+                        <div class="student-dossier-tile">
+                            <div class="student-dossier-tile-title">
+                                <i data-lucide="graduation-cap" style="width: 14px; height: 14px; color: var(--primary);"></i> Academic Program
+                            </div>
+                            <div style="font-size: 0.85rem;">
+                                <span style="color: var(--text-muted);">College:</span>
+                                <strong style="color: var(--text-main); margin-left: 0.25rem;">${escapeHTML(college || '-')}</strong>
+                            </div>
+                            <div style="font-size: 0.83rem;">
+                                <span style="color: var(--text-muted);">Program:</span>
+                                <span style="color: var(--text-secondary); margin-left: 0.25rem;">${escapeHTML(program || '-')}</span>
+                            </div>
+                        </div>
+
+                        <div class="student-dossier-tile">
+                            <div class="student-dossier-tile-title">
+                                <i data-lucide="phone" style="width: 14px; height: 14px; color: #10b981;"></i> Contact Details
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.84rem;">
+                                <span style="color: var(--text-muted);">Mobile:</span>
+                                ${renderCopyableField(mobile, 'Mobile Number')}
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.84rem;">
+                                <span style="color: var(--text-muted);">Email:</span>
+                                ${renderCopyableField(email, 'Email Address')}
+                            </div>
+                        </div>
+
+                        <div class="student-dossier-tile">
+                            <div class="student-dossier-tile-title">
+                                <i data-lucide="id-card" style="width: 14px; height: 14px; color: #38bdf8;"></i> Identity &amp; National ID
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.84rem;">
+                                <span style="color: var(--text-muted);">National ID:</span>
+                                ${renderCopyableField(natId, 'National ID')}
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.83rem;">
+                                <span style="color: var(--text-muted);">ID Validation:</span>
+                                <span class="badge ${validateID(paddedErpSid || sid) === 'Valid' ? 'valid' : 'error'}" style="font-size: 0.72rem;">${escapeHTML(validateID(paddedErpSid || sid))}</span>
+                            </div>
+                        </div>
+
+                        <div class="student-dossier-tile">
+                            <div class="student-dossier-tile-title">
+                                <i data-lucide="users" style="width: 14px; height: 14px; color: #a855f7;"></i> Guardian Info
+                            </div>
+                            <div style="font-size: 0.84rem;">
+                                <span style="color: var(--text-muted);">Name:</span>
+                                <strong style="color: var(--text-main); margin-left: 0.25rem;">${escapeHTML(guardianName || '-')}</strong>
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.84rem;">
+                                <span style="color: var(--text-muted);">Phone:</span>
+                                ${renderCopyableField(guardianMobile, 'Guardian Mobile')}
                             </div>
                         </div>
                     </div>
                 `;
+
+                // Wire up all copyable chips & main Student ID pill inside the dossier header
+                headerEl.querySelectorAll('[data-profile-copy]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const val = btn.getAttribute('data-profile-copy');
+                        const label = btn.getAttribute('data-profile-copy-label') || 'Value';
+                        if (!val) return;
+                        try {
+                            await navigator.clipboard.writeText(val);
+                            Toast.show(`${label} "${val}" copied to clipboard!`, 'success');
+                            if (btn.id === 'btn-copy-profile-sid') {
+                                btn.classList.add('copied');
+                                const actionEl = document.getElementById('btn-copy-profile-sid-label');
+                                if (actionEl) actionEl.innerHTML = '✓ Copied!';
+                                setTimeout(() => {
+                                    btn.classList.remove('copied');
+                                    if (actionEl) {
+                                        actionEl.innerHTML = '<i data-lucide="copy" style="width: 13px; height: 13px;"></i> Copy ID';
+                                        if (window.lucide) lucide.createIcons({ root: actionEl });
+                                    }
+                                }, 1600);
+                            }
+                        } catch (err) {
+                            Toast.show(`Failed to copy ${label}`, 'error');
+                        }
+                    });
+                });
+
+                // Wire up "View in Transactions" shortcut
+                document.getElementById('btn-profile-view-in-tx')?.addEventListener('click', () => {
+                    const txNav = document.querySelector('.nav-link[data-tab="transactions"]');
+                    const searchEl = document.getElementById('filter-search');
+                    if (searchEl) searchEl.value = String(sid).trim();
+                    if (txNav) txNav.click();
+                    this.currentPage = 1;
+                    this.renderFilterChips('transactions');
+                    this.loadTransactions();
+                });
+
+                if (window.lucide) lucide.createIcons({ root: headerEl });
             }
 
             if (!txs || txs.length === 0) {
-                document.getElementById('student-ledger-body').innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem; color: var(--text-muted);">No payments found for this student.</td></tr>';
-                document.getElementById('student-summary-body').innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 1rem; color: var(--text-muted);">No payment categories</td></tr>';
+                document.getElementById('student-ledger-body').innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.45rem;">
+                                <i data-lucide="inbox" style="width: 32px; height: 32px; opacity: 0.45;"></i>
+                                <div style="font-weight: 600; color: var(--text-secondary);">No payments recorded for Student ID ${escapeHTML(sid)}</div>
+                                <div style="font-size: 0.8rem;">Payments matching ${escapeHTML(sidVariants.join(' or '))} will appear here automatically.</div>
+                            </div>
+                        </td>
+                    </tr>`;
+                document.getElementById('student-summary-body').innerHTML = `
+                    <tr>
+                        <td colspan="3" style="text-align: center; padding: 2rem 1rem; color: var(--text-muted); font-size: 0.85rem;">
+                            No payment categories yet
+                        </td>
+                    </tr>`;
+                if (window.lucide) lucide.createIcons({ root: document.getElementById('student-ledger-body') });
                 return;
             }
 
             const ledgerBody = document.getElementById('student-ledger-body');
             ledgerBody.innerHTML = txs.map((t, idx) => {
                 const bankName = t.bank || t.bank_Style || '-';
+                const refNum = t.reference_number || '-';
                 return `
                 <tr>
-                    <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
-                    <td>
-                        <a href="#" class="student-ledger-ref-link" data-idx="${idx}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction">
-                            ${escapeHTML(t.reference_number || '-')}
-                        </a>
+                    <td style="white-space: nowrap; font-family: monospace; font-size: 0.83rem;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
+                    <td style="white-space: nowrap;">
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <a href="#" class="student-ledger-ref-link" data-idx="${idx}" style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 700; color: var(--primary); text-decoration: none;" title="Click to inspect transaction details">
+                                ${escapeHTML(refNum)}
+                            </a>
+                            ${t.reference_number ? `
+                            <button type="button" class="btn-icon student-ledger-copy-ref" data-ref="${escapeHTML(t.reference_number)}" title="Copy Reference Number" style="padding: 2px; width: 20px; height: 20px; opacity: 0.65;">
+                                <i data-lucide="copy" style="width: 11px; height: 11px;"></i>
+                            </button>` : ''}
+                        </div>
                     </td>
-                    <td>${escapeHTML(t.item_name || '-')}</td>
-                    <td>${escapeHTML(t.mapping || 'Unmapped')}</td>
-                    <td>${escapeHTML(t.second_mapping || '-')}</td>
-                    <td>${escapeHTML(bankName)}</td>
-                    <td style="text-align: right; font-weight: 600;">${formatMoney(t.item_price || 0)}</td>
+                    <td style="max-width: 240px; white-space: normal; font-size: 0.84rem;">${escapeHTML(t.item_name || '-')}</td>
+                    <td><span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-size: 0.74rem;">${escapeHTML(t.mapping || 'Unmapped')}</span></td>
+                    <td style="font-size: 0.82rem; color: var(--text-secondary);">${escapeHTML(t.second_mapping || '-')}</td>
+                    <td style="font-size: 0.82rem;">${escapeHTML(bankName)}</td>
+                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${formatMoney(t.item_price || 0)}</td>
                 </tr>
             `;
             }).join('');
@@ -8488,7 +8690,22 @@ class App {
                 });
             });
 
-            // Calculate Summary Grouped by Mapping
+            ledgerBody.querySelectorAll('.student-ledger-copy-ref').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const ref = btn.getAttribute('data-ref');
+                    if (!ref) return;
+                    try {
+                        await navigator.clipboard.writeText(ref);
+                        Toast.show(`Reference "${ref}" copied!`, 'success');
+                    } catch (err) {
+                        Toast.show('Failed to copy reference', 'error');
+                    }
+                });
+            });
+            if (window.lucide) lucide.createIcons({ root: ledgerBody });
+
+            // Calculate Summary Grouped by Mapping (sorted highest amount first)
             const summary = {};
             let total = 0;
             txs.forEach(t => {
@@ -8500,19 +8717,31 @@ class App {
                 total += amt;
             });
 
-            const summaryHtml = Object.keys(summary).sort().map(k => `
+            const sortedCategories = Object.keys(summary).sort((a, b) => summary[b].amount - summary[a].amount);
+            const summaryHtml = sortedCategories.map(k => {
+                const pct = total > 0 ? Math.min(100, Math.round((summary[k].amount / total) * 100)) : 0;
+                return `
                 <tr>
-                    <td><strong>${escapeHTML(k)}</strong></td>
-                    <td style="text-align: center;">${summary[k].count}</td>
-                    <td style="text-align: right; font-weight: 500;">${formatMoney(summary[k].amount)}</td>
+                    <td>
+                        <div style="font-weight: 600; color: var(--text-main);">${escapeHTML(k)}</div>
+                        <div style="width: 100%; height: 4px; background: rgba(255,255,255,0.06); border-radius: 999px; margin-top: 4px; overflow: hidden;">
+                            <div style="width: ${pct}%; height: 100%; background: var(--primary); border-radius: 999px;"></div>
+                        </div>
+                    </td>
+                    <td style="text-align: center; font-weight: 600;">${summary[k].count}</td>
+                    <td style="text-align: right; font-weight: 600; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">
+                        ${formatMoney(summary[k].amount)}
+                        <div style="font-size: 0.7rem; color: var(--text-muted); font-weight: 400;">${pct}%</div>
+                    </td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
             
             document.getElementById('student-summary-body').innerHTML = summaryHtml + `
                 <tr style="background-color: var(--bg-secondary);">
                     <td><strong>Grand Total</strong></td>
                     <td style="text-align: center;"><strong>${txs.length}</strong></td>
-                    <td style="text-align: right; font-size: 1.05rem; font-weight: 700; color: #10b981;">${formatMoney(total)} EGP</td>
+                    <td style="text-align: right; font-size: 1rem; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${formatMoney(total)} EGP</td>
                 </tr>
             `;
 
