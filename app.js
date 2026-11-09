@@ -1875,12 +1875,17 @@ class App {
     // Re-applies all rules to the given rows and saves the ones that changed (rule columns only).
     // Settled / ERP-recorded rows are never changed here; they are counted in lockedSkipped and
     // can be reviewed with "Re-apply Rules".
-    async reapplyRulesTo(rows) {
-        const all = await recomputeTransactions(rows, { includeLocked: true });
+    async reapplyRulesTo(rows, opts = {}) {
+        const all = await recomputeTransactions(rows, {
+            includeLocked: true,
+            mappings: opts.mappings ?? this.allMappingsData ?? undefined,
+            fixes: opts.fixes ?? this.allFixesData ?? undefined,
+            links: opts.links ?? undefined
+        });
         const open = all.filter(c => !c.diff.locked);
         const updated = open.length > 0 ? await updateRuleFields(open) : 0;
         if (updated > 0) this.invalidateDistinctCache();
-        return { updated, lockedSkipped: all.length - open.length };
+        return { updated, lockedSkipped: all.length - open.length, appliedChanges: open, allChanges: all };
     }
 
     // Toast text for a reapplyRulesTo result
@@ -2204,17 +2209,28 @@ class App {
         fbEl.style.background = 'rgba(16, 185, 129, 0.12)';
         fbEl.style.border = '1px solid rgba(16, 185, 129, 0.35)';
         fbEl.style.color = '#10b981';
+        // Fast path: check in-memory Student Master cache first (0ms network wait)
+        const cachedStudent = this.studentMasterByIdMap?.get(val)
+            || (this.allStudentsData ? this.allStudentsData.find(s => String(s.student_id).trim() === val) : null);
+        if (cachedStudent) {
+            const colLabel = cachedStudent.college || cachedStudent.program || '';
+            const fac = colLabel ? ` • ${escapeHTML(colLabel)}` : '';
+            fbEl.innerHTML = `✅ <strong>Valid ID</strong> — ${escapeHTML(cachedStudent.full_name || 'Student')}${fac}`;
+            return;
+        }
+
         fbEl.innerHTML = `✅ Valid 9-digit Student ID format. Checking Student Master...`;
 
         try {
             const { data: student, error } = await supabase
                 .from('student_master')
-                .select('student_id, full_name, faculty, status')
+                .select('student_id, full_name, college, program')
                 .eq('student_id', val)
                 .maybeSingle();
             if (reqId !== this.fixIdReqId) return;
             if (!error && student) {
-                const fac = student.faculty ? ` • ${escapeHTML(student.faculty)}` : '';
+                const colLabel = student.college || student.program || '';
+                const fac = colLabel ? ` • ${escapeHTML(colLabel)}` : '';
                 fbEl.innerHTML = `✅ <strong>Valid ID</strong> — ${escapeHTML(student.full_name || 'Student')}${fac}`;
             } else {
                 fbEl.innerHTML = `✅ <strong>Valid 9-digit ID format</strong> <span style="opacity: 0.85;">(Not found in Student Master list)</span>`;
@@ -2567,8 +2583,12 @@ class App {
                 const oldEditingRef = this.editingFixOriginalRef;
                 const isRenamingRef = isEditMode && oldEditingRef && oldEditingRef !== ref;
 
-                const { data: existing, error: existErr } = await supabase.from('manual_fixes').select('*').eq('reference_number', ref).maybeSingle();
-                if (existErr) throw existErr;
+                let existing = this.allFixesData ? this.findConflictingFix(ref, null) : null;
+                if (!this.allFixesData) {
+                    const { data: dbExisting, error: existErr } = await supabase.from('manual_fixes').select('*').eq('reference_number', ref).maybeSingle();
+                    if (existErr) throw existErr;
+                    existing = dbExisting;
+                }
                 if (existing && (!isEditMode || isRenamingRef)) {
                     if (!await window.customConfirm(`A manual fix for reference "${ref}" already exists. Do you want to update the existing fix?`, 'Update Existing', 'Cancel')) {
                         return;
@@ -2601,23 +2621,40 @@ class App {
                 const prevFix = isRenamingRef
                     ? ((this.allFixesData || []).find(f => f.reference_number === oldEditingRef) || existing)
                     : existing;
-                await this.logAudit(
-                    isEditMode ? 'Manual Fix Updated' : 'Single Manual Fix Added',
-                    ref,
-                    {
-                        ...(isRenamingRef ? { ...mergedFix, previous_reference_number: oldEditingRef } : mergedFix),
-                        revert_data: {
-                            table_name: 'manual_fixes',
-                            operation: prevFix ? 'upsert' : 'delete',
-                            previous_rows: prevFix ? [prevFix] : [{ reference_number: ref }]
-                        }
-                    }
-                );
 
-                // Re-apply all rules to affected reference number(s)
+                // Update in-memory allFixesData immediately so recompute & table render need 0 extra table downloads
+                if (Array.isArray(this.allFixesData)) {
+                    const dropKeys = new Set([ref.toLowerCase()]);
+                    if (isRenamingRef && oldEditingRef) dropKeys.add(String(oldEditingRef).trim().toLowerCase());
+                    this.allFixesData = this.allFixesData.filter(f => !dropKeys.has(String(f.reference_number || '').trim().toLowerCase()));
+                    this.allFixesData.push(mergedFix);
+                    this.allFixesData.sort((a, b) => String(a.reference_number || '').localeCompare(String(b.reference_number || '')));
+                }
+
                 const affectedRefs = isRenamingRef ? [oldEditingRef, ref] : [ref];
-                const rows = await fetchByIn('transactions', '*', 'reference_number', affectedRefs);
-                const all = await recomputeTransactions(rows, { includeLocked: true });
+                const fixRuleCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, item_price, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+
+                const [, rows] = await Promise.all([
+                    this.logAudit(
+                        isEditMode ? 'Manual Fix Updated' : 'Single Manual Fix Added',
+                        ref,
+                        {
+                            ...(isRenamingRef ? { ...mergedFix, previous_reference_number: oldEditingRef } : mergedFix),
+                            revert_data: {
+                                table_name: 'manual_fixes',
+                                operation: prevFix ? 'upsert' : 'delete',
+                                previous_rows: prevFix ? [prevFix] : [{ reference_number: ref }]
+                            }
+                        }
+                    ),
+                    fetchByIn('transactions', fixRuleCols, 'reference_number', affectedRefs)
+                ]);
+
+                const all = await recomputeTransactions(rows, {
+                    includeLocked: true,
+                    mappings: this.allMappingsData || undefined,
+                    fixes: this.allFixesData || [mergedFix]
+                });
                 const lockedChanges = all.filter(c => c.diff.locked);
                 let applyToLocked = false;
 
@@ -2639,7 +2676,14 @@ class App {
                 Toast.show(`Manual fix saved. ${summaryMsg}`, 'success');
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
-                this.loadFixes();
+
+                if (Array.isArray(this.allFixesData)) {
+                    this.updateFixesStatsAndDropdowns(this.allFixesData);
+                    this.renderFixesPage();
+                    this.syncUnresolvedAfterFixChange(rows, toApply);
+                } else {
+                    this.loadFixes();
+                }
                 if (document.getElementById('view-transactions')?.classList.contains('active')) {
                     this.loadTransactions();
                 }
@@ -2834,8 +2878,15 @@ class App {
                         if (!proceedInvalid) return;
                     }
 
-                    const existingRows = await fetchByIn('manual_fixes', 'reference_number, correct_id, item_name, mapping, second_mapping', 'reference_number', fixes.map(f => f.reference_number), 'reference_number', 500);
-                    const existingMap = new Map(existingRows.map(r => [String(r.reference_number).trim().toLowerCase(), r]));
+                    const existingRows = Array.isArray(this.allFixesData)
+                        ? this.allFixesData
+                        : await fetchByIn('manual_fixes', 'reference_number, correct_id, item_name, mapping, second_mapping', 'reference_number', fixes.map(f => f.reference_number), 'reference_number', 500);
+                    const uploadedKeys = new Set(fixes.map(f => String(f.reference_number).trim().toLowerCase()));
+                    const existingMap = new Map(
+                        existingRows
+                            .filter(r => uploadedKeys.has(String(r.reference_number || '').trim().toLowerCase()))
+                            .map(r => [String(r.reference_number).trim().toLowerCase(), r])
+                    );
 
                     let fixesToProcess = fixes;
                     if (existingMap.size > 0) {
@@ -2864,20 +2915,46 @@ class App {
                     }
                     processed = fixesToProcess.length;
 
+                    // Upsert manual_fixes chunks in parallel (4x concurrency)
+                    const upsertTasks = [];
                     for (let i = 0; i < fixesToProcess.length; i += chunkSize) {
                         const chunk = fixesToProcess.slice(i, i + chunkSize);
-                        const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
-                        if (error) throw new Error(`Only ${inserted} of ${fixesToProcess.length} fixes saved. ${error.message}`);
-                        inserted += chunk.length;
+                        upsertTasks.push(async () => {
+                            const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
+                            if (error) throw new Error(`Only ${inserted} of ${fixesToProcess.length} fixes saved. ${error.message}`);
+                            inserted += chunk.length;
+                        });
+                    }
+                    await runConcurrent(upsertTasks, 4);
+
+                    // Update in-memory allFixesData if cached
+                    if (Array.isArray(this.allFixesData)) {
+                        const byKey = new Map(this.allFixesData.map(f => [String(f.reference_number || '').trim().toLowerCase(), f]));
+                        for (const f of fixesToProcess) {
+                            byKey.set(String(f.reference_number || '').trim().toLowerCase(), f);
+                        }
+                        this.allFixesData = Array.from(byKey.values()).sort((a, b) =>
+                            String(a.reference_number || '').localeCompare(String(b.reference_number || ''))
+                        );
                     }
 
-                    // Re-apply all rules to affected transactions (blank cells no longer wipe mappings)
-                    const rows = await fetchByIn('transactions', '*', 'reference_number', fixesToProcess.map(f => f.reference_number));
-                    const result = await this.reapplyRulesTo(rows);
+                    // Fetch only rule columns (not '*') and pass cached fixes/mappings into reapplyRulesTo
+                    const fixRuleCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, item_price, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+                    const rows = await fetchByIn('transactions', fixRuleCols, 'reference_number', fixesToProcess.map(f => f.reference_number));
+                    const result = await this.reapplyRulesTo(rows, {
+                        fixes: this.allFixesData || fixesToProcess,
+                        mappings: this.allMappingsData || undefined
+                    });
 
                     await this.logAudit('Bulk Fixes Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: result.updated, locked_skipped: result.lockedSkipped });
                     Toast.show(`Uploaded ${inserted} manual fixes. ${this.reapplySummary(result)}`, 'success');
-                    this.loadFixes();
+                    if (Array.isArray(this.allFixesData)) {
+                        this.updateFixesStatsAndDropdowns(this.allFixesData);
+                        this.renderFixesPage();
+                        this.syncUnresolvedAfterFixChange(rows, result.appliedChanges || []);
+                    } else {
+                        this.loadFixes();
+                    }
                 }
 
                 await this.recordBatch(file.name, type, processed, inserted, null);
@@ -4407,13 +4484,15 @@ class App {
         if (window.lucide) lucide.createIcons();
     }
 
-    async deduplicateManualFixes({ silent = true } = {}) {
+    async deduplicateManualFixes({ silent = true, prefetchedRows = null } = {}) {
         try {
             this._fixesDedupedOnce = true;
-            const allRows = await fetchAll('manual_fixes', '*', null, 'reference_number');
+            const allRows = Array.isArray(prefetchedRows)
+                ? prefetchedRows
+                : await fetchAll('manual_fixes', '*', null, 'reference_number');
             if (!allRows || allRows.length === 0) {
                 if (!silent) Toast.show('No manual fixes found to check.', 'info');
-                return { mergedCount: 0, deletedCount: 0 };
+                return { mergedCount: 0, deletedCount: 0, cleanRows: [] };
             }
 
             const byNormRef = new Map();
@@ -4454,7 +4533,9 @@ class App {
                 }
             }
 
+            const cleanRows = [];
             for (const group of byNormRef.values()) {
+                cleanRows.push(group.canonical);
                 if (group.rawKeys.length > 1 || group.needsSave) {
                     rowsToUpsert.push(group.canonical);
                     for (const k of group.rawKeys) {
@@ -4464,10 +4545,11 @@ class App {
                     }
                 }
             }
+            cleanRows.sort((a, b) => String(a.reference_number || '').localeCompare(String(b.reference_number || '')));
 
             if (keysToDelete.length === 0 && rowsToUpsert.length === 0) {
                 if (!silent) Toast.show('All manual fixes are clean — no duplicate Reference Numbers found!', 'success');
-                return { mergedCount: 0, deletedCount: 0 };
+                return { mergedCount: 0, deletedCount: 0, cleanRows };
             }
 
             if (keysToDelete.length > 0) {
@@ -4493,26 +4575,31 @@ class App {
 
             if (!silent) {
                 Toast.show(`Cleaned ${keysToDelete.length} duplicate/whitespace fix row(s)!`, 'success');
-                await this.loadFixes();
+                this.allFixesData = cleanRows;
+                this.updateFixesStatsAndDropdowns(cleanRows);
+                this.renderFixesPage();
             }
 
-            return { mergedCount: rowsToUpsert.length, deletedCount: keysToDelete.length };
+            return { mergedCount: rowsToUpsert.length, deletedCount: keysToDelete.length, cleanRows };
         } catch (err) {
             if (!silent) Toast.show('Error deduplicating fixes: ' + err.message, 'error');
-            return { mergedCount: 0, deletedCount: 0 };
+            return { mergedCount: 0, deletedCount: 0, cleanRows: Array.isArray(prefetchedRows) ? prefetchedRows : [] };
         }
     }
 
     async loadFixes() {
         const tbody = document.getElementById('fixes-body');
-        if (tbody) {
+        if (tbody && (!this.allFixesData || this.allFixesData.length === 0)) {
             tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
         }
         try {
+            let allData = await fetchAll('manual_fixes', '*', null, 'reference_number');
             if (this.hasRole('admin') && !this._fixesDedupedOnce) {
-                await this.deduplicateManualFixes({ silent: true });
+                const dedupRes = await this.deduplicateManualFixes({ silent: true, prefetchedRows: allData });
+                if (Array.isArray(dedupRes.cleanRows)) {
+                    allData = dedupRes.cleanRows;
+                }
             }
-            const allData = await fetchAll('manual_fixes', '*', null, 'reference_number');
             this.allFixesData = allData;
             this.fixesPage = 1;
             this.updateFixesStatsAndDropdowns(allData);
@@ -4553,8 +4640,83 @@ class App {
         }
     }
 
-    async loadUnresolvedTransactionsSummary() {
+    renderUnresolvedTransactionsDom() {
         const statEl = document.getElementById('fixes-stat-unresolved');
+        const tbody = document.getElementById('unresolved-tx-body');
+        const byRef = this.unresolvedTxByRef || new Map();
+        const items = Array.from(byRef.values());
+        if (statEl) statEl.textContent = items.length.toLocaleString();
+
+        if (!tbody) return;
+        if (items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 1.5rem; color: var(--success);">All transactions in the database currently have a Valid Student ID!</td></tr>';
+            return;
+        }
+
+        const canEditFixes = this.hasRole('accountant');
+        const displayItems = items.slice(0, 150);
+        tbody.innerHTML = displayItems.map(t => {
+            const isMissing = t.id_status && t.id_status.includes('Missing');
+            const statusClass = isMissing ? 'missing' : 'error';
+            return `
+                <tr>
+                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
+                    <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
+                    <td>${escapeHTML(t.student_id || '-')}</td>
+                    <td><span class="badge ${statusClass}">${escapeHTML(t.id_status || 'Error')}</span></td>
+                    <td style="max-width: 240px; white-space: normal; font-size: 0.82rem;">${escapeHTML(t.item_name || '-')}</td>
+                    <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
+                    <td>
+                        ${canEditFixes ? `<button class="btn btn-primary btn-sm" data-fix-unresolved="${escapeHTML(t.reference_number)}">
+                            <i data-lucide="wrench" style="width: 13px; height: 13px;"></i> Fix
+                        </button>` : '<span style="color: var(--text-muted); font-size: 0.78rem;">View Only</span>'}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('[data-fix-unresolved]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const ref = btn.getAttribute('data-fix-unresolved');
+                this.openQuickFixForRef(ref);
+            });
+        });
+        if (window.lucide) lucide.createIcons({ root: tbody });
+    }
+
+    syncUnresolvedAfterFixChange(txRows = [], appliedChanges = []) {
+        if (!this.unresolvedTxByRef) return;
+        const changeById = new Map((appliedChanges || []).map(c => [c.id, c.fields]));
+        let mutated = false;
+
+        for (const tx of txRows || []) {
+            if (!tx || !tx.reference_number) continue;
+            const refKey = String(tx.reference_number).trim();
+            const updatedFields = changeById.get(tx.id);
+            const newStatus = updatedFields ? updatedFields.id_status : tx.id_status;
+            const newStudentId = updatedFields ? updatedFields.student_id : tx.student_id;
+            const newItemName = updatedFields ? updatedFields.item_name : tx.item_name;
+
+            if (newStatus === 'Valid') {
+                if (this.unresolvedTxByRef.delete(refKey)) mutated = true;
+            } else {
+                this.unresolvedTxByRef.set(refKey, {
+                    ...tx,
+                    student_id: newStudentId,
+                    item_name: newItemName,
+                    id_status: newStatus
+                });
+                mutated = true;
+            }
+        }
+
+        if (mutated) {
+            this.renderUnresolvedTransactionsDom();
+            this.updateSidebarBadges();
+        }
+    }
+
+    async loadUnresolvedTransactionsSummary() {
         const tbody = document.getElementById('unresolved-tx-body');
         try {
             const badRows = await fetchAll(
@@ -4574,44 +4736,8 @@ class App {
                 }
             }
 
-            const items = Array.from(byRef.values());
-            if (statEl) statEl.textContent = items.length.toLocaleString();
-
-            if (!tbody) return;
-            if (items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 1.5rem; color: var(--success);">All transactions in the database currently have a Valid Student ID!</td></tr>';
-                return;
-            }
-
-            const canEditFixes = this.hasRole('accountant');
-            const displayItems = items.slice(0, 150);
-            tbody.innerHTML = displayItems.map(t => {
-                const isMissing = t.id_status && t.id_status.includes('Missing');
-                const statusClass = isMissing ? 'missing' : 'error';
-                return `
-                    <tr>
-                        <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
-                        <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date) || '-')}</td>
-                        <td>${escapeHTML(t.student_id || '-')}</td>
-                        <td><span class="badge ${statusClass}">${escapeHTML(t.id_status || 'Error')}</span></td>
-                        <td style="max-width: 240px; white-space: normal; font-size: 0.82rem;">${escapeHTML(t.item_name || '-')}</td>
-                        <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
-                        <td>
-                            ${canEditFixes ? `<button class="btn btn-primary btn-sm" data-fix-unresolved="${escapeHTML(t.reference_number)}">
-                                <i data-lucide="wrench" style="width: 13px; height: 13px;"></i> Fix
-                            </button>` : '<span style="color: var(--text-muted); font-size: 0.78rem;">View Only</span>'}
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-
-            tbody.querySelectorAll('[data-fix-unresolved]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const ref = btn.getAttribute('data-fix-unresolved');
-                    this.openQuickFixForRef(ref);
-                });
-            });
-            if (window.lucide) lucide.createIcons({ root: tbody });
+            this.unresolvedTxByRef = byRef;
+            this.renderUnresolvedTransactionsDom();
         } catch (err) {
             if (tbody) {
                 tbody.innerHTML = `<tr><td colspan="7" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
@@ -4719,20 +4845,37 @@ class App {
                     const { error } = await supabase.from('manual_fixes').delete().eq('reference_number', ref);
                     if (error) throw error;
 
-                    await this.logAudit('Manual Fix Deleted', ref, {
-                        reference_number: ref,
-                        revert_data: prevFix ? {
-                            table_name: 'manual_fixes',
-                            operation: 'upsert',
-                            previous_rows: [prevFix]
-                        } : undefined
+                    if (Array.isArray(this.allFixesData)) {
+                        const cleanKey = String(ref || '').trim().toLowerCase();
+                        this.allFixesData = this.allFixesData.filter(f => String(f.reference_number || '').trim().toLowerCase() !== cleanKey);
+                    }
+
+                    const fixRuleCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, item_price, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+                    const [, rows] = await Promise.all([
+                        this.logAudit('Manual Fix Deleted', ref, {
+                            reference_number: ref,
+                            revert_data: prevFix ? {
+                                table_name: 'manual_fixes',
+                                operation: 'upsert',
+                                previous_rows: [prevFix]
+                            } : undefined
+                        }),
+                        fetchAll('transactions', fixRuleCols, q => q.eq('reference_number', ref), 'id')
+                    ]);
+
+                    const result = await this.reapplyRulesTo(rows, {
+                        fixes: this.allFixesData || [],
+                        mappings: this.allMappingsData || undefined
                     });
 
-                    const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
-                    const result = await this.reapplyRulesTo(rows);
-
                     Toast.show(`Fix deleted. ${this.reapplySummary(result)}`, 'success');
-                    this.loadFixes();
+                    if (Array.isArray(this.allFixesData)) {
+                        this.updateFixesStatsAndDropdowns(this.allFixesData);
+                        this.renderFixesPage();
+                        this.syncUnresolvedAfterFixChange(rows, result.appliedChanges || []);
+                    } else {
+                        this.loadFixes();
+                    }
                 } catch (err) {
                     Toast.show('Error deleting fix: ' + err.message, 'error');
                     btn.disabled = false;

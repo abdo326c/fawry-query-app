@@ -318,26 +318,45 @@ export function isLockedTransaction(tx) {
  * @param {{mappings?:object[], includeLocked?:boolean}} [opts]
  *   includeLocked – also return settled / ERP-recorded rows (default false)
  */
-export async function recomputeTransactions(txs, { mappings, includeLocked = false } = {}) {
+export async function recomputeTransactions(txs, { mappings, fixes, links, includeLocked = false } = {}) {
     if (!txs || txs.length === 0) return [];
-    const refs = txs.map(t => String(t.reference_number));
+    const refs = [...new Set(txs.map(t => String(t.reference_number || '').trim()).filter(Boolean))];
 
-    const [fixes, links, allMappings] = await Promise.all([
-        refs.length > 500
-            ? fetchAll('manual_fixes', '*', null, 'reference_number')
-            : fetchByIn('manual_fixes', '*', 'reference_number', refs, 'reference_number'),
-        fetchByIn('links', 'payment_reference_number, custom_input_value', 'payment_reference_number', refs, 'payment_reference_number', 350),
+    const [fetchedFixes, fetchedLinks, allMappings] = await Promise.all([
+        fixes
+            ? Promise.resolve(fixes)
+            : (refs.length > 500
+                ? fetchAll('manual_fixes', '*', null, 'reference_number')
+                : fetchByIn('manual_fixes', '*', 'reference_number', refs, 'reference_number')),
+        links
+            ? Promise.resolve(links)
+            : fetchByIn('links', 'payment_reference_number, custom_input_value', 'payment_reference_number', refs, 'payment_reference_number', 350),
         mappings ? Promise.resolve(mappings) : fetchAll('item_mappings', '*', null, 'item_name')
     ]);
 
-    const fixesMap = new Map(fixes.map(f => [String(f.reference_number), f]));
-    const linksMap = new Map(links.map(l => [String(l.payment_reference_number), l]));
-    const lookupMapping = buildMappingLookup(allMappings);
+    const fixesMap = fetchedFixes instanceof Map
+        ? fetchedFixes
+        : new Map(fetchedFixes.flatMap(f => {
+            const raw = String(f.reference_number ?? '');
+            const trimmed = raw.trim();
+            return trimmed && trimmed !== raw ? [[raw, f], [trimmed, f]] : [[trimmed || raw, f]];
+        }));
+    const linksMap = fetchedLinks instanceof Map
+        ? fetchedLinks
+        : new Map(fetchedLinks.flatMap(l => {
+            const raw = String(l.payment_reference_number ?? '');
+            const trimmed = raw.trim();
+            return trimmed && trimmed !== raw ? [[raw, l], [trimmed, l]] : [[trimmed || raw, l]];
+        }));
+    const lookupMapping = typeof allMappings === 'function' ? allMappings : buildMappingLookup(allMappings);
 
     const changed = [];
     for (const tx of txs) {
-        const ref = String(tx.reference_number);
-        const diff = diffTransaction(tx, { link: linksMap.get(ref), fix: fixesMap.get(ref), lookupMapping });
+        const rawRef = String(tx.reference_number ?? '');
+        const cleanRef = rawRef.trim();
+        const fix = fixesMap.get(cleanRef) ?? fixesMap.get(rawRef);
+        const link = linksMap.get(cleanRef) ?? linksMap.get(rawRef);
+        const diff = diffTransaction(tx, { link, fix, lookupMapping });
         if (!diff.changed) continue;
         if (diff.locked && !includeLocked) continue;
         changed.push({ id: tx.id, fields: diff.fields, tx, diff });
@@ -348,15 +367,19 @@ export async function recomputeTransactions(txs, { mappings, includeLocked = fal
 /**
  * Writes ONLY the rule columns (RULE_FIELDS) of the given rows, by id.
  * Rows with identical new values are grouped into one UPDATE ... WHERE id IN (...), so a
- * mapping change touching thousands of rows is a handful of requests. Settlement, ERP and
- * every other column are never sent, so a concurrent settlement/ERP run can't be overwritten.
+ * mapping change touching thousands of rows is a handful of requests. When many rows have
+ * distinct student_ids (e.g. Bulk Manual Fixes or Auto-Matcher), tries the server-side
+ * bulk_update_rule_fields RPC first to update up to 1,000 rows per request, falling back
+ * automatically to high-concurrency grouped UPDATE queries.
  *
- * @param {{id:any, fields:object}[]} updates
+ * @param {{id:any, fields:object, diff?:object}[]} updates
  * @returns {Promise<number>} rows updated
  * @throws on the first error
  */
-export async function updateRuleFields(updates, { idChunkSize = 300, concurrency = 6 } = {}) {
+export async function updateRuleFields(updates, { idChunkSize = 300, concurrency = 12 } = {}) {
     const groups = new Map();
+    const rpcRows = [];
+
     for (const u of updates || []) {
         if (u.id === null || u.id === undefined) throw new Error('Cannot update a transaction without an id');
         const changedSet = (u.diff && Array.isArray(u.diff.changes) && u.diff.changes.length > 0)
@@ -372,6 +395,15 @@ export async function updateRuleFields(updates, { idChunkSize = 300, concurrency
         const key = JSON.stringify(targetFields.map(f => [f, values[f]]));
         if (!groups.has(key)) groups.set(key, { values, ids: [] });
         groups.get(key).ids.push(u.id);
+
+        rpcRows.push({
+            id: u.id,
+            student_id: u.fields.student_id ?? null,
+            item_name: u.fields.item_name ?? null,
+            mapping: u.fields.mapping ?? null,
+            second_mapping: u.fields.second_mapping ?? null,
+            id_status: u.fields.id_status ?? null
+        });
     }
 
     const tasks = [];
@@ -383,6 +415,31 @@ export async function updateRuleFields(updates, { idChunkSize = 300, concurrency
                 if (error) throw error;
                 return chunk.length;
             });
+        }
+    }
+
+    // Fast path for Bulk Manual Fixes / Auto-Matcher / Re-apply where many rows have distinct student_ids:
+    // Use single-statement JSONB batch RPC if available and there are many distinct groups
+    if (tasks.length > 8 && typeof supabase.rpc === 'function') {
+        try {
+            const rpcChunkSize = 1000;
+            const rpcTasks = [];
+            for (let i = 0; i < rpcRows.length; i += rpcChunkSize) {
+                const chunk = rpcRows.slice(i, i + rpcChunkSize);
+                rpcTasks.push(async () => {
+                    const { data, error } = await supabase.rpc('bulk_update_rule_fields', { p_updates: chunk });
+                    if (error) throw error;
+                    return typeof data === 'number' ? data : chunk.length;
+                });
+            }
+            let rpcSaved = 0;
+            for (let i = 0; i < rpcTasks.length; i += 4) {
+                const res = await Promise.all(rpcTasks.slice(i, i + 4).map(fn => fn()));
+                rpcSaved += res.reduce((a, b) => a + b, 0);
+            }
+            return rpcSaved;
+        } catch (_rpcErr) {
+            // RPC not yet deployed in DB; fall back seamlessly to parallel grouped UPDATE tasks below
         }
     }
 

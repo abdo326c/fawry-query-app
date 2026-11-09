@@ -437,3 +437,48 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_auth_user();
+
+-- 13. Bulk Rule Fields Update RPC (accelerates Bulk Manual Fixes, Auto-Matcher & Re-apply Rules)
+CREATE OR REPLACE FUNCTION public.bulk_update_rule_fields(p_updates jsonb)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $function$
+DECLARE
+  v_updated integer := 0;
+BEGIN
+  IF p_updates IS NULL OR jsonb_typeof(p_updates) <> 'array' OR jsonb_array_length(p_updates) = 0 THEN
+    RETURN 0;
+  END IF;
+
+  WITH payload AS (
+    SELECT
+      (elem ->> 'id')::bigint AS id,
+      elem ->> 'student_id' AS student_id,
+      elem ->> 'item_name' AS item_name,
+      elem ->> 'mapping' AS mapping,
+      elem ->> 'second_mapping' AS second_mapping,
+      elem ->> 'id_status' AS id_status
+    FROM jsonb_array_elements(p_updates) AS elem
+    WHERE (elem ->> 'id') IS NOT NULL
+  ),
+  upd AS (
+    UPDATE public.transactions t
+    SET
+      student_id = p.student_id,
+      item_name = p.item_name,
+      mapping = p.mapping,
+      second_mapping = p.second_mapping,
+      id_status = p.id_status
+    FROM payload p
+    WHERE t.id = p.id
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_updated FROM upd;
+
+  RETURN v_updated;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.bulk_update_rule_fields(jsonb) TO authenticated;
