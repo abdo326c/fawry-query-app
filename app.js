@@ -7365,7 +7365,7 @@ class App {
         if (refresh || !this.erpBaseData || this.erpBaseKey !== baseKey) {
             let baseData = [];
             try {
-                const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, check_column, item_price, mapping, second_mapping, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher, erp_recorded_at';
+                const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, check_column, item_price, mapping, second_mapping, merchant_name, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher';
                 baseData = await fetchAll('transactions', erpCols, q => {
                     if (dateFrom) q = q.gte('payment_date', dateFrom);
                     if (dateTo) q = q.lte('payment_date', dateTo);
