@@ -481,7 +481,44 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(document.querySelector('.nav-link[data-tab="foreign-transactions"]')).not.toBeNull();
     expect(document.getElementById('view-foreign-transactions')).not.toBeNull();
     expect(document.getElementById('btn-show-foreign-import')).not.toBeNull();
+    expect(document.getElementById('btn-foreign-detect-duplicates')).not.toBeNull();
+    expect(document.getElementById('btn-foreign-double-payments')).not.toBeNull();
     expect(document.getElementById('btn-foreign-clear-all')).toBeNull();
     expect(document.getElementById('modal-foreign-import')).not.toBeNull();
     expect(document.getElementById('modal-foreign-fix')).not.toBeNull();
+
+    // Verify Foreign Transactions table renders 9 columns with Tuition & NuMisrUsd5 and detects duplicates
+    window.app.foreignTransactions = [
+        {
+            _uid: 'dup_1',
+            reference_number: 'FJB2600526681048',
+            value_date: '2026-01-06',
+            student_id: '241002323',
+            amount: 749.47,
+            currency: 'USD',
+            description: 'Cash Deposit تسنيم عمر 241002323',
+            id_status: 'Valid'
+        },
+        {
+            _uid: 'dup_2',
+            reference_number: 'FJB2600526681048',
+            value_date: '2026-01-06',
+            student_id: '',
+            amount: 749.47,
+            currency: 'USD',
+            description: 'Cash Deposit تسنيم عمر 241002323',
+            id_status: 'Missing ID'
+        }
+    ];
+    window.app.applyForeignFilters();
+    const foreignTbody = document.getElementById('foreign-transactions-body');
+    expect(foreignTbody.innerHTML).toContain('Tuition');
+    expect(foreignTbody.innerHTML).toContain('NuMisrUsd5');
+    expect(foreignTbody.querySelectorAll('tr').length).toBe(2);
+
+    await window.app.detectForeignDuplicates();
+    expect(window.duplicateForeignUidsToDelete.length).toBe(1);
+    await window.app.cleanupForeignDuplicates();
+    expect(window.app.foreignTransactions.length).toBe(1);
+    expect(window.app.foreignTransactions[0].student_id).toBe('241002323');
 });

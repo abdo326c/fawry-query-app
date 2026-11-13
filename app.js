@@ -21,8 +21,11 @@ import {
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
+    reconstructBanqueMisrPdfLinesFromPages,
     matchForeignDepositsToStudents,
-    normalizePersonName
+    normalizePersonName,
+    DEFAULT_FOREIGN_BANK,
+    DEFAULT_FOREIGN_MAPPING
 } from './foreign-transactions.js';
 
 // Helper to run async task functions with bounded concurrency
@@ -5413,6 +5416,10 @@ class App {
         const btnCleanup = document.getElementById('btn-cleanup-duplicates');
         if (btnCleanup) {
             btnCleanup.addEventListener('click', async () => {
+                if (window.duplicateCleanupMode === 'foreign') {
+                    await this.cleanupForeignDuplicates();
+                    return;
+                }
                 const ids = window.duplicateIdsToDelete || [];
                 if (ids.length === 0) return;
                 
@@ -5614,6 +5621,7 @@ class App {
                 }
             }
             
+            window.duplicateCleanupMode = 'fawry';
             window.duplicateIdsToDelete = toDeleteIds;
             
             document.getElementById('duplicates-summary').innerText = `Found ${duplicates.length} duplicated transaction(s) (${toDeleteIds.length} extra row(s) will be removed). Settled / ERP-recorded copies are always kept.`;
@@ -9967,6 +9975,48 @@ class App {
     // FOREIGN TRANSACTIONS (Smart Bank Statement Student Deposit Extractor)
     // =========================================================================
 
+    normalizeForeignTransactionRow(r, idx = 0) {
+        if (!r) return r;
+        const amount = Number(r.amount ?? r.item_price) || 0;
+        const effectiveDate = r.value_date || r.payment_date || r.transaction_date || '';
+        const ref = r.reference_number || r.external_ref || r.transaction_ref || '';
+        const desc = r.description ?? r.item_name ?? '';
+        let studentId = r.student_id || '';
+        let matchedName = r.matched_student_name || '';
+        let matchSource = r.match_source || (studentId ? 'statement_id' : 'unmatched');
+
+        // Also check global Manual Fixes (this.fixes) by reference_number to fix missing/invalid IDs automatically
+        if ((!studentId || validateID(studentId) !== 'Valid') && ref && this.fixes && this.fixes[ref]) {
+            const fixEntry = this.fixes[ref];
+            const fixedId = typeof fixEntry === 'object' ? fixEntry.student_id : fixEntry;
+            if (fixedId && validateID(fixedId) === 'Valid') {
+                studentId = String(fixedId).trim();
+                matchSource = 'manual';
+            }
+        }
+
+        const idStatus = studentId ? validateID(studentId) : 'Missing ID';
+        return {
+            ...r,
+            _uid: r._uid || `${ref}_${effectiveDate}_${amount}_${idx}`,
+            reference_number: ref,
+            value_date: effectiveDate,
+            payment_date: effectiveDate,
+            student_id: studentId,
+            matched_student_name: matchedName,
+            amount,
+            item_price: amount,
+            description: desc,
+            item_name: desc,
+            mapping: r.mapping || DEFAULT_FOREIGN_MAPPING,
+            second_mapping: r.second_mapping || '',
+            bank: DEFAULT_FOREIGN_BANK,
+            id_status: idStatus,
+            match_source: matchSource,
+            check_column: r.check_column || `${ref}-${String(desc).trim()}`
+        };
+    }
+
     initForeignTransactions() {
         this.foreignTransactions = [];
         this.filteredForeignTransactions = [];
@@ -9983,7 +10033,9 @@ class App {
             const cached = localStorage.getItem(this.foreignStorageKey);
             if (cached) {
                 const parsed = JSON.parse(cached);
-                if (Array.isArray(parsed)) this.foreignTransactions = parsed;
+                if (Array.isArray(parsed)) {
+                    this.foreignTransactions = parsed.map((r, i) => this.normalizeForeignTransactionRow(r, i));
+                }
             }
         } catch (_e) {
             // ignore storage errors
@@ -10164,7 +10216,13 @@ class App {
             }
         });
 
-        // Action Buttons: Auto-Match Names, Export ERP, Copy Email, Export Excel
+        // Action Buttons: Detect Duplicates, Double Payments, Auto-Match Names, Export ERP, Copy Email, Export Excel
+        document.getElementById('btn-foreign-detect-duplicates')?.addEventListener('click', () => {
+            this.detectForeignDuplicates();
+        });
+        document.getElementById('btn-foreign-double-payments')?.addEventListener('click', () => {
+            this.openForeignDoublePaymentsModal();
+        });
         document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
             this.runForeignAutoMatchNames();
         });
@@ -10264,11 +10322,15 @@ class App {
                 const byRef = new Map();
                 (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
                 data.forEach(r => byRef.set(r.reference_number, r));
-                this.foreignTransactions = [...byRef.values()];
+                this.foreignTransactions = [...byRef.values()].map((r, i) => this.normalizeForeignTransactionRow(r, i));
                 this.persistForeignTransactionsLocal();
+            } else if (Array.isArray(this.foreignTransactions)) {
+                this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
             }
         } catch (_e) {
-            // table may not exist yet in Supabase; local cache is used seamlessly
+            if (Array.isArray(this.foreignTransactions)) {
+                this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
+            }
         }
         this.applyForeignFilters();
     }
@@ -10295,39 +10357,20 @@ class App {
         const pdfjsLib = await this.loadPdfJsLibrary();
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const pageTexts = [];
+        const pagesItems = [];
 
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
             const textContent = await page.getTextContent();
-            // Sort items top-to-bottom (descending Y in PDF coordinates), then left-to-right (ascending X)
             const items = (textContent.items || []).map(item => ({
                 str: item.str || '',
                 x: item.transform ? item.transform[4] : 0,
                 y: item.transform ? item.transform[5] : 0
             }));
-            items.sort((a, b) => {
-                if (Math.abs(b.y - a.y) > 4) return b.y - a.y;
-                return a.x - b.x;
-            });
-
-            const lines = [];
-            let currentLine = [];
-            let lastY = null;
-            for (const it of items) {
-                if (!it.str.trim()) continue;
-                if (lastY !== null && Math.abs(it.y - lastY) > 4) {
-                    lines.push(currentLine.join(' '));
-                    currentLine = [];
-                }
-                currentLine.push(it.str.trim());
-                lastY = it.y;
-            }
-            if (currentLine.length > 0) lines.push(currentLine.join(' '));
-            pageTexts.push(lines.join('\n'));
+            pagesItems.push(items);
         }
 
-        return pageTexts.join('\n');
+        return reconstructBanqueMisrPdfLinesFromPages(pagesItems);
     }
 
     async parseSingleForeignStatementFile(file) {
@@ -10373,13 +10416,25 @@ class App {
                 combinedTreasury.push(...(parsed.excludedTreasury || []));
             }
 
-            // Deduplicate deposits across files by reference_number (e.g. if user uploaded overlapping CSV & PDF)
-            const uniqueByRef = new Map();
-            combinedDeposits.forEach(d => {
-                uniqueByRef.set(d.reference_number, d);
+            // Try every automatic fix first: Student Directory name matching + Manual Fixes + previous manual assignments
+            const existingManualByRef = new Map();
+            (this.foreignTransactions || []).forEach(r => {
+                if (r.reference_number && r.match_source === 'manual' && r.student_id) {
+                    existingManualByRef.set(r.reference_number, r);
+                }
             });
 
-            const matchedDeposits = matchForeignDepositsToStudents([...uniqueByRef.values()], students);
+            const matchedDeposits = matchForeignDepositsToStudents(combinedDeposits, students).map((d, idx) => {
+                const norm = this.normalizeForeignTransactionRow(d, idx);
+                const prevManual = existingManualByRef.get(norm.reference_number);
+                if ((!norm.student_id || norm.id_status !== 'Valid') && prevManual) {
+                    norm.student_id = prevManual.student_id;
+                    norm.matched_student_name = prevManual.matched_student_name || norm.matched_student_name;
+                    norm.id_status = validateID(prevManual.student_id);
+                    norm.match_source = 'manual';
+                }
+                return norm;
+            });
 
             this.pendingForeignExtraction = {
                 metadata: lastMeta,
@@ -10421,12 +10476,13 @@ class App {
                 <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
                     <span><strong>Account:</strong> <code style="color: #38bdf8;">${escapeHTML(ext.metadata?.accountNumber || 'Banque Misr')}</code></span>
                     <span><strong>Currency:</strong> <span class="badge" style="background: rgba(16,185,129,0.15); color: #10b981;">${escapeHTML(currency)}</span></span>
+                    <span><strong>Bank:</strong> <code style="color: #10b981;">${escapeHTML(DEFAULT_FOREIGN_BANK)}</code></span>
                     ${ext.metadata?.dateFrom ? `<span><strong>Period:</strong> ${escapeHTML(ext.metadata.dateFrom)} &rarr; ${escapeHTML(ext.metadata.dateTo || '')}</span>` : ''}
                 </div>
                 <div style="display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap;">
                     <span style="color: var(--success);">Exact ID: <strong>${exactIds}</strong></span>
                     <span style="color: #38bdf8;">Name Matched: <strong>${nameMatches}</strong></span>
-                    <span style="color: var(--warning, #f59e0b);">Needs ID: <strong>${unmatched}</strong></span>
+                    <span style="color: var(--warning, #f59e0b);">Missing ID: <strong>${unmatched}</strong></span>
                     <span style="color: var(--danger);">Reversed Excluded: <strong>${(ext.excludedReversals || []).length}</strong></span>
                 </div>
             `;
@@ -10451,7 +10507,7 @@ class App {
                     <th>Event</th>
                     <th style="text-align: right;">Credit</th>
                     <th style="text-align: right;">Debit</th>
-                    <th>Narrative</th>
+                    <th>Description</th>
                     <th>Why Excluded</th>
                 </tr>
             `;
@@ -10477,46 +10533,37 @@ class App {
         thead.innerHTML = `
             <tr>
                 <th>Ref Number</th>
+                <th>Date</th>
+                <th>Student ID</th>
+                <th>Item Price (${escapeHTML(currency)})</th>
                 <th>Description</th>
-                <th>Student ID *</th>
-                <th>Student Name / Depositor</th>
-                <th>Value Date</th>
-                <th style="text-align: right;">Credit (${escapeHTML(currency)})</th>
-                <th>Match Status</th>
+                <th>Mapping</th>
+                <th>Bank</th>
+                <th>ID Status</th>
             </tr>
         `;
         if (!ext.deposits || ext.deposits.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No student deposits found in this file.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No student deposits found in this file.</td></tr>`;
             return;
         }
 
         tbody.innerHTML = ext.deposits.map(d => {
             const isValid = d.id_status === 'Valid';
-            const statusBadge = d.match_source === 'statement_id'
-                ? `<span class="badge" style="background: rgba(16,185,129,0.15); color: #10b981; font-size: 0.72rem;">Exact Statement ID</span>`
-                : d.match_source === 'name_match'
-                ? `<span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; font-size: 0.72rem;">Name Matched (${d.match_confidence || 85}%)</span>`
-                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.72rem;">Missing ID (Required)</span>`;
+            const statusBadge = isValid
+                ? `<span class="badge valid">Valid</span>`
+                : `<span class="badge missing">${escapeHTML(d.id_status || 'Missing ID')}</span>`;
 
             return `
                 <tr>
-                    <td style="font-family: monospace; font-size: 0.78rem; white-space: nowrap;">
-                        <strong>${escapeHTML(d.reference_number)}</strong>
-                        <span class="badge" style="font-size: 0.68rem; margin-left: 4px;">${escapeHTML(d.transaction_code)}</span>
-                    </td>
+                    <td style="white-space: nowrap;"><strong>${escapeHTML(d.reference_number)}</strong></td>
+                    <td style="white-space: nowrap;">${escapeHTML(toDateOnly(d.value_date || d.payment_date || '-'))}</td>
+                    <td style="font-weight: 700;">${escapeHTML(d.student_id || '')}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(currency)} ${escapeHTML(formatMoney(d.amount))}</td>
                     <td style="font-size: 0.78rem; max-width: 280px; color: var(--text-secondary);" title="${escapeHTML(d.description || '')}">
                         ${escapeHTML(d.description || '-')}
                     </td>
-                    <td style="font-family: monospace; font-weight: 700; color: ${isValid ? '#10b981' : 'var(--danger)'}; white-space: nowrap;">
-                        ${escapeHTML(d.student_id || 'Missing ID')}
-                    </td>
-                    <td>
-                        <div style="font-weight: 600;">${escapeHTML(d.extracted_name || '-')}</div>
-                        ${d.matched_student_name ? `<div style="font-size: 0.74rem; color: #38bdf8;">Directory: ${escapeHTML(d.matched_student_name)}</div>` : ''}
-                        ${d.handler_name ? `<div style="font-size: 0.72rem; color: var(--text-muted);">بمناولة: ${escapeHTML(d.handler_name)}</div>` : ''}
-                    </td>
-                    <td style="white-space: nowrap;">${escapeHTML(d.value_date || '-')}</td>
-                    <td style="text-align: right; font-weight: 700; font-family: monospace;">${escapeHTML(formatMoney(d.amount))}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(d.mapping || DEFAULT_FOREIGN_MAPPING)}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(d.bank || DEFAULT_FOREIGN_BANK)}</td>
                     <td>${statusBadge}</td>
                 </tr>
             `;
@@ -10527,37 +10574,34 @@ class App {
         const ext = this.pendingForeignExtraction;
         if (!ext || !Array.isArray(ext.deposits) || ext.deposits.length === 0) return;
 
-        const byRef = new Map();
-        (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
-        ext.deposits.forEach(d => {
-            const existing = byRef.get(d.reference_number);
-            if (existing && existing.match_source === 'manual' && existing.student_id) {
-                byRef.set(d.reference_number, { ...d, student_id: existing.student_id, matched_student_name: existing.matched_student_name, id_status: existing.id_status, match_source: 'manual' });
-            } else {
-                byRef.set(d.reference_number, d);
-            }
+        const baseIdx = (this.foreignTransactions || []).length;
+        const incomingRows = ext.deposits.map((d, i) => {
+            const norm = this.normalizeForeignTransactionRow(d, baseIdx + i);
+            norm._uid = `${norm.reference_number}_${Date.now()}_${baseIdx + i}`;
+            return norm;
         });
 
-        this.foreignTransactions = [...byRef.values()];
+        // Append incoming rows so if duplicate statements/transactions were imported, Detect Duplicates can inspect & remove them
+        this.foreignTransactions = [...(this.foreignTransactions || []), ...incomingRows];
         this.persistForeignTransactionsLocal();
 
         // Also upsert into Supabase foreign_transactions if table exists
         try {
-            const dbRows = ext.deposits.map(({ match_confidence, external_ref, ...rest }) => rest);
+            const dbRows = incomingRows.map(({ match_confidence, external_ref, _uid, item_price, payment_date, item_name, mapping, second_mapping, bank, check_column, ...rest }) => rest);
             await supabase.from('foreign_transactions').upsert(dbRows, { onConflict: 'reference_number' });
         } catch (_e) {
             // localStorage already updated seamlessly
         }
 
         const accBadge = document.getElementById('foreign-stat-account-badge');
-        if (accBadge && ext.metadata?.accountNumber) {
-            accBadge.textContent = `Account ${ext.metadata.accountNumber} · ${ext.metadata.currency || 'USD'}`;
+        if (accBadge) {
+            accBadge.textContent = `Bank: ${DEFAULT_FOREIGN_BANK} · ${ext.metadata?.currency || 'USD'}`;
         }
 
         document.getElementById('modal-foreign-import')?.classList.add('hidden');
         this.pendingForeignExtraction = null;
         this.applyForeignFilters();
-        Toast.show(`Saved ${ext.deposits.length} student deposits to Foreign Transactions`, 'success');
+        Toast.show(`Saved ${incomingRows.length} student deposits to Foreign Transactions`, 'success');
     }
 
     applyForeignFilters() {
@@ -10567,13 +10611,14 @@ class App {
         const searchRaw = (document.getElementById('foreign-search-input')?.value || '').trim().toLowerCase();
         const searchNorm = normalizePersonName(searchRaw);
 
-        let rows = [...(this.foreignTransactions || [])];
+        let rows = (this.foreignTransactions || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
+        this.foreignTransactions = rows;
 
         if (dateFrom) {
-            rows = rows.filter(r => (r.value_date || r.transaction_date || '') >= dateFrom);
+            rows = rows.filter(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date || '') >= dateFrom);
         }
         if (dateTo) {
-            rows = rows.filter(r => (r.value_date || r.transaction_date || '') <= dateTo);
+            rows = rows.filter(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date || '') <= dateTo);
         }
         if (codeFilter) {
             rows = rows.filter(r => String(r.transaction_code || '').toUpperCase() === codeFilter.toUpperCase());
@@ -10588,7 +10633,7 @@ class App {
 
         if (searchRaw) {
             rows = rows.filter(r => {
-                const hayRaw = `${r.reference_number || ''} ${r.transaction_ref || ''} ${r.student_id || ''} ${r.extracted_name || ''} ${r.matched_student_name || ''} ${r.handler_name || ''} ${r.description || ''}`.toLowerCase();
+                const hayRaw = `${r.reference_number || ''} ${r.transaction_ref || ''} ${r.student_id || ''} ${r.extracted_name || ''} ${r.matched_student_name || ''} ${r.handler_name || ''} ${r.description || ''} ${r.mapping || ''} ${r.bank || ''}`.toLowerCase();
                 if (hayRaw.includes(searchRaw)) return true;
                 if (searchNorm) {
                     const hayNorm = normalizePersonName(`${r.extracted_name || ''} ${r.matched_student_name || ''} ${r.handler_name || ''} ${r.description || ''}`);
@@ -10601,7 +10646,7 @@ class App {
         const col = this.foreignSortCol || 'value_date';
         const dir = this.foreignSortAsc ? 1 : -1;
         rows.sort((a, b) => {
-            if (col === 'amount') {
+            if (col === 'amount' || col === 'item_price') {
                 return ((Number(a.amount) || 0) - (Number(b.amount) || 0)) * dir;
             }
             const va = String(a[col] ?? '').toLowerCase();
@@ -10639,7 +10684,7 @@ class App {
         if (rows.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                    <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
                         No foreign transactions match the current filters. Click <strong>Import Bank Statement (PDF / Excel)</strong> to load statement deposits.
                     </td>
                 </tr>
@@ -10659,84 +10704,56 @@ class App {
         if (prevBtn) prevBtn.disabled = this.foreignPage <= 1;
         if (nextBtn) nextBtn.disabled = this.foreignPage >= totalPages;
 
-        tbody.innerHTML = pageRows.map((row, idx) => {
-            const isValid = row.id_status === 'Valid';
-            const usedTxFallback = !row.external_ref && row.transaction_ref && row.reference_number === row.transaction_ref;
-            const codeBadge = row.transaction_code === 'T35'
-                ? `<span class="badge" style="background: rgba(168,85,247,0.16); color: #c084fc; font-size: 0.68rem;">T35 · SWIFT</span>`
-                : `<span class="badge" style="background: rgba(56,189,248,0.14); color: #38bdf8; font-size: 0.68rem;">${escapeHTML(row.transaction_code || 'CHF')} · Cash</span>`;
+        tbody.innerHTML = pageRows.map((t, idx) => {
+            let statusClass = 'valid';
+            if (!t.id_status || t.id_status.includes('Missing')) statusClass = 'missing';
+            else if (t.id_status.includes('Error')) statusClass = 'error';
 
-            const idCellHtml = isValid
-                ? `<div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                       <span class="student-dir-id-copy" data-copy-foreign-id="${escapeHTML(row.student_id)}" title="Click to copy Student ID" style="cursor: pointer; font-family: monospace; font-weight: 700; color: #38bdf8; background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.28); padding: 0.18rem 0.5rem; border-radius: 6px;">
-                           ${escapeHTML(row.student_id)}
-                       </span>
-                   </div>`
-                : `<div>
-                       <span class="badge" style="background: rgba(239,68,68,0.16); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(row.student_id || 'Missing ID (Required)')}</span>
-                       <div style="font-size: 0.7rem; color: var(--danger); margin-top: 2px;">${escapeHTML(row.id_status || 'Mandatory')}</div>
-                   </div>`;
+            const statusText = escapeHTML(t.id_status || 'Missing ID');
+            const statusTitle = statusClass === 'error' ? ` title="${statusText}"` : '';
+            const shortStatus = statusClass === 'error' ? 'Error' : statusText;
+            const errorDetail = statusClass === 'error'
+                ? `<div style="font-size: 0.68rem; color: var(--danger); margin-top: 0.15rem; line-height: 1.15;">${escapeHTML(String(t.id_status).replace(/^Error:\s*/i, ''))}</div>`
+                : '';
 
-            const sourceBadge = row.match_source === 'name_match'
-                ? `<span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; font-size: 0.7rem;" title="Matched automatically by Student Name against Student Directory">Name Match</span>`
-                : row.match_source === 'manual'
-                ? `<span class="badge" style="background: rgba(168,85,247,0.15); color: #c084fc; font-size: 0.7rem;">Manual Match</span>`
-                : isValid
-                ? `<span class="badge" style="background: rgba(16,185,129,0.14); color: #10b981; font-size: 0.7rem;">Valid ID</span>`
-                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.7rem;">Needs ID</span>`;
+            const rowCurrency = t.currency || currency;
 
             return `
-                <tr style="${!isValid ? 'background: rgba(239, 68, 68, 0.04);' : ''}">
-                    <td style="white-space: nowrap;">
-                        <div style="font-family: monospace; font-weight: 700; color: var(--primary);" title="${usedTxFallback ? 'From Transaction Reference (External Ref empty)' : 'From External. Ref No'}">${escapeHTML(row.reference_number)}</div>
-                        <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 2px;">
-                            ${codeBadge}
-                            ${row.transaction_ref && row.transaction_ref !== row.reference_number ? `<span style="font-size: 0.7rem; color: var(--text-muted); font-family: monospace;" title="Transaction Reference">${escapeHTML(row.transaction_ref)}</span>` : ''}
-                        </div>
-                    </td>
-                    <td style="max-width: 340px; font-size: 0.82rem; color: var(--text-main); line-height: 1.4;" title="${escapeHTML(row.description || '')}">
-                        ${escapeHTML(row.description || '-')}
-                    </td>
-                    <td style="white-space: nowrap;">${idCellHtml}</td>
+                <tr class="foreign-tx-row" data-idx="${idx}" style="cursor: pointer;" title="Click to inspect or fix transaction details">
+                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
+                    <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.value_date || t.payment_date || t.transaction_date))}</td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id || '')}</strong></td>
+                    <td style="white-space: nowrap;">${escapeHTML(rowCurrency)} ${formatMoney(t.amount ?? t.item_price)}</td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 260px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.description || t.item_name || '')}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(t.mapping || DEFAULT_FOREIGN_MAPPING)}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(t.second_mapping) || '-'}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(t.bank || DEFAULT_FOREIGN_BANK)}</td>
                     <td>
-                        <div style="font-weight: 600; color: var(--text-main);">${escapeHTML(row.extracted_name || '-')}</div>
-                        ${row.matched_student_name ? `<div style="font-size: 0.75rem; color: #10b981; margin-top: 2px;"><i data-lucide="user-check" style="width: 12px; height: 12px; vertical-align: -2px;"></i> ${escapeHTML(row.matched_student_name)}</div>` : ''}
-                        ${row.handler_name ? `<div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 2px;">بمناولة: ${escapeHTML(row.handler_name)}</div>` : ''}
-                    </td>
-                    <td style="white-space: nowrap;">
-                        <div style="font-weight: 600;">${escapeHTML(row.value_date || '-')}</div>
-                        ${row.transaction_datetime ? `<div style="font-size: 0.7rem; color: var(--text-muted);">Tx: ${escapeHTML(row.transaction_datetime)}</div>` : ''}
-                    </td>
-                    <td style="text-align: right; white-space: nowrap;">
-                        <span style="font-weight: 700; font-family: monospace; font-size: 0.95rem; color: var(--text-main);">${escapeHTML(formatMoney(row.amount))}</span>
-                        <span style="font-size: 0.72rem; color: #38bdf8; margin-left: 3px; font-weight: 600;">${escapeHTML(row.currency || currency)}</span>
-                    </td>
-                    <td style="text-align: right; white-space: nowrap;">
-                        <div style="display: inline-flex; align-items: center; gap: 0.4rem;">
-                            ${sourceBadge}
-                            <button type="button" class="btn btn-outline btn-sm foreign-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px; ${!isValid ? 'border-color: var(--danger); color: var(--danger);' : ''}">
-                                <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> ${isValid ? 'Edit ID' : 'Assign ID *'}
-                            </button>
+                        <div style="display: inline-flex; flex-direction: column; align-items: flex-start;">
+                            <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                                <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
+                                <button type="button" class="tx-quick-fix-btn ${statusClass} foreign-fix-btn" data-idx="${idx}" title="Fix / Edit Student ID for ${escapeHTML(t.reference_number)}">
+                                    <i data-lucide="wrench"></i>
+                                </button>
+                            </div>
+                            ${errorDetail}
                         </div>
                     </td>
                 </tr>
             `;
         }).join('');
 
-        tbody.querySelectorAll('[data-copy-foreign-id]').forEach(el => {
-            el.addEventListener('click', (e) => {
+        tbody.querySelectorAll('.foreign-fix-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const idVal = el.getAttribute('data-copy-foreign-id');
-                if (idVal && navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(idVal);
-                    Toast.show(`Copied Student ID: ${idVal}`, 'success');
-                }
+                const row = pageRows[parseInt(btn.getAttribute('data-idx'), 10)];
+                if (row) this.openForeignFixModal(row);
             });
         });
 
-        tbody.querySelectorAll('.foreign-fix-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const row = pageRows[parseInt(btn.getAttribute('data-idx'), 10)];
+        tbody.querySelectorAll('.foreign-tx-row').forEach(tr => {
+            tr.addEventListener('click', () => {
+                const row = pageRows[parseInt(tr.getAttribute('data-idx'), 10)];
                 if (row) this.openForeignFixModal(row);
             });
         });
@@ -10760,7 +10777,7 @@ class App {
         const box = document.getElementById('foreign-fix-narrative-box');
         if (box) {
             box.innerHTML = `
-                <div><strong>Ref:</strong> <code>${escapeHTML(row.reference_number)}</code> &nbsp;|&nbsp; <strong>Value Date:</strong> ${escapeHTML(row.value_date || '-')} &nbsp;|&nbsp; <strong>Amount:</strong> <span style="color: #38bdf8; font-weight: 700;">${escapeHTML(row.currency || 'USD')} ${escapeHTML(formatMoney(row.amount))}</span></div>
+                <div><strong>Ref:</strong> <code>${escapeHTML(row.reference_number)}</code> &nbsp;|&nbsp; <strong>Date:</strong> ${escapeHTML(toDateOnly(row.value_date || row.payment_date || '-'))} &nbsp;|&nbsp; <strong>Amount:</strong> <span style="color: #38bdf8; font-weight: 700;">${escapeHTML(row.currency || 'USD')} ${escapeHTML(formatMoney(row.amount))}</span></div>
                 <div style="margin-top: 0.35rem;"><strong>Extracted Student:</strong> ${escapeHTML(row.extracted_name || '-')} &nbsp;|&nbsp; <strong>Depositor (بمناولة):</strong> ${escapeHTML(row.handler_name || '-')}</div>
                 <div style="margin-top: 0.35rem; color: var(--text-muted);"><strong>Description:</strong> ${escapeHTML(row.description || '')}</div>
             `;
@@ -10779,33 +10796,29 @@ class App {
         const newName = (document.getElementById('foreign-fix-student-name')?.value || '').trim();
         if (!ref) return;
 
-        if (!newId) {
-            Toast.show('Student ID is mandatory. Please enter or select a valid Student ID.', 'warning');
-            document.getElementById('foreign-fix-student-id')?.focus();
-            return;
-        }
-        const status = validateID(newId);
-        if (status !== 'Valid') {
-            Toast.show(`Invalid Student ID (${status}). Please enter a valid Student ID.`, 'warning');
-            document.getElementById('foreign-fix-student-id')?.focus();
-            return;
-        }
+        const status = newId ? validateID(newId) : 'Missing ID';
+        const matchingRows = (this.foreignTransactions || []).filter(r => r.reference_number === ref);
+        if (matchingRows.length === 0) return;
 
-        const target = (this.foreignTransactions || []).find(r => r.reference_number === ref);
-        if (!target) return;
+        matchingRows.forEach(target => {
+            target.student_id = newId;
+            target.matched_student_name = newName || target.matched_student_name;
+            target.id_status = status;
+            target.match_source = newId ? 'manual' : 'unmatched';
+        });
 
-        target.student_id = newId;
-        target.matched_student_name = newName || target.matched_student_name;
-        target.id_status = status;
-        target.match_source = 'manual';
+        // Also store in this.fixes if valid so future imports or auto-fixes remember this reference
+        if (newId && this.fixes) {
+            this.fixes[ref] = newId;
+        }
 
         this.persistForeignTransactionsLocal();
         try {
             await supabase.from('foreign_transactions').update({
-                student_id: target.student_id,
-                matched_student_name: target.matched_student_name,
-                id_status: target.id_status,
-                match_source: target.match_source
+                student_id: newId,
+                matched_student_name: newName,
+                id_status: status,
+                match_source: newId ? 'manual' : 'unmatched'
             }).eq('reference_number', ref);
         } catch (_e) {
             // ignore if table not migrated yet
@@ -10813,7 +10826,196 @@ class App {
 
         document.getElementById('modal-foreign-fix')?.classList.add('hidden');
         this.applyForeignFilters();
-        Toast.show(`Saved Student ID ${newId} for Ref ${ref}`, 'success');
+        Toast.show(newId ? `Saved Student ID ${newId} for Ref ${ref}` : `Updated Ref ${ref}`, 'success');
+    }
+
+    async detectForeignDuplicates() {
+        const btn = document.getElementById('btn-foreign-detect-duplicates');
+        const originalText = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Detecting...';
+            btn.disabled = true;
+            if (window.lucide) lucide.createIcons();
+        }
+
+        try {
+            const allData = (this.foreignTransactions || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
+            this.foreignTransactions = allData;
+
+            const grouped = {};
+            for (const tx of allData) {
+                if (!tx.reference_number) continue;
+                const normDesc = String(tx.description || tx.item_name || '').replace(/\s+/g, ' ').trim();
+                const check = tx.check_column != null
+                    ? String(tx.check_column).replace(/\s+/g, ' ').trim()
+                    : `${tx.reference_number}-${normDesc}`;
+                // Group by reference_number + price + normalized check_column (same mechanism as Fawry detectDuplicates)
+                const key = `${tx.reference_number}|${Number(tx.amount || tx.item_price || 0).toFixed(2)}|${check}`;
+                if (!grouped[key]) grouped[key] = [];
+                grouped[key].push(tx);
+            }
+
+            // Also group by transaction_ref + price + date when one row used external_ref and another used transaction_ref
+            const txRefGrouped = {};
+            for (const tx of allData) {
+                if (!tx.transaction_ref) continue;
+                const txKey = `${tx.transaction_ref}|${Number(tx.amount || tx.item_price || 0).toFixed(2)}|${toDateOnly(tx.value_date || tx.payment_date)}`;
+                if (!txRefGrouped[txKey]) txRefGrouped[txKey] = [];
+                txRefGrouped[txKey].push(tx);
+            }
+
+            const duplicates = [];
+            const toDeleteUidsSet = new Set();
+
+            const processGroup = (txs) => {
+                if (txs.length <= 1) return;
+                // Prefer rows with Valid Student ID or manual fix
+                txs.sort((a, b) => {
+                    const aScore = (a.id_status === 'Valid' ? 100 : 0) + (a.match_source === 'manual' ? 50 : 0) + (a.external_ref ? 25 : 0);
+                    const bScore = (b.id_status === 'Valid' ? 100 : 0) + (b.match_source === 'manual' ? 50 : 0) + (b.external_ref ? 25 : 0);
+                    return bScore - aScore;
+                });
+
+                let addedAny = false;
+                for (let i = 1; i < txs.length; i++) {
+                    if (!toDeleteUidsSet.has(txs[i]._uid)) {
+                        toDeleteUidsSet.add(txs[i]._uid);
+                        addedAny = true;
+                    }
+                }
+                if (addedAny) {
+                    duplicates.push({
+                        ref: txs[0].reference_number,
+                        name: txs[0].description || txs[0].item_name || '',
+                        price: txs[0].amount ?? txs[0].item_price,
+                        trimmedCheck: txs[0].check_column || `${txs[0].reference_number}-${txs[0].description || ''}`,
+                        untrimmedCheck: txs[1].check_column || `${txs[1].reference_number}-${txs[1].description || ''}`
+                    });
+                }
+            };
+
+            Object.values(grouped).forEach(processGroup);
+            Object.values(txRefGrouped).forEach(processGroup);
+
+            window.duplicateCleanupMode = 'foreign';
+            window.duplicateForeignUidsToDelete = [...toDeleteUidsSet];
+
+            const summaryEl = document.getElementById('duplicates-summary');
+            if (summaryEl) {
+                summaryEl.innerText = `Found ${duplicates.length} duplicated foreign transaction(s) (${toDeleteUidsSet.size} extra row(s) will be removed). Valid / manually matched copies are always kept.`;
+            }
+            const tbody = document.getElementById('duplicates-body');
+            if (tbody) {
+                tbody.innerHTML = duplicates.length > 0
+                    ? duplicates.map(d => `
+                        <tr>
+                            <td>${escapeHTML(d.ref)}</td>
+                            <td>${escapeHTML(d.name)}</td>
+                            <td>${escapeHTML(formatMoney(d.price))}</td>
+                            <td><pre style="margin:0; font-size:0.8rem; white-space: pre-wrap;">'${escapeHTML(d.trimmedCheck)}'</pre></td>
+                            <td><pre style="margin:0; font-size:0.8rem; white-space: pre-wrap;">'${escapeHTML(d.untrimmedCheck)}'</pre></td>
+                        </tr>
+                    `).join('')
+                    : `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No duplicate foreign transactions found.</td></tr>`;
+            }
+
+            const btnCleanup = document.getElementById('btn-cleanup-duplicates');
+            if (btnCleanup) {
+                btnCleanup.style.display = toDeleteUidsSet.size > 0 ? 'inline-flex' : 'none';
+            }
+            document.getElementById('modal-detect-duplicates')?.classList.remove('hidden');
+        } catch (err) {
+            Toast.show('Error detecting duplicates: ' + err.message, 'error');
+        } finally {
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            }
+        }
+    }
+
+    async cleanupForeignDuplicates() {
+        const uids = new Set(window.duplicateForeignUidsToDelete || []);
+        if (uids.size === 0) return;
+
+        const btn = document.getElementById('btn-cleanup-duplicates');
+        const originalText = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Deleting...';
+            btn.disabled = true;
+            if (window.lucide) lucide.createIcons();
+        }
+
+        try {
+            const beforeCount = (this.foreignTransactions || []).length;
+            this.foreignTransactions = (this.foreignTransactions || []).filter(r => !uids.has(r._uid));
+            const deletedCount = beforeCount - this.foreignTransactions.length;
+            this.persistForeignTransactionsLocal();
+
+            document.getElementById('modal-detect-duplicates')?.classList.add('hidden');
+            window.duplicateForeignUidsToDelete = [];
+            this.applyForeignFilters();
+            Toast.show(`Successfully deleted ${deletedCount} duplicate foreign transaction(s).`, 'success');
+        } catch (err) {
+            Toast.show('Error deleting duplicates: ' + err.message, 'error');
+        } finally {
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            }
+        }
+    }
+
+    openForeignDoublePaymentsModal() {
+        const daysWindow = parseInt(document.getElementById('double-payments-window')?.value ?? '3', 10);
+        const windowDays = isNaN(daysWindow) ? 3 : daysWindow;
+        const rows = (this.foreignTransactions || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
+
+        // Group by student identifier (student_id if valid, else normalized extracted_name) + amount
+        const byStudentAndAmt = new Map();
+        for (const r of rows) {
+            const studentKey = r.student_id || normalizePersonName(r.extracted_name || '');
+            if (!studentKey) continue;
+            const amtKey = Number(r.amount || 0).toFixed(2);
+            const key = `${studentKey}|${amtKey}`;
+            if (!byStudentAndAmt.has(key)) byStudentAndAmt.set(key, []);
+            byStudentAndAmt.get(key).push(r);
+        }
+
+        const clusters = [];
+        for (const group of byStudentAndAmt.values()) {
+            if (group.length < 2) continue;
+            group.sort((a, b) => String(a.value_date || '').localeCompare(String(b.value_date || '')));
+            const firstDate = new Date(group[0].value_date || group[0].payment_date);
+            const lastDate = new Date(group[group.length - 1].value_date || group[group.length - 1].payment_date);
+            const diffDays = (!isNaN(firstDate) && !isNaN(lastDate))
+                ? Math.round(Math.abs(lastDate - firstDate) / (1000 * 60 * 60 * 24))
+                : 0;
+            if (diffDays <= windowDays) {
+                clusters.push({
+                    student_id: group[0].student_id || 'Missing ID',
+                    student_name: group[0].matched_student_name || group[0].extracted_name || '-',
+                    college: '',
+                    item_name: group[0].description || DEFAULT_FOREIGN_MAPPING,
+                    mapping: DEFAULT_FOREIGN_MAPPING,
+                    item_price: group[0].amount,
+                    tx_count: group.length,
+                    total_paid: group.reduce((s, x) => s + (Number(x.amount) || 0), 0),
+                    first_payment: group[0].value_date,
+                    last_payment: group[group.length - 1].value_date,
+                    days_apart: diffDays,
+                    reference_numbers: group.map(x => x.reference_number),
+                    banks: [DEFAULT_FOREIGN_BANK]
+                });
+            }
+        }
+
+        this.doublePaymentClusters = clusters;
+        document.getElementById('modal-double-payments')?.classList.remove('hidden');
+        this.renderDoublePaymentsTable();
+        if (window.lucide) lucide.createIcons();
     }
 
     async runForeignAutoMatchNames() {
@@ -10822,12 +11024,9 @@ class App {
             return;
         }
         const students = await this.ensureStudentsLoadedForForeign();
-        if (!students || students.length === 0) {
-            Toast.show('Student directory is empty. Please ensure Students Details are loaded.', 'warning');
-            return;
-        }
         const beforeValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
-        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students);
+        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students || [])
+            .map((r, i) => this.normalizeForeignTransactionRow(r, i));
         const afterValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
         this.persistForeignTransactionsLocal();
         this.applyForeignFilters();
@@ -10840,43 +11039,33 @@ class App {
             Toast.show('No foreign transactions to export', 'warning');
             return;
         }
-        const missingIdRows = rows.filter(r => !r.student_id || r.id_status !== 'Valid');
-        if (missingIdRows.length > 0) {
-            const validOnly = rows.filter(r => r.student_id && r.id_status === 'Valid');
-            if (validOnly.length === 0) {
-                Toast.show(`All ${missingIdRows.length} row(s) are missing a valid Student ID. Student ID is mandatory for ERP export.`, 'warning');
-                return;
-            }
-            const proceedValidOnly = await window.customConfirm(
-                `${missingIdRows.length} deposit(s) are missing a valid mandatory Student ID. Export the ${validOnly.length} valid deposit(s) now?`,
-                `Export Valid Only (${validOnly.length})`,
-                'Cancel'
-            );
-            if (!proceedValidOnly) return;
-            rows = validOnly;
-        }
 
+        // First try to fix any rows without a valid Student ID (via Student Directory name matching & Manual Fixes)
+        const students = await this.ensureStudentsLoadedForForeign();
+        rows = matchForeignDepositsToStudents(rows, students || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
+
+        // Do NOT exclude rows that still have no Student ID — export all rows as requested
         const exportData = rows.map((row, idx) => ({
-            'Date': toDateOnly(row.value_date || row.transaction_date),
+            'Date': toDateOnly(row.value_date || row.payment_date || row.transaction_date),
             'Voucher': '',
             'Company': 'NU',
-            'Account': this.erpAccount(row),
-            'Name': row.matched_student_name || row.extracted_name || '',
-            'Description': `${row.reference_number || ''}/${row.description || ''}/${row.student_id || ''}`,
+            'Account': row.student_id ? this.erpAccount(row) : '',
+            'Name': '',
+            'Description': `${row.reference_number || ''}/${row.description || ''}/${row.mapping || DEFAULT_FOREIGN_MAPPING}/${row.second_mapping || ''}/${row.student_id || ''}`,
             'Debit': 0,
-            'Credit': Number(row.amount) || 0,
+            'Credit': Number(row.amount ?? row.item_price) || 0,
             'Currency': row.currency || 'USD',
             'Offset account type': 'Bank',
-            'Offset Non-ledger account': row.account_number || 'BM-USD',
+            'Offset Non-ledger account': row.bank || DEFAULT_FOREIGN_BANK,
             'Offset main account': '',
-            'Method of payment': row.transaction_code || 'CHF',
+            'Method of payment': '',
             'Payment reference': row.reference_number || '',
             'Line number': idx + 1
         }));
 
         const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         rows.forEach((row, idx) => {
-            const serial = dateToExcelSerial(row.value_date || row.transaction_date);
+            const serial = dateToExcelSerial(row.value_date || row.payment_date || row.transaction_date);
             if (serial !== null) {
                 const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 0 });
                 ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
@@ -10896,19 +11085,15 @@ class App {
         }
         const exportData = rows.map(r => ({
             'Ref Number': r.reference_number || '',
-            'Description': r.description || '',
+            'Date': toDateOnly(r.value_date || r.payment_date || r.transaction_date),
             'Student ID': r.student_id || '',
-            'ID Status': r.id_status || '',
-            'Student Name (Statement)': r.extracted_name || '',
-            'Student Name (Directory)': r.matched_student_name || '',
-            'Depositor (بمناولة)': r.handler_name || '',
-            'Value Date': r.value_date || '',
-            'Transaction Date/Time': r.transaction_datetime || '',
-            'Credit Amount': Number(r.amount) || 0,
+            'Item Price': Number(r.amount ?? r.item_price) || 0,
             'Currency': r.currency || 'USD',
-            'Code': r.transaction_code || '',
-            'Transaction Reference': r.transaction_ref || '',
-            'Account Number': r.account_number || ''
+            'Description': r.description || '',
+            'Mapping': r.mapping || DEFAULT_FOREIGN_MAPPING,
+            '2nd Mapping': r.second_mapping || '',
+            'Bank': r.bank || DEFAULT_FOREIGN_BANK,
+            'ID Status': r.id_status || 'Missing ID'
         }));
         const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         const wb = XLSX.utils.book_new();
@@ -10924,16 +11109,17 @@ class App {
             return;
         }
         const tsv = [
-            ['Ref Number', 'Description', 'Student ID', 'Student Name', 'Depositor (بمناولة)', 'Value Date', 'Amount', 'Currency'].join('\t'),
+            ['Ref Number', 'Date', 'Student ID', 'Item Price', 'Description', 'Mapping', '2nd Mapping', 'Bank', 'ID Status'].join('\t'),
             ...rows.map(r => [
                 r.reference_number || '',
+                toDateOnly(r.value_date || r.payment_date || r.transaction_date),
+                r.student_id || '',
+                formatMoney(r.amount ?? r.item_price),
                 r.description || '',
-                r.student_id || 'Missing',
-                r.matched_student_name || r.extracted_name || '',
-                r.handler_name || '',
-                r.value_date || '',
-                formatMoney(r.amount),
-                r.currency || 'USD'
+                r.mapping || DEFAULT_FOREIGN_MAPPING,
+                r.second_mapping || '-',
+                r.bank || DEFAULT_FOREIGN_BANK,
+                r.id_status || 'Missing ID'
             ].join('\t'))
         ].join('\n');
 

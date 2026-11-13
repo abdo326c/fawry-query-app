@@ -593,22 +593,22 @@
             <!-- Foreign Transactions (Bank Statement Student Deposit Extractor) View -->
             <section id="view-foreign-transactions" class="view">
                 <div class="header">
-                    <div>
-                        <h1>Foreign Transactions</h1>
-                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Smart Bank Statement Student Deposit Extractor (PDF &amp; Excel/CSV Reader · Auto-Filters Reversals &amp; Treasury Ops)</p>
-                    </div>
+                    <h1>Foreign Transactions</h1>
                     <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
                         <button class="btn btn-primary" id="btn-show-foreign-import" title="Upload PDF, Excel, or CSV Bank Statement to extract Student Deposits">
-                            <i data-lucide="file-up"></i> Import Bank Statement (PDF / Excel)
+                            <i data-lucide="upload"></i> Import Bank Statement (PDF / Excel)
                         </button>
-                        <button class="btn btn-outline" id="btn-foreign-automatch" title="Automatically match deposits missing a Student ID against Student Directory (Arabic &amp; English names)">
-                            <i data-lucide="wand-2"></i> Auto-Match Names
+                        <button class="btn btn-outline" id="btn-foreign-detect-duplicates" style="color: var(--danger); border-color: rgba(239, 68, 68, 0.45);" title="Scan and remove duplicate foreign transactions">
+                            <i data-lucide="search"></i> Detect Duplicates
+                        </button>
+                        <button class="btn btn-outline" id="btn-foreign-double-payments" title="Scan for potential duplicate / double payments by the same student">
+                            <i data-lucide="copy-check"></i> Double Payments
+                        </button>
+                        <button class="btn btn-outline" id="btn-foreign-automatch" title="Re-apply Manual Fixes &amp; Auto-Match Student Names against Student Directory">
+                            <i data-lucide="refresh-cw"></i> Re-apply &amp; Match IDs
                         </button>
                         <button class="btn btn-outline" id="btn-foreign-export-erp" title="Export Dynamics 365 ERP Template for Foreign Deposits">
                             <i data-lucide="download-cloud"></i> Export ERP Template
-                        </button>
-                        <button class="btn btn-outline" id="btn-foreign-copy-email" title="Copy formatted table for Outlook / Gmail">
-                            <i data-lucide="copy"></i> Copy for Email
                         </button>
                         <button class="btn btn-outline" id="btn-foreign-export-excel" title="Export Foreign Transactions to Excel">
                             <i data-lucide="download"></i> Export Excel
@@ -616,28 +616,20 @@
                     </div>
                 </div>
 
-                <!-- Unified Filters & Search Bar -->
+                <!-- Unified Filters & Search Bar (Matches Fawry Transactions) -->
                 <div class="filters-bar glass-card" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding: 1rem;">
-                    <div style="display: flex; gap: 0.85rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
                         <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem;">Value Date From</label>
+                            <label style="font-size: 0.75rem;">Date From</label>
                             <input type="date" id="foreign-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem;">
                         </div>
                         <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem;">Value Date To</label>
+                            <label style="font-size: 0.75rem;">Date To</label>
                             <input type="date" id="foreign-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem;">
                         </div>
-                        <div class="form-group" style="margin: 0; min-width: 150px; flex: 1;">
-                            <label style="font-size: 0.75rem;">Deposit Type / Code</label>
-                            <select id="foreign-code-filter" class="input-text" style="padding: 0.4rem; font-size: 0.85rem;">
-                                <option value="">All Types (CHF &amp; T35)</option>
-                                <option value="CHF">CHF - Cash Deposit (ايداع نقدى)</option>
-                                <option value="T35">T35 - SWIFT Wire (تحاويل واردة)</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="margin: 0; flex: 2; min-width: 250px;">
+                        <div class="form-group" style="margin: 0; flex: 2; min-width: 240px;">
                             <label style="font-size: 0.75rem;">Search</label>
-                            <input type="text" id="foreign-search-input" class="input-text" placeholder="Search by Student ID, Student Name, Handler (بمناولة), Ref No (FJB...), or Narrative..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">
+                            <input type="text" id="foreign-search-input" class="input-text" placeholder="Search by Student ID, Ref Number, Description, Student Name, or Mapping..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">
                         </div>
                         <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
                             <button type="button" class="btn btn-primary" id="btn-foreign-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
@@ -656,72 +648,68 @@
                         <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" id="foreign-quick-filter-group">
                             <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Quick Filter:</span>
                             <button type="button" class="btn btn-primary btn-sm" data-foreign-quick-filter="all" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">All</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="missing_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Missing ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="error_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Error ID</button>
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="valid_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Valid ID</button>
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="name_match" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Matched by Name</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="missing_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Missing / Needs ID</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Foreign Transactions Live Summary Bar -->
-                <div id="foreign-summary-bar" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; padding: 0.8rem 1.25rem; border-radius: 8px;">
-                    <div style="display: flex; align-items: center; gap: 1.35rem; flex-wrap: wrap;">
+                <!-- Foreign Transactions Live Summary Bar (Matches Fawry Transactions) -->
+                <div id="foreign-summary-bar" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; padding: 0.75rem 1.25rem; border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.45rem;">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Student Deposits:</span>
+                            <span style="color: var(--text-muted); font-size: 0.82rem;">Matching Records:</span>
                             <strong id="foreign-stat-count" style="font-size: 1rem; color: var(--text-main);">0</strong>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
                             <span style="color: var(--text-muted); font-size: 0.82rem;">Total Amount:</span>
-                            <strong id="foreign-stat-amount" style="font-size: 1.05rem; color: #38bdf8;">USD 0.00</strong>
+                            <strong id="foreign-stat-amount" style="font-size: 1rem; color: var(--primary);">USD 0.00</strong>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span class="status-badge valid-id" style="font-size: 0.74rem;">Valid IDs</span>
-                            <strong id="foreign-stat-valid" style="font-size: 1rem; color: var(--success);">0</strong>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span class="badge" style="background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-size: 0.74rem;">Name Matched</span>
-                            <strong id="foreign-stat-name-matched" style="font-size: 1rem; color: #38bdf8;">0</strong>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span class="status-badge invalid-id" style="font-size: 0.74rem;">Needs ID</span>
-                            <strong id="foreign-stat-invalid" style="font-size: 1rem; color: var(--danger);">0</strong>
+                            <span style="color: var(--text-muted); font-size: 0.82rem;">Valid / Issues:</span>
+                            <strong id="foreign-stat-valid" style="font-size: 0.9rem; color: var(--success);">0 Valid</strong>
+                            <span style="color: var(--text-muted);">·</span>
+                            <strong id="foreign-stat-invalid" style="font-size: 0.9rem; color: var(--danger);">0 Issues</strong>
+                            <span id="foreign-stat-name-matched" style="display: none;">0</span>
                         </div>
                     </div>
-                    <div id="foreign-stat-account-badge" style="font-size: 0.78rem; color: var(--text-muted); font-family: monospace;">
-                        Banque Misr · USD Statement
+                    <div style="font-size: 0.78rem; color: var(--text-muted);">
+                        <span id="foreign-stat-account-badge">Bank: NuMisrUsd5 · Click any row to fix Student ID or inspect details</span>
                     </div>
                 </div>
 
-                <!-- Foreign Transactions Table -->
+                <!-- Foreign Transactions Table (Matches Fawry Transactions Columns) -->
                 <div class="table-container glass-card">
                     <table class="data-table" id="foreign-transactions-table">
                         <thead>
                             <tr>
                                 <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="reference_number" style="cursor: pointer; user-select: none;">Ref Number <span class="sort-indicator"></span></span>
+                                    <span class="foreign-sort-trigger" data-sort-col="reference_number" style="cursor: pointer; user-select: none;" title="Sort by Reference Number">Ref Number <span class="sort-indicator"></span></span>
                                 </th>
                                 <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="description" style="cursor: pointer; user-select: none;">Description <span class="sort-indicator"></span></span>
+                                    <span class="foreign-sort-trigger" data-sort-col="value_date" style="cursor: pointer; user-select: none;" title="Sort by Date">Date <span class="sort-indicator">▼</span></span>
                                 </th>
                                 <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="student_id" style="cursor: pointer; user-select: none;">Student ID * <span class="sort-indicator"></span></span>
+                                    <span class="foreign-sort-trigger" data-sort-col="student_id" style="cursor: pointer; user-select: none;" title="Sort by Student ID">Student ID <span class="sort-indicator"></span></span>
                                 </th>
                                 <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="extracted_name" style="cursor: pointer; user-select: none;">Student Name / Depositor (بمناولة) <span class="sort-indicator"></span></span>
+                                    <span class="foreign-sort-trigger" data-sort-col="amount" style="cursor: pointer; user-select: none;" title="Sort by Item Price">Item Price <span class="sort-indicator"></span></span>
                                 </th>
                                 <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="value_date" style="cursor: pointer; user-select: none;">Value Date <span class="sort-indicator">▼</span></span>
+                                    <span class="foreign-sort-trigger" data-sort-col="description" style="cursor: pointer; user-select: none;" title="Sort by Description">Description <span class="sort-indicator"></span></span>
                                 </th>
-                                <th style="text-align: right;">
-                                    <span class="foreign-sort-trigger" data-sort-col="amount" style="cursor: pointer; user-select: none;">Credit Amount <span class="sort-indicator"></span></span>
-                                </th>
-                                <th style="text-align: right;">ID Status / Action</th>
+                                <th>Mapping</th>
+                                <th>2nd Mapping</th>
+                                <th>Bank</th>
+                                <th>ID Status</th>
                             </tr>
                         </thead>
                         <tbody id="foreign-transactions-body">
                             <tr>
-                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
-                                    No foreign transactions loaded yet. Click <strong>Import Bank Statement (PDF / Excel)</strong> to extract student deposits from a Banque Misr statement.
+                                <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                                    No foreign transactions loaded yet. Click <strong>Import Bank Statement (PDF / Excel)</strong> to extract student deposits from a bank statement.
                                 </td>
                             </tr>
                         </tbody>

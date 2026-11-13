@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
-import { parseBankStatementGrid, parseBanqueMisrPdfText, matchForeignDepositsToStudents } from '../foreign-transactions.js';
+import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents } from '../foreign-transactions.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -228,4 +228,66 @@ test('parseBanqueMisrPdfText and matchForeignDepositsToStudents resolve IDs and 
     expect(matched[1].student_id).toBe('241009902');
     expect(matched[1].id_status).toBe('Valid');
     expect(matched[1].match_source).toBe('name_match');
+    expect(matched[0].mapping).toBe('Tuition');
+    expect(matched[0].bank).toBe('NuMisrUsd5');
+});
+
+test('reconstructBanqueMisrPdfLinesFromPages handles vertically centered cells and Currency Current Balance header', () => {
+    const page1Items = [
+        { str: 'Statement of Account', x: 400, y: 550 },
+        { str: 'Branch Number', x: 50, y: 492 },
+        { str: 'Currency', x: 250, y: 492 },
+        { str: 'Current Balance', x: 450, y: 492 },
+        { str: '770', x: 50, y: 477 },
+        { str: 'USD', x: 250, y: 477 },
+        { str: '493,658.47', x: 450, y: 477 },
+        { str: 'Account Number', x: 50, y: 453 },
+        { str: '7700120000000557', x: 50, y: 438 },
+        // Row 1: vertically centered anchor at y=354, with description line 1 at y=360 and line 2 at y=348
+        { str: 'Cash Deposit', x: 350, y: 360 },
+        { str: 'تسنيم عمر الصادق الكاروري', x: 420, y: 360 },
+        { str: '449,548.23', x: 40, y: 354 },
+        { str: '749.47', x: 110, y: 354 },
+        { str: '0.00', x: 160, y: 354 },
+        { str: '05-01-2026 15:08:50', x: 210, y: 354 },
+        { str: '06-01-2026', x: 290, y: 354 },
+        { str: 'FJB2600526681048', x: 560, y: 354 },
+        { str: 'CHF', x: 650, y: 354 },
+        { str: '512CHFD260050030', x: 690, y: 354 },
+        { str: 'INIT', x: 780, y: 354 },
+        { str: '241002323', x: 350, y: 348 },
+        { str: 'بمناولة امنيه النور احمد عبدالحميد', x: 410, y: 348 },
+        // Row 2: deposit without Student ID (should still be extracted, never excluded)
+        { str: 'Cash Deposit', x: 350, y: 316 },
+        { str: 'فاطمة محمد اسماعيل', x: 420, y: 316 },
+        { str: '450,853.23', x: 40, y: 310 },
+        { str: '1,305.00', x: 110, y: 310 },
+        { str: '0.00', x: 160, y: 310 },
+        { str: '08-01-2026 11:25:10', x: 210, y: 310 },
+        { str: '08-01-2026', x: 290, y: 310 },
+        { str: 'FJB2600826955342', x: 560, y: 310 },
+        { str: 'CHF', x: 650, y: 310 },
+        { str: '133CHFD260080005', x: 690, y: 310 },
+        { str: 'INIT', x: 780, y: 310 },
+        { str: 'مناولة خالد محمود', x: 350, y: 304 }
+    ];
+
+    const reconstructedText = reconstructBanqueMisrPdfLinesFromPages([page1Items]);
+    const parsed = parseBanqueMisrPdfText(reconstructedText);
+
+    expect(parsed.metadata.currency).toBe('USD');
+    expect(parsed.metadata.accountNumber).toBe('7700120000000557');
+    expect(parsed.deposits.length).toBe(2);
+    expect(parsed.deposits[0].reference_number).toBe('FJB2600526681048');
+    expect(parsed.deposits[0].student_id).toBe('241002323');
+    expect(parsed.deposits[0].id_status).toBe('Valid');
+    expect(parsed.deposits[0].mapping).toBe('Tuition');
+    expect(parsed.deposits[0].bank).toBe('NuMisrUsd5');
+
+    // Second deposit has no ID in statement and is still extracted as Missing ID
+    expect(parsed.deposits[1].reference_number).toBe('FJB2600826955342');
+    expect(parsed.deposits[1].student_id).toBe('');
+    expect(parsed.deposits[1].id_status).toBe('Missing ID');
+    expect(parsed.deposits[1].mapping).toBe('Tuition');
+    expect(parsed.deposits[1].bank).toBe('NuMisrUsd5');
 });

@@ -1,4 +1,7 @@
-import { validateID, toDateOnly, escapeHTML } from './rules.js';
+import { validateID, toDateOnly } from './rules.js';
+
+export const DEFAULT_FOREIGN_BANK = 'NuMisrUsd5';
+export const DEFAULT_FOREIGN_MAPPING = 'Tuition';
 
 /**
  * Normalizes Arabic and English text for fuzzy student name comparison.
@@ -47,7 +50,6 @@ export function parseStatementDate(raw) {
     const datePart = parts[0] || '';
     const timePart = parts[1] || '';
 
-    // Check DD-MM-YYYY or YYYY-MM-DD
     let m = datePart.match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})$/);
     if (m) {
         const iso = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
@@ -100,7 +102,7 @@ export function parseStudentDepositNarrative(description, txCode = '') {
 
     // 2. Clean known bank prefixes & boilerplate tokens
     let work = raw
-        .replace(/\uFFFD/g, ' ') // replacement char from PDF encoding
+        .replace(/\uFFFD/g, ' ')
         .replace(/^(?:ايداع نقدى|إيداع نقدي|ايداع نقدي)\s*\|?\s*/i, '')
         .replace(/\b(?:Cash\s+Deposit|Deposit\s+Cash)\b\s*\|?\s*/gi, ' ')
         .replace(/INCOMING\s+SWIFT\s+TRANSFER\s+OUTSIDE\s+EGYPT\s*[-|]?\s*/gi, ' ')
@@ -138,8 +140,6 @@ export function parseStudentDepositNarrative(description, txCode = '') {
     let studentName = cleanSegment(studentPart);
     let handlerName = cleanSegment(handlerPart);
 
-    // If PDF RTL extraction placed part of the handler's last name on a trailing line after '-',
-    // clean any stray hyphens
     if (!studentName && handlerName) {
         studentName = handlerName;
         handlerName = '';
@@ -174,21 +174,12 @@ export function isTreasuryOrNonStudentRow(row) {
  * Given raw statement rows (from CSV, Excel, or PDF), performs:
  * 1. Reversal pair detection (`INIT` + `REVR` sharing External Ref No or Transaction Reference)
  * 2. Treasury / Non-student filtering
- * 3. Student narrative extraction & ID validation
- *
- * Returns:
- *   {
- *     metadata: { customerName, accountNumber, iban, currency, branch, dateFrom, dateTo },
- *     deposits: [...valid student deposit objects],
- *     excludedReversals: [...reversed INIT/REVR rows],
- *     excludedTreasury: [...treasury / debit / fee rows]
- *   }
+ * 3. Student narrative extraction & ID validation (rows without a Student ID are KEPT so they can be fixed or exported)
  */
 export function processBankStatementRows(rawRows, metadata = {}) {
     const currency = metadata.currency || 'USD';
     const accountNumber = metadata.accountNumber || '';
 
-    // Normalize each raw row
     const normalized = (rawRows || []).map((r, idx) => {
         const credit = parseStatementAmount(r.credit);
         const debit = parseStatementAmount(r.debit);
@@ -266,6 +257,7 @@ export function processBankStatementRows(rawRows, metadata = {}) {
 
         const parsed = parseStudentDepositNarrative(r.description, r.transaction_code);
         const idStatus = validateID(parsed.studentId);
+        const effectiveDate = r.value_date || r.transaction_date;
 
         deposits.push({
             reference_number: refNumber,
@@ -273,9 +265,11 @@ export function processBankStatementRows(rawRows, metadata = {}) {
             transaction_ref: r.transaction_ref || '',
             transaction_code: r.transaction_code || 'CHF',
             event: r.event || 'INIT',
-            value_date: r.value_date,
+            payment_date: effectiveDate,
+            value_date: effectiveDate,
             transaction_date: r.transaction_date,
             transaction_datetime: r.transaction_datetime,
+            item_price: r.credit,
             amount: r.credit,
             currency,
             account_number: accountNumber,
@@ -285,6 +279,10 @@ export function processBankStatementRows(rawRows, metadata = {}) {
             handler_name: parsed.handlerName || '',
             deposit_method: parsed.depositMethod,
             description: r.description,
+            item_name: r.description,
+            mapping: DEFAULT_FOREIGN_MAPPING,
+            second_mapping: '',
+            bank: DEFAULT_FOREIGN_BANK,
             id_status: idStatus,
             match_source: parsed.studentId && idStatus === 'Valid' ? 'statement_id' : 'unmatched',
             erp_batch_number: null,
@@ -330,18 +328,15 @@ export function parseBankStatementGrid(gridRows) {
     let headerRowIdx = -1;
     let colMap = {};
 
-    // Scan top 25 rows for metadata key-value pairs and locate the table header row
     for (let i = 0; i < Math.min(gridRows.length, 30); i++) {
         const row = (gridRows[i] || []).map(c => String(c ?? '').trim());
-        const joined = row.join(' ');
 
-        // Extract metadata from header block
         for (let c = 0; c < row.length - 1; c++) {
             const label = row[c];
             const nextVal = row[c + 1] || row[c + 2] || '';
             if (!label || !nextVal) continue;
             if (/اسم العميل|Customer Name/i.test(label)) metadata.customerName = nextVal;
-            else if (/العملة|Currency/i.test(label)) metadata.currency = nextVal.toUpperCase();
+            else if (/^العملة$|^Currency$/i.test(label) && /^[A-Z]{3}$/i.test(nextVal)) metadata.currency = nextVal.toUpperCase();
             else if (/رقم الفرع|Branch Number/i.test(label)) metadata.branch = nextVal;
             else if (/^رقم الحساب$|^Account Number$/i.test(label)) metadata.accountNumber = nextVal;
             else if (/رقم الحساب الدولي|IBAN/i.test(label)) metadata.iban = nextVal;
@@ -349,7 +344,6 @@ export function parseBankStatementGrid(gridRows) {
             else if (/تاريخ النهاية|Date To/i.test(label)) metadata.dateTo = parseStatementDate(nextVal).dateOnly || nextVal;
         }
 
-        // Detect table header row (Arabic or English)
         const hasArabicHeaders = row.some(c => /البيان/.test(c)) && row.some(c => /دائن/.test(c));
         const hasEnglishHeaders = row.some(c => /^Description$/i.test(c)) && row.some(c => /^Credit$/i.test(c));
         if (hasArabicHeaders || hasEnglishHeaders) {
@@ -373,7 +367,6 @@ export function parseBankStatementGrid(gridRows) {
     }
 
     if (headerRowIdx === -1) {
-        // Fallback standard Banque Misr 11-column positions if header row was omitted
         colMap = {
             balance_after: 0,
             credit: 1,
@@ -418,6 +411,146 @@ export function parseBankStatementGrid(gridRows) {
 }
 
 /**
+ * Reconstructs ordered PDF text from coordinate-positioned pdf.js text items across pages.
+ * Because Banque Misr PDF tables vertically center the single-line cells (Balance, Credit, Debit,
+ * Dates, External Ref, Code, Tx Ref, Event) at `rowY` while multi-line `Description` cells wrap
+ * slightly above (`rowY + 6`) and below (`rowY - 6`), sorting purely by Y would place Line 1 of
+ * a row's description above the row's numbers!
+ *
+ * This function finds each row's anchor Y-coordinate on the page and assigns all wrapped
+ * Description items to their nearest row Y-coordinate, emitting every row in clean column order:
+ *   `<Balance> <Credit> <Debit> <DateTime> <ValueDate> <Full Description> <ExtRef> <TxCode> <TxRef> <Event>`
+ */
+export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
+    const outputLines = [];
+
+    for (const pageItems of pagesItems || []) {
+        const cleanItems = (pageItems || [])
+            .map(it => ({
+                str: String(it.str || '').trim(),
+                x: Number(it.x) || 0,
+                y: Number(it.y) || 0
+            }))
+            .filter(it => it.str.length > 0);
+
+        if (cleanItems.length === 0) continue;
+
+        // Group items that share approximately the same Y coordinate (within 3pt) into horizontal lines
+        const sortedByY = [...cleanItems].sort((a, b) => b.y - a.y || a.x - b.x);
+        const hLines = [];
+        for (const item of sortedByY) {
+            const last = hLines[hLines.length - 1];
+            if (last && Math.abs(last.y - item.y) <= 3.2) {
+                last.items.push(item);
+            } else {
+                hLines.push({ y: item.y, items: [item] });
+            }
+        }
+        hLines.forEach(line => line.items.sort((a, b) => a.x - b.x));
+
+        // Identify Anchor Lines: lines that contain a transaction date-time (\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})
+        // or an Event code (INIT|REVR|DEBK|ILIQ|IMAT) + numeric balances
+        const anchorLines = [];
+        for (const line of hLines) {
+            const text = line.items.map(i => i.str).join(' ');
+            if (
+                /[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}/.test(text) ||
+                /\b(INIT|REVR|DEBK|ILIQ|IMAT)\b/.test(text)
+            ) {
+                if (/\d{2}-\d{2}-\d{4}/.test(text)) {
+                    anchorLines.push({
+                        y: line.y,
+                        extraDescAbove: [],
+                        extraDescBelow: [],
+                        anchorItems: line.items
+                    });
+                }
+            }
+        }
+
+        if (anchorLines.length === 0) {
+            // Header-only page or fallback
+            hLines.forEach(l => outputLines.push(l.items.map(i => i.str).join(' ')));
+            continue;
+        }
+
+        const topTableY = anchorLines[0].y + 22;
+        const bottomTableY = anchorLines[anchorLines.length - 1].y - 22;
+
+        for (const line of hLines) {
+            const text = line.items.map(i => i.str).join(' ');
+            // Keep metadata header lines above the table
+            if (line.y > topTableY) {
+                if (!/Balance\s+After.*Credit.*Debit/i.test(text)) {
+                    outputLines.push(text);
+                }
+                continue;
+            }
+            // Skip page footer below the table (e.g., "1 / 4")
+            if (line.y < bottomTableY) {
+                if (!/^\d+\s*\/\s*\d+$/.test(text.trim())) {
+                    outputLines.push(text);
+                }
+                continue;
+            }
+
+            // If this is one of the anchor lines, skip (already in anchorLines)
+            if (anchorLines.some(a => Math.abs(a.y - line.y) <= 0.5)) {
+                continue;
+            }
+
+            // Skip repeated table header row
+            if (/Balance\s+After.*Credit.*Debit/i.test(text)) continue;
+
+            // Find the closest anchor line by Y distance
+            let bestAnchor = anchorLines[0];
+            let bestDist = Math.abs(line.y - bestAnchor.y);
+            for (let i = 1; i < anchorLines.length; i++) {
+                const d = Math.abs(line.y - anchorLines[i].y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestAnchor = anchorLines[i];
+                }
+            }
+
+            if (line.y > bestAnchor.y) {
+                bestAnchor.extraDescAbove.push(text);
+            } else {
+                bestAnchor.extraDescBelow.push(text);
+            }
+        }
+
+        // Now emit each anchor row with all its description lines placed cleanly before the trailing refs/codes
+        for (const anchor of anchorLines) {
+            const baseText = anchor.anchorItems.map(i => i.str).join(' ');
+            const trailRegex = /(?:\b(FJB\d{8,18}|\d{3}DEBK[A-Z0-9]+)\s+)?\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([0-9A-Z]{3}[A-Z0-9\s]{4,22}?)\s+\b(INIT|REVR|DEBK|ILIQ|IMAT)\b\s*$/;
+            const tm = baseText.match(trailRegex);
+            if (tm) {
+                const leftAndMid = baseText.slice(0, tm.index).trim();
+                const rightCodes = tm[0].trim();
+                const startMatch = leftAndMid.match(/^([\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+\d{2}-\d{2}-\d{4})\s*(.*)$/);
+                if (startMatch) {
+                    const leftCols = startMatch[1];
+                    const midDesc = startMatch[2].trim();
+                    const fullDesc = [
+                        ...anchor.extraDescAbove,
+                        ...(midDesc ? [midDesc] : []),
+                        ...anchor.extraDescBelow
+                    ].join(' ').replace(/\s+/g, ' ').trim();
+                    outputLines.push(`${leftCols} ${fullDesc} ${rightCodes}`);
+                    continue;
+                }
+            }
+            outputLines.push(
+                [...anchor.extraDescAbove, baseText, ...anchor.extraDescBelow].join(' ').replace(/\s+/g, ' ').trim()
+            );
+        }
+    }
+
+    return outputLines.join('\n');
+}
+
+/**
  * Parses extracted text from a Banque Misr Statement of Account PDF (single or multi-page)
  * into metadata and transaction rows, then runs processBankStatementRows.
  */
@@ -433,27 +566,25 @@ export function parseBanqueMisrPdfText(fullText) {
         dateTo: ''
     };
 
-    const accMatch = text.match(/Account\s+Number\s+([0-9]{10,20})/i) || text.match(/رقم الحساب\s+([0-9]{10,20})/);
+    const accMatch = text.match(/\b(7\d{15})\b/) || text.match(/Account\s+Number\s+([0-9]{10,20})/i) || text.match(/رقم الحساب\s+([0-9]{10,20})/);
     if (accMatch) metadata.accountNumber = accMatch[1];
 
     const ibanMatch = text.match(/\b(EG\d{27})\b/);
     if (ibanMatch) metadata.iban = ibanMatch[1];
 
-    const currMatch = text.match(/Currency\s+([A-Z]{3})/i) || text.match(/العملة\s+([A-Z]{3})/i);
+    // Match explicit ISO currency codes (avoid matching 'Cur' from 'Current Balance')
+    const currMatch = text.match(/\b(USD|EGP|EUR|GBP|SAR|AED)\b/);
     if (currMatch) metadata.currency = currMatch[1].toUpperCase();
 
     const branchMatch = text.match(/Branch\s+Number\s+(\d{2,6})/i);
     if (branchMatch) metadata.branch = branchMatch[1];
 
-    const fromMatch = text.match(/Date\s+From\s+(\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})/i);
-    if (fromMatch) metadata.dateFrom = parseStatementDate(fromMatch[1]).dateOnly || fromMatch[1];
+    const allHeaderDates = [...text.slice(0, 1200).matchAll(/\b(\d{2}-\d{2}-\d{4})\b/g)].map(m => m[1]);
+    if (allHeaderDates.length >= 2) {
+        metadata.dateFrom = parseStatementDate(allHeaderDates[0]).dateOnly || allHeaderDates[0];
+        metadata.dateTo = parseStatementDate(allHeaderDates[1]).dateOnly || allHeaderDates[1];
+    }
 
-    const toMatch = text.match(/Date\s+To\s+(\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})/i);
-    if (toMatch) metadata.dateTo = parseStatementDate(toMatch[1]).dateOnly || toMatch[1];
-
-    // Match each transaction block starting with:
-    // <BalanceAfter> <Credit> <Debit> <DD-MM-YYYY HH:MM:SS> <DD-MM-YYYY>
-    // and ending with <TransCode> <TransactionReference> <Event: INIT|REVR|DEBK|ILIQ|IMAT>
     const rowStartRegex = /([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})/g;
 
     const starts = [];
@@ -476,42 +607,48 @@ export function parseBanqueMisrPdfText(fullText) {
         const nextIndex = i + 1 < starts.length ? starts[i + 1].index : text.length;
         let tail = text.slice(cur.endOfHeader, nextIndex);
 
-        // Strip page footers / repeated page headers if a page break occurred after this row
-        const pageBreakIdx = tail.search(/\b\d+\s*\/\s*\d+\b|Statement of Account|Customer Name\s+جامعة/i);
+        const pageBreakIdx = tail.search(/\b\d+\s*\/\s*\d+\b|Statement of Account|Customer Name|جامعة النيل الاهلية/i);
         if (pageBreakIdx !== -1) {
             tail = tail.slice(0, pageBreakIdx);
         }
 
         tail = tail.replace(/\s+/g, ' ').trim();
 
-        // Extract trailing tokens: [External Ref No (optional)] <TransCode> <TransactionRef> <Event>
-        // Example tail endings:
-        //   "FJB2600526662342 CHF 519CHFD260050014 INIT"
-        //   "T35 100FOUR260050002 INIT"
-        //   "TD3 770C140USD 00001 ILIQ"
-        //   "770DEBK2600407PT TD1 770DEBK2600407PT DEBK"
+        // Match [External Ref (optional)] <TransCode> <TransactionRef> <Event> anywhere in tail
         let event = '';
         let txCode = '';
         let txRef = '';
         let extRef = '';
         let description = tail;
 
-        const eventMatch = tail.match(/\b(INIT|REVR|DEBK|ILIQ|IMAT)\b\s*$/);
-        if (eventMatch) {
-            event = eventMatch[1];
-            const beforeEvent = tail.slice(0, eventMatch.index).trim();
-            const codeMatch = beforeEvent.match(/\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([A-Z0-9\s]+?)\s*$/);
-            if (codeMatch) {
-                txCode = codeMatch[1];
-                txRef = codeMatch[2].trim();
-                let beforeCode = beforeEvent.slice(0, codeMatch.index).trim();
-                const extMatch = beforeCode.match(/\b(FJB\d{10,16}|[0-9]{3}DEBK[A-Z0-9]+)\s*$/);
-                if (extMatch) {
-                    extRef = extMatch[1];
-                    beforeCode = beforeCode.slice(0, extMatch.index).trim();
-                }
-                description = beforeCode;
+        const codeBlockRegex = /(?:(FJB\d{8,18}|\d{3}DEBK[A-Z0-9]+)\s+)?\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([0-9A-Z]{3}[A-Z0-9\s]{4,22}?)\s+\b(INIT|REVR|DEBK|ILIQ|IMAT)\b/;
+        const cbMatch = tail.match(codeBlockRegex);
+        if (cbMatch) {
+            extRef = (cbMatch[1] || '').trim();
+            txCode = (cbMatch[2] || '').trim();
+            txRef = (cbMatch[3] || '').trim();
+            event = (cbMatch[4] || '').trim();
+            description = (tail.slice(0, cbMatch.index) + ' ' + tail.slice(cbMatch.index + cbMatch[0].length))
+                .replace(/\s+/g, ' ')
+                .trim();
+        } else {
+            // Secondary fallback: extract FJB external ref and event independently if present
+            const fjbMatch = tail.match(/\b(FJB\d{8,18})\b/);
+            if (fjbMatch) {
+                extRef = fjbMatch[1];
+                description = description.replace(fjbMatch[0], ' ');
             }
+            const evMatch = tail.match(/\b(INIT|REVR|DEBK|ILIQ|IMAT)\b/);
+            if (evMatch) {
+                event = evMatch[1];
+                description = description.replace(evMatch[0], ' ');
+            }
+            const tcMatch = tail.match(/\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\b/);
+            if (tcMatch) {
+                txCode = tcMatch[1];
+                description = description.replace(tcMatch[0], ' ');
+            }
+            description = description.replace(/\s+/g, ' ').trim();
         }
 
         rawRows.push({
@@ -534,12 +671,19 @@ export function parseBanqueMisrPdfText(fullText) {
 
 /**
  * Matches foreign deposit rows against student_master by:
- * 1. Exact Student ID lookup (populates matched_student_name from student_master)
- * 2. Fuzzy Arabic / English Student Name & Guardian Name matching for rows missing a valid Student ID
+ * 1. Manual fixes (by reference_number) if provided
+ * 2. Exact Student ID lookup (populates matched_student_name from student_master)
+ * 3. Fuzzy Arabic / English Student Name & Guardian Name matching for rows missing a valid Student ID
  */
-export function matchForeignDepositsToStudents(deposits, studentMasterList = []) {
+export function matchForeignDepositsToStudents(deposits, studentMasterList = [], manualFixesList = []) {
     if (!Array.isArray(deposits) || deposits.length === 0) return [];
     const students = Array.isArray(studentMasterList) ? studentMasterList : [];
+    const fixesByRef = new Map();
+    (manualFixesList || []).forEach(f => {
+        if (f && f.reference_number) {
+            fixesByRef.set(String(f.reference_number).trim(), f);
+        }
+    });
 
     const byId = new Map();
     const preparedStudents = students.map(s => {
@@ -571,7 +715,6 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [])
             }
         }
         if (matched === 0) return 0;
-        // Require first name token to match either first or last token of target (since PDF RTL sometimes reverses token order)
         const firstQ = queryTokens[0];
         const lastQ = queryTokens[queryTokens.length - 1];
         const firstT = targetTokens[0];
@@ -581,23 +724,36 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [])
     };
 
     return deposits.map(dep => {
-        const currentId = String(dep.student_id || '').trim();
+        const refKey = String(dep.reference_number || '').trim();
+        const fix = fixesByRef.get(refKey);
+        let currentId = String((fix && fix.correct_id) ? fix.correct_id : (dep.student_id || '')).trim();
+        const mappingVal = (fix && fix.mapping) ? fix.mapping : (dep.mapping || DEFAULT_FOREIGN_MAPPING);
+        const secondMappingVal = (fix && fix.second_mapping) ? fix.second_mapping : (dep.second_mapping || '');
+        const bankVal = dep.bank || DEFAULT_FOREIGN_BANK;
+
         if (currentId && byId.has(currentId)) {
             const st = byId.get(currentId);
             return {
                 ...dep,
+                student_id: currentId,
+                mapping: mappingVal,
+                second_mapping: secondMappingVal,
+                bank: bankVal,
                 matched_student_name: st.full_name || st.arabic_name || dep.matched_student_name || '',
                 id_status: validateID(currentId),
-                match_source: dep.match_source === 'manual' ? 'manual' : 'statement_id'
+                match_source: fix ? 'manual' : (dep.match_source === 'manual' ? 'manual' : 'statement_id')
             };
         }
 
-        // If already has a valid 9-digit ID (even if student_master doesn't have that row yet), keep it Valid
         if (currentId && validateID(currentId) === 'Valid') {
             return {
                 ...dep,
+                student_id: currentId,
+                mapping: mappingVal,
+                second_mapping: secondMappingVal,
+                bank: bankVal,
                 id_status: 'Valid',
-                match_source: dep.match_source || 'statement_id'
+                match_source: fix ? 'manual' : (dep.match_source || 'statement_id')
             };
         }
 
@@ -635,6 +791,9 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [])
                 return {
                     ...dep,
                     student_id: bestCandidate.sid,
+                    mapping: mappingVal,
+                    second_mapping: secondMappingVal,
+                    bank: bankVal,
                     matched_student_name: bestCandidate.student.full_name || bestCandidate.student.arabic_name || '',
                     id_status: validateID(bestCandidate.sid),
                     match_source: 'name_match',
@@ -645,6 +804,10 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [])
 
         return {
             ...dep,
+            student_id: currentId,
+            mapping: mappingVal,
+            second_mapping: secondMappingVal,
+            bank: bankVal,
             id_status: validateID(currentId)
         };
     });
