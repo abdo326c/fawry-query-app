@@ -292,8 +292,8 @@ test('App brand icon and responsive header components are properly structured', 
     expect(sidebar).not.toBeNull();
     const sidebarBrand = sidebar.querySelector('.app-brand');
     expect(sidebarBrand).not.toBeNull();
-    expect(sidebarBrand.querySelector('.brand-badge img.brand-icon')?.getAttribute('src')).toBe('brand-emblem.png');
-    expect(sidebarBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
+    expect(sidebarBrand.querySelector('.brand-badge img.brand-icon')?.getAttribute('src')).toBe('brand-emblem.png?v=2');
+    expect(sidebarBrand.querySelector('.brand-name').textContent).toBe('Student Payments');
     expect(sidebarBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
     // Mobile Header Brand
@@ -301,8 +301,8 @@ test('App brand icon and responsive header components are properly structured', 
     expect(mobileHeader).not.toBeNull();
     const mobileBrand = mobileHeader.querySelector('.app-brand');
     expect(mobileBrand).not.toBeNull();
-    expect(mobileBrand.querySelector('.brand-badge img.brand-icon')?.getAttribute('src')).toBe('brand-emblem.png');
-    expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
+    expect(mobileBrand.querySelector('.brand-badge img.brand-icon')?.getAttribute('src')).toBe('brand-emblem.png?v=2');
+    expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Student Payments');
     expect(mobileBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
     // Auth Overlay keeps clean sign-in form and showcases full custom brand lockup
@@ -310,8 +310,8 @@ test('App brand icon and responsive header components are properly structured', 
     expect(authOverlay).not.toBeNull();
     expect(authOverlay.querySelector('.app-brand')).toBeNull();
     expect(authOverlay.querySelector('.showcase-org-tag')).toBeNull();
-    expect(authOverlay.querySelector('img.showcase-brand-logo')?.getAttribute('src')).toBe('brand-logo.png');
-    expect(authOverlay.querySelector('img.showcase-brand-logo')?.getAttribute('alt')).toBe('Students Payments Database');
+    expect(authOverlay.querySelector('img.showcase-brand-logo')?.getAttribute('src')).toBe('brand-logo.png?v=2');
+    expect(authOverlay.querySelector('img.showcase-brand-logo')?.getAttribute('alt')).toBe('Student Payments Database');
 });
 
 test('Transactions table renders compact .tx-quick-fix-btn with proper classes', () => {
@@ -661,9 +661,9 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(fawryDarkLogo.getAttribute('src')).toBe('fawry-logo-dark.png');
     expect(fawryLightLogo.getAttribute('src')).toBe('fawry-logo-light.png');
 
-    // Verify site title & sidebar brand reflect Students Payments Database
-    expect(document.title).toBe('Students Payments Database');
-    expect(document.querySelector('.sidebar .brand-name')?.textContent?.trim()).toBe('Students Payments');
+    // Verify site title & sidebar brand reflect Student Payments Database
+    expect(document.title).toBe('Student Payments Database');
+    expect(document.querySelector('.sidebar .brand-name')?.textContent?.trim()).toBe('Student Payments');
 
     // Verify Foreign Transactions page Banque Misr light & dark logos exist
     const foreignDarkLogo = document.querySelector('#view-foreign-transactions .fawry-theme-logo-dark');
