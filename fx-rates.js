@@ -2,6 +2,7 @@ import { toDateOnly } from './rules.js';
 
 export const FX_STORAGE_KEY = 'fawry_app_fx_rates_v1';
 export const DEFAULT_FX_MODE = 'historical'; // 'historical' | 'latest' | 'custom'
+export const DEFAULT_USD_EGP_FALLBACK_RATE = 49.5;
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
@@ -99,15 +100,19 @@ export async function fetchUsdToEgpRateForDate(dateOrLatest = 'latest', fetchImp
     const targetDate = isLatestReq ? null : toDateOnly(dateOrLatest);
     if (!isLatestReq && !targetDate) return null;
 
+    const latestCandidates = [
+        { url: 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json', provider: 'currency-api' },
+        { url: 'https://open.er-api.com/v6/latest/USD', provider: 'open-er-api' },
+        { url: 'https://latest.currency-api.pages.dev/v1/currencies/usd.json', provider: 'currency-api-pages' }
+    ];
+
     const candidates = (isLatestReq || (targetDate && todayStr && targetDate >= todayStr))
-        ? [
-            { url: 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json', provider: 'currency-api' },
-            { url: 'https://open.er-api.com/v6/latest/USD', provider: 'open-er-api' },
-            { url: 'https://latest.currency-api.pages.dev/v1/currencies/usd.json', provider: 'currency-api-pages' }
-        ]
+        ? latestCandidates
         : [
             { url: `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${targetDate}/v1/currencies/usd.json`, provider: 'currency-api' },
-            { url: `https://${targetDate}.currency-api.pages.dev/v1/currencies/usd.json`, provider: 'currency-api-pages' }
+            { url: `https://${targetDate}.currency-api.pages.dev/v1/currencies/usd.json`, provider: 'currency-api-pages' },
+            // Fallback to latest rate if historical snapshot for targetDate is not published
+            ...latestCandidates
         ];
 
     for (const c of candidates) {
@@ -234,7 +239,12 @@ export function resolveUsdToEgpRate(dateStr, store, { mode = null, customRate = 
         };
     }
 
-    return { rate: 0, source: 'missing', rateDate: '', fallback: true };
+    return {
+        rate: DEFAULT_USD_EGP_FALLBACK_RATE,
+        source: 'fallback',
+        rateDate: '',
+        fallback: true
+    };
 }
 
 /**

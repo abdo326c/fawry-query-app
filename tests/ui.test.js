@@ -617,6 +617,16 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     const grandTotalRow = window.app.lastDashboardExportRows[window.app.lastDashboardExportRows.length - 1];
     expect(grandTotalRow['NuMisrUsd5 (USD)']).toBe(1500);
     expect(grandTotalRow['NuMisrUsd5 (EGP Eq.)']).toBe(74000);
+    expect(grandTotalRow['Grand Total (EGP)']).toBe(74000);
+
+    // Verify separate numeric columns in DOM and structured multi-sheet report state
+    const headerTexts = Array.from(document.querySelectorAll('#dashboard-pivot-table thead tr:last-child th')).map(th => th.textContent.trim());
+    expect(headerTexts).toContain('NuMisrUsd5 (USD)');
+    expect(headerTexts).toContain('NuMisrUsd5 (EGP Eq.)');
+    expect(window.app.lastDashboardReport).not.toBeNull();
+    expect(window.app.lastDashboardReport.dailyRows.length).toBe(2);
+    expect(window.app.lastDashboardReport.monthlyRows.length).toBe(1);
+    expect(window.app.lastDashboardReport.summaryAoa.length).toBeGreaterThan(10);
 
     // Apply Manual Custom Rate Override (52.00 EGP/USD -> 1500 * 52 = 78,000 EGP)
     document.getElementById('dashboard-fx-rate-input').value = '52.00';

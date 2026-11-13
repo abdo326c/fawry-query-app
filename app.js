@@ -1076,10 +1076,10 @@ class App {
                 // Remove UI-only % Share column & drill-down icons so pasted email stays clean
                 clone.querySelectorAll('.pivot-share-col, .no-email-copy').forEach(el => el.remove());
 
-                const selectedBanksCount = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked').length;
+                const headerThCount = clone.querySelectorAll('thead tr:last-child th').length;
                 const titleTh = clone.querySelector('.pivot-title');
-                if (titleTh && selectedBanksCount > 0) {
-                    titleTh.setAttribute('colspan', String(selectedBanksCount + 2));
+                if (titleTh && headerThCount > 0) {
+                    titleTh.setAttribute('colspan', String(headerThCount));
                 }
 
                 const cells = clone.querySelectorAll('th, td');
@@ -1158,6 +1158,22 @@ class App {
             return;
         }
 
+        if (selectedBanks.length === 1 && selectedBanks[0] === DEFAULT_FOREIGN_BANK) {
+            const fxFrom = document.getElementById('foreign-date-from');
+            const fxTo = document.getElementById('foreign-date-to');
+            if (type === 'row' && groupBy === 'date' && key) {
+                if (fxFrom) fxFrom.value = key;
+                if (fxTo) fxTo.value = key;
+            } else {
+                if (fxFrom) fxFrom.value = dateFrom;
+                if (fxTo) fxTo.value = dateTo;
+            }
+            this.foreignQuickFilter = type === 'invalid_tx' ? 'needs_id' : 'all';
+            document.querySelector('.nav-link[data-tab="foreign-transactions"]')?.click();
+            this.loadForeignTransactions();
+            return;
+        }
+
         if (type === 'invalid_tx') {
             const amFrom = document.getElementById('automatcher-date-from');
             const amTo = document.getElementById('automatcher-date-to');
@@ -1229,7 +1245,8 @@ class App {
             return true;
         });
 
-        if (visibleBodyRows.length === 0) {
+        const report = this.lastDashboardReport;
+        if (visibleBodyRows.length === 0 && (!report || (!report.dailyRows?.length && !report.groupedRows?.length))) {
             Toast.show('No pivot data available to export.', 'warning');
             return;
         }
@@ -1243,75 +1260,113 @@ class App {
             return;
         }
 
-        // Extract column headers from the 2nd thead row (e.g. Date, NUADCB136, NUADIB64, Grand Total, % Share)
-        const headerRows = table.querySelectorAll('thead tr');
-        const titleText = (headerRows[0]?.textContent || 'Total Fawry Collection').trim();
-        const colHeaderCells = Array.from((headerRows[1] || headerRows[0])?.querySelectorAll('th') || []);
-        const colHeaders = colHeaderCells.map(th => th.textContent.trim());
-        const numCols = colHeaders.length || 4;
+        const wb = XLSX.utils.book_new();
 
-        // Build AOAs (Array of Arrays) mimicking the exact visible Pivot Table
-        const aoa = [];
-        // Row 0: Title banner row ("Total Fawry Collection")
-        const titleRow = new Array(numCols).fill('');
-        titleRow[0] = titleText;
-        aoa.push(titleRow);
+        const buildStyledPivotSheet = (titleText, colHeaders, dataRows, totalRow) => {
+            const numCols = colHeaders.length || 4;
+            const aoa = [];
+            const titleRow = new Array(numCols).fill('');
+            titleRow[0] = titleText;
+            aoa.push(titleRow);
+            aoa.push(colHeaders.map(h => sanitizeExcelValue(h)));
 
-        // Row 1: Column Headers
-        aoa.push(colHeaders);
+            dataRows.forEach(r => {
+                aoa.push(r.map((val, idx) => (idx === 0 || typeof val === 'string') ? sanitizeExcelValue(val) : val));
+            });
 
-        const parseCellVal = (td, colIdx) => {
-            const raw = (td.textContent || '').trim();
-            if (colIdx === 0) {
-                return sanitizeExcelValue(raw);
+            if (totalRow && totalRow.length > 0) {
+                aoa.push(totalRow.map((val, idx) => (idx === 0 || typeof val === 'string') ? sanitizeExcelValue(val) : val));
             }
-            if (td.classList.contains('pivot-share-col') || raw.endsWith('%')) {
-                return sanitizeExcelValue(raw);
+
+            const ws = XLSX.utils.aoa_to_sheet(aoa);
+            if (numCols > 1) {
+                ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } }];
             }
-            const cleaned = raw.replace(/,/g, '');
-            const num = Number(cleaned);
-            return (!isNaN(num) && cleaned !== '') ? num : sanitizeExcelValue(raw);
-        };
-
-        // Visible Body Rows (if months are collapsed, only month rows are visible; if expanded, month + its visible day rows)
-        visibleBodyRows.forEach(tr => {
-            const tds = Array.from(tr.querySelectorAll('td'));
-            const rowVals = tds.map((td, idx) => parseCellVal(td, idx));
-            aoa.push(rowVals);
-        });
-
-        // Footer Row ("Grand Total")
-        const tfootRows = Array.from(table.querySelectorAll('tfoot tr')).filter(tr => tr.style.display !== 'none');
-        tfootRows.forEach(tr => {
-            const tds = Array.from(tr.querySelectorAll('td'));
-            if (tds.length > 1) {
-                aoa.push(tds.map((td, idx) => parseCellVal(td, idx)));
-            }
-        });
-
-        const ws = XLSX.utils.aoa_to_sheet(aoa);
-
-        // Merge top title row across all columns
-        if (numCols > 1) {
-            ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } }];
-        }
-
-        // Format numeric currency cells as #,##0.00 so Excel displays exact pivot formatting
-        for (let r = 2; r < aoa.length; r++) {
-            for (let c = 1; c < numCols; c++) {
-                const cellRef = XLSX.utils.encode_cell({ r, c });
-                if (ws[cellRef] && typeof ws[cellRef].v === 'number') {
-                    ws[cellRef].z = '#,##0.00';
+            for (let r = 2; r < aoa.length; r++) {
+                for (let c = 1; c < numCols; c++) {
+                    const cellRef = XLSX.utils.encode_cell({ r, c });
+                    if (ws[cellRef] && typeof ws[cellRef].v === 'number') {
+                        ws[cellRef].z = '#,##0.00';
+                    }
                 }
             }
+            ws['!cols'] = colHeaders.map((h, idx) => ({ wch: idx === 0 ? 28 : Math.max(18, String(h).length + 4) }));
+            return ws;
+        };
+
+        if (report && Array.isArray(report.colHeaders) && report.colHeaders.length > 0) {
+            if (report.groupBy === 'date') {
+                // Sheet 1: Daily Pivot (no double-counting with monthly rows)
+                const dailyWs = buildStyledPivotSheet(
+                    `${report.titleText || 'Total Collection Report'} - Daily Breakdown`,
+                    report.colHeaders,
+                    report.dailyRows || [],
+                    report.grandTotalRow || []
+                );
+                XLSX.utils.book_append_sheet(wb, dailyWs, 'Daily Pivot');
+
+                // Sheet 2: Monthly Summary
+                if (Array.isArray(report.monthlyRows) && report.monthlyRows.length > 0) {
+                    const monthlyHeaders = [...report.colHeaders];
+                    monthlyHeaders[0] = 'Month';
+                    const monthlyWs = buildStyledPivotSheet(
+                        `${report.titleText || 'Total Collection Report'} - Monthly Summary`,
+                        monthlyHeaders,
+                        report.monthlyRows,
+                        report.grandTotalRow || []
+                    );
+                    XLSX.utils.book_append_sheet(wb, monthlyWs, 'Monthly Summary');
+                }
+            } else {
+                // Category / Bank / Status Pivot
+                const groupedWs = buildStyledPivotSheet(
+                    report.titleText || 'Total Collection Report',
+                    report.colHeaders,
+                    report.groupedRows || [],
+                    report.grandTotalRow || []
+                );
+                XLSX.utils.book_append_sheet(wb, groupedWs, 'Category Pivot');
+            }
+
+            // Sheet 3: Executive Summary & KPIs
+            if (Array.isArray(report.summaryAoa) && report.summaryAoa.length > 0) {
+                const summaryWs = XLSX.utils.aoa_to_sheet(report.summaryAoa);
+                for (let r = 0; r < report.summaryAoa.length; r++) {
+                    for (let c = 1; c < (report.summaryAoa[r]?.length || 0); c++) {
+                        const cellRef = XLSX.utils.encode_cell({ r, c });
+                        if (summaryWs[cellRef] && typeof summaryWs[cellRef].v === 'number') {
+                            summaryWs[cellRef].z = '#,##0.00';
+                        }
+                    }
+                }
+                summaryWs['!cols'] = [{ wch: 32 }, { wch: 22 }, { wch: 22 }, { wch: 20 }, { wch: 24 }];
+                XLSX.utils.book_append_sheet(wb, summaryWs, 'Executive Summary');
+            }
+        } else {
+            // Fallback DOM scrape if report state wasn't populated
+            const headerRows = table.querySelectorAll('thead tr');
+            const titleText = (headerRows[0]?.textContent || 'Total Collection Report').trim();
+            const colHeaderCells = Array.from((headerRows[1] || headerRows[0])?.querySelectorAll('th') || []);
+            const colHeaders = colHeaderCells.map(th => th.textContent.trim());
+
+            const parseCellVal = (td, colIdx) => {
+                const raw = (td.textContent || '').trim();
+                if (colIdx === 0) return sanitizeExcelValue(raw);
+                if (td.classList.contains('pivot-share-col') || raw.endsWith('%')) return sanitizeExcelValue(raw);
+                const cleaned = raw.replace(/,/g, '');
+                const num = Number(cleaned);
+                return (!isNaN(num) && cleaned !== '') ? num : sanitizeExcelValue(raw);
+            };
+
+            const bodyRows = visibleBodyRows.map(tr => Array.from(tr.querySelectorAll('td')).map((td, idx) => parseCellVal(td, idx)));
+            const tfootTr = table.querySelector('tfoot tr');
+            const totalRow = tfootTr ? Array.from(tfootTr.querySelectorAll('td')).map((td, idx) => parseCellVal(td, idx)) : [];
+            const ws = buildStyledPivotSheet(titleText, colHeaders, bodyRows, totalRow);
+            XLSX.utils.book_append_sheet(wb, ws, 'Total Fawry Collection');
         }
 
-        ws['!cols'] = colHeaders.map((_, idx) => ({ wch: idx === 0 ? 26 : 18 }));
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Total Fawry Collection');
-        XLSX.writeFile(wb, `Fawry_Pivot_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
-        Toast.show('Pivot exported to Excel!', 'success');
+        XLSX.writeFile(wb, `Collection_Report_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
+        Toast.show('Dashboard report exported to Excel!', 'success');
     }
 
     updateDashboardFxUI() {
@@ -1449,16 +1504,20 @@ class App {
 
         const checkboxes = document.querySelectorAll('#dashboard-bank-filters input[type="checkbox"]:checked');
         const selectedBanks = Array.from(checkboxes).map(cb => cb.value);
+        const fawryBanksSelected = selectedBanks.filter(b => b !== DEFAULT_FOREIGN_BANK);
+        const includeForeignBank = selectedBanks.includes(DEFAULT_FOREIGN_BANK);
 
         const tbody = document.getElementById('dashboard-pivot-body');
         const tfoot = document.getElementById('dashboard-pivot-foot');
         if (!tbody || !tfoot) return;
 
         const formatMoney = (num) => Number(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        const totalColSpan = selectedBanks.length + 2 + (showShare ? 1 : 0);
+        const bankColCount = fawryBanksSelected.length + (includeForeignBank ? 2 : 0);
+        const totalColSpan = bankColCount + 2 + (showShare ? 1 : 0);
 
         if (selectedBanks.length === 0) {
             this.lastDashboardExportRows = [];
+            this.lastDashboardReport = null;
             tbody.innerHTML = '<tr><td colspan="2" style="text-align: center;">No bank selected</td></tr>';
             tfoot.innerHTML = '<tr><td>Grand Total</td><td>0.00</td></tr>';
             document.getElementById('stat-total-collections').textContent = 'EGP 0.00';
@@ -1494,75 +1553,93 @@ class App {
             let allData = [];
             let rpcSucceeded = false;
             
-            // 1. Try fast server-side RPC supporting all Group By modes when viewing 'all' transactions
-            if (statusFilter === 'all') {
-                const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
-                    start_date: dateFrom,
-                    end_date: dateTo,
-                    group_col: groupBy
-                });
-                if (!pivotByErr && Array.isArray(pivotByData)) {
-                    rpcSucceeded = true;
-                    allData = pivotByData.map(row => ({
-                        payment_date: groupBy === 'date' ? row.group_key : null,
-                        mapping: groupBy === 'mapping' ? row.group_key : null,
-                        second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
-                        item_name: groupBy === 'item_name' ? row.group_key : null,
-                        bank: row.bank,
-                        item_price: row.total_amount
-                    }));
-                } else if (groupBy === 'date') {
-                    // 2. Fallback to legacy date-only RPC
-                    const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
-                    rpcSucceeded = !rpcError && Array.isArray(rpcData);
-                    if (rpcSucceeded) {
-                        allData = rpcData.map(row => ({
-                            payment_date: row.payment_date,
-                            bank: row.bank,
-                            item_price: row.daily_total
-                        }));
+            // 1. Query Fawry transactions only when at least one Fawry bank is checked
+            if (fawryBanksSelected.length > 0) {
+                if (statusFilter === 'all') {
+                    const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
+                        start_date: dateFrom,
+                        end_date: dateTo,
+                        group_col: groupBy
+                    });
+                    if (!pivotByErr && Array.isArray(pivotByData)) {
+                        rpcSucceeded = true;
+                        allData = pivotByData
+                            .filter(row => fawryBanksSelected.includes(row.bank))
+                            .map(row => ({
+                                payment_date: groupBy === 'date' ? row.group_key : null,
+                                mapping: groupBy === 'mapping' ? row.group_key : null,
+                                second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
+                                item_name: groupBy === 'item_name' ? row.group_key : null,
+                                bank: row.bank,
+                                item_price: row.total_amount
+                            }));
+                    } else if (groupBy === 'date') {
+                        // 2. Fallback to legacy date-only RPC
+                        const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
+                        rpcSucceeded = !rpcError && Array.isArray(rpcData);
+                        if (rpcSucceeded) {
+                            allData = rpcData
+                                .filter(row => fawryBanksSelected.includes(row.bank))
+                                .map(row => ({
+                                    payment_date: row.payment_date,
+                                    bank: row.bank,
+                                    item_price: row.daily_total
+                                }));
+                        }
                     }
                 }
-            }
-            
-            // Fallback (RPC missing / failed, or a specific transaction subset filter is active)
-            if (!rpcSucceeded) {
-                allData = await fetchAll(
-                    'transactions',
-                    'payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number',
-                    q => {
-                        q = q.gte('payment_date', dateFrom)
-                            .lte('payment_date', dateTo)
-                            .in('bank', selectedBanks);
+                
+                // Fallback (RPC missing / failed, or a specific transaction subset filter is active)
+                if (!rpcSucceeded) {
+                    allData = await fetchAll(
+                        'transactions',
+                        'payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number',
+                        q => {
+                            q = q.gte('payment_date', dateFrom)
+                                .lte('payment_date', dateTo)
+                                .in('bank', fawryBanksSelected);
 
-                        if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
-                        else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
-                        else if (statusFilter === 'settled') q = q.eq('is_settled', true);
-                        else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
-                        else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
-                        else if (statusFilter === 'erp_unposted') q = q.or('erp_batch_number.is.null,erp_batch_number.eq.');
-                        return q;
-                    },
-                    'id'
-                );
+                            if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
+                            else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
+                            else if (statusFilter === 'settled') q = q.eq('is_settled', true);
+                            else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
+                            else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
+                            else if (statusFilter === 'erp_unposted') q = q.or('erp_batch_number.is.null,erp_batch_number.eq.');
+                            return q;
+                        },
+                        'id'
+                    );
+                }
+            } else {
+                rpcSucceeded = true;
             }
 
-            // Include Foreign Transactions (NuMisrUsd5) matching the selected period and subset filter
-            const filteredForeignRaw = (this.foreignTransactions || [])
+            // Include Foreign Transactions (NuMisrUsd5) from both Supabase and local session
+            let foreignSourceRows = [];
+            if (includeForeignBank) {
+                try {
+                    foreignSourceRows = await this.fetchForeignRowsForErp(dateFrom, dateTo);
+                } catch (_) {
+                    foreignSourceRows = (this.foreignTransactions || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
+                }
+            }
+
+            const filteredForeignRaw = foreignSourceRows
                 .map((r, i) => this.normalizeForeignTransactionRow(r, i))
                 .filter(r => {
                     const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
                     if (!pDate || pDate < dateFrom || pDate > dateTo) return false;
+                    const isSettledRow = r.is_settled !== undefined ? Boolean(r.is_settled) : true;
                     if (statusFilter === 'valid') return r.id_status === 'Valid';
                     if (statusFilter === 'invalid') return r.id_status !== 'Valid';
-                    if (statusFilter === 'settled') return Boolean(r.is_settled);
-                    if (statusFilter === 'unsettled') return !r.is_settled;
+                    if (statusFilter === 'settled') return isSettledRow;
+                    if (statusFilter === 'unsettled') return !isSettledRow;
                     if (statusFilter === 'erp_recorded') return Boolean(r.erp_batch_number);
                     if (statusFilter === 'erp_unposted') return !r.erp_batch_number;
                     return true;
                 });
 
-            if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && filteredForeignRaw.length > 0) {
+            if (includeForeignBank && filteredForeignRaw.length > 0) {
                 const neededDates = filteredForeignRaw
                     .map(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date))
                     .filter(Boolean);
@@ -1587,12 +1664,12 @@ class App {
                     second_mapping: r.second_mapping || '',
                     item_name: r.description || r.item_name || '',
                     id_status: r.id_status,
-                    is_settled: Boolean(r.is_settled),
+                    is_settled: r.is_settled !== undefined ? Boolean(r.is_settled) : true,
                     erp_batch_number: r.erp_batch_number || null
                 };
             });
 
-            if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && matchingForeignRows.length > 0) {
+            if (includeForeignBank && matchingForeignRows.length > 0) {
                 allData = [...allData, ...matchingForeignRows];
             }
 
@@ -1647,17 +1724,19 @@ class App {
             if (split64El) split64El.textContent = `EGP ${formatMoney(ib64Val)}`;
             if (splitMisrEl) splitMisrEl.textContent = `USD ${formatMoney(misrUsd5UsdTotal)}`;
             if (splitMisrEgpEl) {
-                const hasFxRate = resolveUsdToEgpRate(dateTo, this.fxStore).rate > 0 || misrUsd5EgpVal > misrUsd5UsdTotal;
-                splitMisrEgpEl.textContent = hasFxRate
+                const resolvedFx = resolveUsdToEgpRate(dateTo, this.fxStore);
+                splitMisrEgpEl.textContent = resolvedFx.rate > 0
                     ? `(≈ EGP ${formatMoney(misrUsd5EgpVal)})`
                     : `(No FX rate synced)`;
             }
 
-            const renderBankTd = (rowObj, bankCode) => {
+            // Render separate numeric columns for NuMisrUsd5 (USD) and NuMisrUsd5 (EGP Eq.) so DOM, Email copy, and Excel exports have pure numbers
+            const renderBankTds = (rowObj, bankCode) => {
                 const egpVal = rowObj[bankCode] || 0;
                 const highlight = bankCode === 'NUADIB64' ? 'highlight-cell' : '';
-                if (bankCode === DEFAULT_FOREIGN_BANK && (rowObj._misrUsd || 0) > 0) {
-                    return `<td class="${highlight}">${formatMoney(egpVal)}<div style="font-size: 0.68rem; color: #10b981; line-height: 1.1;">USD ${formatMoney(rowObj._misrUsd)}</div></td>`;
+                if (bankCode === DEFAULT_FOREIGN_BANK) {
+                    const usdVal = rowObj._misrUsd || 0;
+                    return `<td style="color: #10b981;">${formatMoney(usdVal)}</td><td class="${highlight}">${formatMoney(egpVal)}</td>`;
                 }
                 return `<td class="${highlight}">${formatMoney(egpVal)}</td>`;
             };
@@ -1668,9 +1747,31 @@ class App {
                         exportObj['NuMisrUsd5 (USD)'] = Number((rowObj._misrUsd || 0).toFixed(2));
                         exportObj['NuMisrUsd5 (EGP Eq.)'] = Number((rowObj[b] || 0).toFixed(2));
                     } else {
-                        exportObj[b] = Number((rowObj[b] || 0).toFixed(2));
+                        exportObj[`${b} (EGP)`] = Number((rowObj[b] || 0).toFixed(2));
                     }
                 });
+            };
+
+            const buildRowAoaValues = (firstColLabel, rowObj, isGrandTotal = false) => {
+                const arr = [firstColLabel];
+                selectedBanks.forEach(b => {
+                    if (b === DEFAULT_FOREIGN_BANK) {
+                        arr.push(Number((rowObj._misrUsd || 0).toFixed(2)));
+                        arr.push(Number((rowObj[b] || 0).toFixed(2)));
+                    } else {
+                        arr.push(Number((rowObj[b] || 0).toFixed(2)));
+                    }
+                });
+                arr.push(Number((rowObj.Total || 0).toFixed(2)));
+                if (showShare) {
+                    if (isGrandTotal) {
+                        arr.push('100.0%');
+                    } else {
+                        const pct = bankTotals.Total > 0 ? `${((rowObj.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
+                        arr.push(pct);
+                    }
+                }
+                return arr;
             };
 
             const renderShareCell = (amount) => {
@@ -1689,6 +1790,9 @@ class App {
 
             let htmlOutput = '';
             this.lastDashboardExportRows = [];
+            const reportDailyRows = [];
+            const reportMonthlyRows = [];
+            const reportGroupedRows = [];
             const btnToggleMonths = document.getElementById('btn-dashboard-toggle-months');
 
             bankTotals._misrUsd = misrUsd5UsdTotal;
@@ -1729,6 +1833,13 @@ class App {
                     if (labelEl) labelEl.textContent = 'Expand All Months';
                 }
 
+                months.forEach(m => {
+                    const monthData = monthlyPivot[m];
+                    const parts = m.split('-');
+                    const monthLabel = `${monthNames[parseInt(parts[1]) - 1]} ${parts[0]}`;
+                    reportMonthlyRows.push(buildRowAoaValues(monthLabel, monthData));
+                });
+
                 if (sortBy !== 'default') {
                     // Flat sorted daily rows when sorting by Grand Total
                     const allDayEntries = [];
@@ -1746,15 +1857,16 @@ class App {
                             <td>${dateLabel}</td>`;
                         const exportRow = { "Date": dateLabel };
                         selectedBanks.forEach(b => {
-                            htmlOutput += renderBankTd(row, b);
+                            htmlOutput += renderBankTds(row, b);
                         });
                         appendBankExportCols(exportRow, row);
                         htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
                         htmlOutput += renderShareCell(row.Total);
                         htmlOutput += `</tr>`;
-                        exportRow["Grand Total"] = Number((row.Total || 0).toFixed(2));
+                        exportRow["Grand Total (EGP)"] = Number((row.Total || 0).toFixed(2));
                         if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
                         this.lastDashboardExportRows.push(exportRow);
+                        reportDailyRows.push(buildRowAoaValues(dateLabel, row));
                     });
                 } else {
                     months.forEach(m => {
@@ -1767,7 +1879,7 @@ class App {
                             htmlOutput += `<tr class="month-row" data-month="${m}">
                                 <td><div class="month-toggle"><i data-lucide="chevron-right"></i><span>${monthLabel}</span></div></td>`;
                             selectedBanks.forEach(b => {
-                                htmlOutput += renderBankTd(monthData, b);
+                                htmlOutput += renderBankTds(monthData, b);
                             });
                             htmlOutput += `<td>${formatMoney(monthData.Total)}</td>`;
                             htmlOutput += renderShareCell(monthData.Total);
@@ -1782,15 +1894,16 @@ class App {
                                 <td>${dateLabel}</td>`;
                             const exportRow = { "Date": dateLabel };
                             selectedBanks.forEach(b => {
-                                htmlOutput += renderBankTd(row, b);
+                                htmlOutput += renderBankTds(row, b);
                             });
                             appendBankExportCols(exportRow, row);
                             htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
                             htmlOutput += renderShareCell(row.Total);
                             htmlOutput += `</tr>`;
-                            exportRow["Grand Total"] = Number((row.Total || 0).toFixed(2));
+                            exportRow["Grand Total (EGP)"] = Number((row.Total || 0).toFixed(2));
                             if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
                             this.lastDashboardExportRows.push(exportRow);
+                            reportDailyRows.push(buildRowAoaValues(dateLabel, row));
                         });
                     });
                 }
@@ -1845,15 +1958,16 @@ class App {
                         <td>${escapeHTML(k)}</td>`;
                     const exportRow = { [groupLabel]: k };
                     selectedBanks.forEach(b => {
-                        htmlOutput += renderBankTd(row, b);
+                        htmlOutput += renderBankTds(row, b);
                     });
                     appendBankExportCols(exportRow, row);
                     htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
                     htmlOutput += renderShareCell(row.Total);
                     htmlOutput += `</tr>`;
-                    exportRow["Grand Total"] = Number((row.Total || 0).toFixed(2));
+                    exportRow["Grand Total (EGP)"] = Number((row.Total || 0).toFixed(2));
                     if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
                     this.lastDashboardExportRows.push(exportRow);
+                    reportGroupedRows.push(buildRowAoaValues(k, row));
                 });
 
                 if (keys.length === 0) {
@@ -1865,7 +1979,7 @@ class App {
                 const firstKey = Object.keys(this.lastDashboardExportRows[0])[0];
                 const totalExportRow = { [firstKey]: 'Grand Total' };
                 appendBankExportCols(totalExportRow, bankTotals);
-                totalExportRow["Grand Total"] = Number((bankTotals.Total || 0).toFixed(2));
+                totalExportRow["Grand Total (EGP)"] = Number((bankTotals.Total || 0).toFixed(2));
                 if (showShare) totalExportRow["% Share"] = '100.0%';
                 this.lastDashboardExportRows.push(totalExportRow);
             }
@@ -1874,7 +1988,7 @@ class App {
 
             let footHtml = `<tr><td>Grand Total</td>`;
             selectedBanks.forEach(b => {
-                footHtml += renderBankTd(bankTotals, b);
+                footHtml += renderBankTds(bankTotals, b);
             });
             footHtml += `<td>${formatMoney(bankTotals.Total)}</td>`;
             if (showShare) {
@@ -1883,14 +1997,28 @@ class App {
             footHtml += `</tr>`;
             tfoot.innerHTML = footHtml;
 
+            const label = groupBy === 'date' ? 'Date' : (groupBy === 'mapping' ? 'Mapping' : (groupBy === 'second_mapping' ? '2nd Mapping' : 'Item Name'));
+            const colHeaders = [label];
+            selectedBanks.forEach(b => {
+                if (b === DEFAULT_FOREIGN_BANK) {
+                    colHeaders.push('NuMisrUsd5 (USD)', 'NuMisrUsd5 (EGP Eq.)');
+                } else {
+                    colHeaders.push(`${b} (EGP)`);
+                }
+            });
+            colHeaders.push('Grand Total (EGP)');
+            if (showShare) colHeaders.push('% Share');
+
             const thead = document.querySelector('#dashboard-pivot-table thead');
             if (thead) {
-                const label = groupBy === 'date' ? 'Date' : (groupBy === 'mapping' ? 'Mapping' : (groupBy === 'second_mapping' ? '2nd Mapping' : 'Item Name'));
                 thead.innerHTML = `
                     <tr><th colspan="${totalColSpan}" class="pivot-title">Total Collection (EGP Equivalent)</th></tr>
                     <tr>
                         <th class="pivot-row-label">${label}</th>
-                        ${selectedBanks.map(b => `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b === DEFAULT_FOREIGN_BANK ? 'NuMisrUsd5 (EGP Eq.)' : b}</th>`).join('')}
+                        ${selectedBanks.map(b => b === DEFAULT_FOREIGN_BANK
+                            ? `<th class="pivot-col-label" style="color: #10b981;">NuMisrUsd5 (USD)</th><th class="pivot-col-label">NuMisrUsd5 (EGP Eq.)</th>`
+                            : `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b} (EGP)</th>`
+                        ).join('')}
                         <th class="pivot-col-label">Grand Total (EGP)</th>
                         ${showShare ? '<th class="pivot-col-label pivot-share-col">% Share</th>' : ''}
                     </tr>
@@ -1909,58 +2037,62 @@ class App {
             const categoryTotals = {};
 
             if (rpcSucceeded) {
-                // RPC only returned daily/group aggregates, so fetch KPI counts + top categories in parallel
-                const baseFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
-                    .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', selectedBanks);
+                if (fawryBanksSelected.length > 0) {
+                    // RPC only returned daily/group aggregates, so fetch Fawry KPI counts + top categories in parallel
+                    const baseFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
+                        .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected);
 
-                const validQuery = baseFilter().eq('id_status', 'Valid');
-                const totalQuery = baseFilter();
-                const settledQuery = baseFilter().eq('is_settled', true);
-                const erpQuery = baseFilter().not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
-                const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
-                const catPromise = (groupBy === 'mapping')
-                    ? Promise.resolve({ data: null })
-                    : supabase.rpc('get_dashboard_pivot_by', { start_date: dateFrom, end_date: dateTo, group_col: 'mapping' });
+                    const validQuery = baseFilter().eq('id_status', 'Valid');
+                    const totalQuery = baseFilter();
+                    const settledQuery = baseFilter().eq('is_settled', true);
+                    const erpQuery = baseFilter().not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
+                    const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
+                    const catPromise = (groupBy === 'mapping')
+                        ? Promise.resolve({ data: null })
+                        : supabase.rpc('get_dashboard_pivot_by', { start_date: dateFrom, end_date: dateTo, group_col: 'mapping' });
 
-                const [
-                    { count: vCnt, error: vErr },
-                    { count: tCnt, error: tErr },
-                    { count: sCnt },
-                    { count: eCnt },
-                    { count: uCnt },
-                    catRes
-                ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, catPromise]);
+                    const [
+                        { count: vCnt, error: vErr },
+                        { count: tCnt, error: tErr },
+                        { count: sCnt },
+                        { count: eCnt },
+                        { count: uCnt },
+                        catRes
+                    ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, catPromise]);
 
-                if (vErr) throw vErr;
-                if (tErr) throw tErr;
-                validCount = vCnt || 0;
-                totalCountAll = tCnt || 0;
-                settledCount = sCnt || 0;
-                erpRecordedCount = eCnt || 0;
-                unmappedCount = uCnt || 0;
+                    if (vErr) throw vErr;
+                    if (tErr) throw tErr;
+                    validCount = vCnt || 0;
+                    totalCountAll = tCnt || 0;
+                    settledCount = sCnt || 0;
+                    erpRecordedCount = eCnt || 0;
+                    unmappedCount = uCnt || 0;
 
-                if (groupBy === 'mapping') {
-                    allData.forEach(tx => {
-                        if (!selectedBanks.includes(tx.bank)) return;
-                        const k = tx.mapping || 'Unmapped';
-                        categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
-                    });
-                } else if (catRes && Array.isArray(catRes.data)) {
-                    catRes.data.forEach(r => {
-                        if (!selectedBanks.includes(r.bank)) return;
-                        const k = r.group_key || 'Unmapped';
-                        categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
-                    });
-                    if (selectedBanks.includes(DEFAULT_FOREIGN_BANK)) {
-                        matchingForeignRows.forEach(tx => {
-                            const k = tx.mapping || DEFAULT_FOREIGN_MAPPING;
+                    if (groupBy === 'mapping') {
+                        allData.forEach(tx => {
+                            if (!fawryBanksSelected.includes(tx.bank)) return;
+                            const k = tx.mapping || 'Unmapped';
                             categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
+                        });
+                    } else if (catRes && Array.isArray(catRes.data)) {
+                        catRes.data.forEach(r => {
+                            if (!fawryBanksSelected.includes(r.bank)) return;
+                            const k = r.group_key || 'Unmapped';
+                            categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
                         });
                     }
                 }
-                if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && matchingForeignRows.length > 0) {
+
+                if (includeForeignBank && matchingForeignRows.length > 0) {
                     totalCountAll += matchingForeignRows.length;
                     validCount += matchingForeignRows.filter(tx => tx.id_status === 'Valid').length;
+                    settledCount += matchingForeignRows.filter(tx => Boolean(tx.is_settled)).length;
+                    erpRecordedCount += matchingForeignRows.filter(tx => tx.erp_batch_number && String(tx.erp_batch_number).trim() !== '').length;
+                    unmappedCount += matchingForeignRows.filter(tx => !tx.mapping || String(tx.mapping).trim() === '').length;
+                    matchingForeignRows.forEach(tx => {
+                        const k = tx.mapping || DEFAULT_FOREIGN_MAPPING;
+                        categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
+                    });
                 }
             } else {
                 // Full rows were already fetched and filtered by selectedBanks – count in memory
@@ -2014,6 +2146,51 @@ class App {
             const erpSubEl = document.getElementById('stat-erp-sub');
             if (erpPctEl) erpPctEl.textContent = `${erpPct}%`;
             if (erpSubEl) erpSubEl.textContent = `${erpRecordedCount.toLocaleString()} posted • ${erpUnpostedCount.toLocaleString()} unposted`;
+
+            const fxRefInfo = resolveUsdToEgpRate(dateTo, this.fxStore);
+            const summaryAoa = [
+                ['Executive Collection Summary & KPIs', '', '', '', ''],
+                ['Period', `${dateFrom} to ${dateTo}`, 'Subset Filter', statusFilter, ''],
+                ['USD/EGP Exchange Rate Used', Number((fxRefInfo.rate || 0).toFixed(4)), 'Rate Date / Source', `${fxRefInfo.rateDate || dateTo} (${fxRefInfo.source})`, ''],
+                [],
+                ['Bank Split Breakdown', 'Native Currency', 'Native Amount', 'EGP Equivalent', '% Share of Total'],
+                ['NUADCB136', 'EGP', Number(cb136Val.toFixed(2)), Number(cb136Val.toFixed(2)), `${cb136Pct.toFixed(1)}%`],
+                ['NUADIB64', 'EGP', Number(ib64Val.toFixed(2)), Number(ib64Val.toFixed(2)), `${ib64Pct.toFixed(1)}%`],
+                [DEFAULT_FOREIGN_BANK, 'USD', Number(misrUsd5UsdTotal.toFixed(2)), Number(misrUsd5EgpVal.toFixed(2)), `${misrUsd5Pct.toFixed(1)}%`],
+                ['Combined Total (Selected Banks)', 'EGP', '', Number(totalCollections.toFixed(2)), '100.0%'],
+                [],
+                ['Operational KPI Metric', 'Value', 'Details', '', ''],
+                ['Total Collections (EGP Eq.)', Number(totalCollections.toFixed(2)), `Avg EGP ${formatMoney(avgTx)} / tx`, '', ''],
+                ['Total Transactions', totalCountAll, `${activeDaysSet.size} active payment day(s)`, '', ''],
+                ['Valid Student IDs', validCount, `${validPct}% valid (${errorCount} invalid/missing)`, '', ''],
+                ['Bank Settlement Coverage', settledCount, `${settledPct}% settled (${unsettledCount} unsettled)`, '', ''],
+                ['ERP Posting Coverage', erpRecordedCount, `${erpPct}% posted (${erpUnpostedCount} unposted)`, '', ''],
+                ['Unmapped Transactions', unmappedCount, '', '', '']
+            ];
+
+            const sortedAllCats = Object.entries(categoryTotals)
+                .filter(([, amt]) => amt > 0)
+                .sort((a, b) => b[1] - a[1]);
+            if (sortedAllCats.length > 0) {
+                summaryAoa.push([], ['Category Breakdown (Mapping)', 'Total (EGP Eq.)', '% Share', '', '']);
+                sortedAllCats.forEach(([cat, amt]) => {
+                    const pct = totalCollections > 0 ? `${((amt / totalCollections) * 100).toFixed(1)}%` : '0.0%';
+                    summaryAoa.push([cat, Number(amt.toFixed(2)), pct, '', '']);
+                });
+            }
+
+            this.lastDashboardReport = {
+                titleText: 'Total Collection (EGP Equivalent)',
+                groupBy,
+                dateFrom,
+                dateTo,
+                colHeaders,
+                dailyRows: reportDailyRows,
+                monthlyRows: reportMonthlyRows,
+                groupedRows: reportGroupedRows,
+                grandTotalRow: buildRowAoaValues('Grand Total', bankTotals, true),
+                summaryAoa
+            };
 
             // Render Top Categories badges
             const topCatContainer = document.getElementById('dashboard-top-categories');

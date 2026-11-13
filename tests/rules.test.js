@@ -403,6 +403,9 @@ test('FX rates support Per-Tx Value Date, Latest Daily Rate, Custom override, an
     expect(extractUsdEgpFromPayload({ rates: { EGP: 49.8 } })).toBe(49.8);
 
     let store = createEmptyFxStore();
+    // Empty store falls back to DEFAULT_USD_EGP_FALLBACK_RATE (never 0)
+    expect(resolveUsdToEgpRate('2026-01-05', store).rate).toBeGreaterThan(0);
+
     store.ratesByDate['2026-01-05'] = { rate: 50.0, source: 'auto' };
     store.ratesByDate['2026-01-08'] = { rate: 48.0, source: 'auto' };
     store.latest = { date: '2026-01-15', rate: 51.0, source: 'auto' };
