@@ -30,8 +30,26 @@ export function validateID(id) {
 }
 
 /**
+ * Returns true if a single mapping label belongs to an ID-exempt category
+ * (Dip, Diploma, Workshop, Workshops, Dip & Workshop, etc.).
+ */
+function isExemptMappingLabel(value) {
+    const s = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!s) return false;
+    if (
+        s === 'dip' ||
+        s === 'diploma' ||
+        s === 'workshop' ||
+        s === 'workshops' ||
+        s === 'dip & workshop' ||
+        s === 'dip and workshop'
+    ) return true;
+    return /\b(dip|diploma|workshops?)\b/i.test(s);
+}
+
+/**
  * Returns true if the given transaction or mapping values belong to a category
- * (currently "Dip & Workshop") that does not follow standard tuition Student ID rules.
+ * (Dip / Workshop) that does not follow standard tuition Student ID rules.
  */
 export function isIdValidationExempt(txOrMapping, secondMapping = null) {
     let m1 = txOrMapping;
@@ -40,8 +58,7 @@ export function isIdValidationExempt(txOrMapping, secondMapping = null) {
         m1 = txOrMapping.mapping;
         m2 = txOrMapping.second_mapping ?? txOrMapping.secondMapping;
     }
-    const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    return norm(m1) === 'dip & workshop' || norm(m2) === 'dip & workshop';
+    return isExemptMappingLabel(m1) || isExemptMappingLabel(m2);
 }
 
 /**

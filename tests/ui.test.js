@@ -732,11 +732,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(html).not.toContain('preview.css');
     expect(html).not.toContain('preview-ui.js');
     expect(html).not.toContain('Studio Preview');
-    expect(html).toContain('styles.css?v=3.0.6');
+    expect(html).toContain('styles.css?v=3.0.7');
     expect(html).toContain('ui-chrome.js?v=1.0.0');
 
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
-    expect(swSrc).toContain('styles.css?v=3.0.6');
+    expect(swSrc).toContain('styles.css?v=3.0.7');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {
@@ -1131,16 +1131,16 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
 
             const dbRows = [
                 {
-                    id: 1, reference_number: 'DIP-1', payment_date: '2026-03-01',
-                    student_id: '', original_student_id: '', customer_mobile: '01099999999',
-                    item_name: 'Python Workshop', item_price: 1500, mapping: 'Dip & Workshop',
-                    second_mapping: 'Workshop', bank: 'NUADCB136', id_status: 'Missing ID'
+                    id: 1, reference_number: '9704654873', payment_date: '2026-11-12',
+                    student_id: 'Aya Ramadan Rashed', original_student_id: 'Aya Ramadan Rashed', customer_mobile: '01099999999',
+                    item_name: 'Diploma Transcript', item_price: 50, mapping: 'Dip',
+                    second_mapping: null, bank: 'NUADCB136', id_status: 'Error: Text/Name detected'
                 },
                 {
                     id: 2, reference_number: 'DIP-2', payment_date: '2026-03-01',
                     student_id: '123', original_student_id: '123', customer_mobile: '01088888888',
-                    item_name: 'Diploma Registration', item_price: 2500, mapping: 'Other',
-                    second_mapping: 'Dip & Workshop', bank: 'NUADCB136', id_status: 'Error: ID Too Short (3 digits)'
+                    item_name: 'Workshop Fee', item_price: 2500, mapping: 'Other',
+                    second_mapping: 'Workshop', bank: 'NUADCB136', id_status: 'Error: ID Too Short (3 digits)'
                 },
                 {
                     id: 3, reference_number: 'TUI-1', payment_date: '2026-03-01',
@@ -1176,17 +1176,19 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             await window.app.runAutoMatcher();
             // Auto Matcher must completely exclude both Dip & Workshop rows and keep only TUI-1
             expect((window.app.invalidTx || []).map(r => r.reference_number)).toEqual(['TUI-1']);
-            expect(window.app.automatchDistinctMappings).not.toContain('Dip & Workshop');
+            expect(window.app.automatchDistinctMappings).not.toContain('Dip');
+            expect(window.app.automatchDistinctMappings).not.toContain('Workshop');
 
             // ERP Preview treats Dip & Workshop as Exempt / Ready (NOT Invalid / Needs Fix)
             window.app.erpData = [
-                { id: 1, reference_number: 'DIP-1', payment_date: '2026-03-01', student_id: '', item_name: 'Python Workshop', item_price: 1500, mapping: 'Dip & Workshop', bank: 'NUADCB136', id_status: 'Missing ID' },
+                { id: 1, reference_number: '9704654873', payment_date: '2026-11-12', student_id: 'Aya Ramadan Rashed', item_name: 'Diploma Transcript', item_price: 50, mapping: 'Dip', bank: 'NUADCB136', id_status: 'Error: Text/Name detected' },
+                { id: 2, reference_number: 'WS-1', payment_date: '2026-03-01', student_id: '', item_name: 'Python Workshop', item_price: 1500, mapping: 'Workshop', bank: 'NUADCB136', id_status: 'Missing ID' },
                 { id: 3, reference_number: 'TUI-1', payment_date: '2026-03-01', student_id: '', item_name: 'Tuition Fees', item_price: 15000, mapping: 'Tuition', bank: 'NUADCB136', id_status: 'Missing ID' }
             ];
             window.app.renderErpPreview();
-            expect(document.getElementById('erp-stat-valid').textContent).toBe('1');
+            expect(document.getElementById('erp-stat-valid').textContent).toBe('2');
             expect(document.getElementById('erp-stat-invalid').textContent).toBe('1');
-            expect(document.getElementById('erp-stat-ready').textContent).toBe('1');
+            expect(document.getElementById('erp-stat-ready').textContent).toBe('2');
             const erpHtml = document.getElementById('erp-preview-body').innerHTML;
             expect(erpHtml).toContain('Exempt (Dip &amp; Workshop)');
 

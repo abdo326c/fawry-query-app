@@ -87,6 +87,8 @@ function renderIcons(root = null) {
     }
 }
 
+const SUPABASE_EXEMPT_OR_FILTER = 'id_status.eq.Exempt,mapping.ilike.Dip,mapping.ilike.Dip *,mapping.ilike.Diploma*,mapping.ilike.*Workshop*,second_mapping.ilike.Dip,second_mapping.ilike.Dip *,second_mapping.ilike.Diploma*,second_mapping.ilike.*Workshop*';
+
 /**
  * Returns normalized display metadata for a transaction's Student ID status badge.
  */
@@ -2290,7 +2292,7 @@ class App {
                     const exemptFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
                         .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected)
                         .neq('id_status', 'Valid')
-                        .or('id_status.eq.Exempt,mapping.ilike."Dip & Workshop",second_mapping.ilike."Dip & Workshop"');
+                        .or(SUPABASE_EXEMPT_OR_FILTER);
 
                     if (summaryRpcData && summaryRpcData.kpis) {
                         validCount = Number(summaryRpcData.kpis.valid_count) || 0;
@@ -4483,12 +4485,12 @@ class App {
         const qf = this.txQuickFilter || 'all';
         if (qf === 'missing_id') {
             query = query.ilike('id_status', '%Missing ID%')
-                .or('mapping.is.null,mapping.not.ilike."Dip & Workshop"')
-                .or('second_mapping.is.null,second_mapping.not.ilike."Dip & Workshop"');
+                .or('mapping.is.null,and(mapping.not.ilike.Dip,mapping.not.ilike.Dip *,mapping.not.ilike.Diploma*,mapping.not.ilike.*Workshop*)')
+                .or('second_mapping.is.null,and(second_mapping.not.ilike.Dip,second_mapping.not.ilike.Dip *,second_mapping.not.ilike.Diploma*,second_mapping.not.ilike.*Workshop*)');
         } else if (qf === 'error_id') {
             query = query.ilike('id_status', '%Error%')
-                .or('mapping.is.null,mapping.not.ilike."Dip & Workshop"')
-                .or('second_mapping.is.null,second_mapping.not.ilike."Dip & Workshop"');
+                .or('mapping.is.null,and(mapping.not.ilike.Dip,mapping.not.ilike.Dip *,mapping.not.ilike.Diploma*,mapping.not.ilike.*Workshop*)')
+                .or('second_mapping.is.null,and(second_mapping.not.ilike.Dip,second_mapping.not.ilike.Dip *,second_mapping.not.ilike.Diploma*,second_mapping.not.ilike.*Workshop*)');
         } else if (qf === 'unmapped') {
             query = query.or('mapping.is.null,mapping.eq.');
         } else if (qf === 'unsettled') {
@@ -4501,7 +4503,7 @@ class App {
                 if (col === 'id_status') {
                     const filters = [];
                     if (values.includes('Valid')) filters.push('id_status.eq.Valid');
-                    if (values.includes('Exempt')) filters.push('id_status.eq.Exempt', 'mapping.ilike."Dip & Workshop"', 'second_mapping.ilike."Dip & Workshop"');
+                    if (values.includes('Exempt')) filters.push(SUPABASE_EXEMPT_OR_FILTER);
                     if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
                     if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
                     if (filters.length > 0) query = query.or(filters.join(','));
@@ -10121,7 +10123,7 @@ class App {
                         .from('transactions')
                         .select('*', { count: 'exact', head: true })
                         .neq('id_status', 'Valid')
-                        .or('id_status.eq.Exempt,mapping.ilike."Dip & Workshop",second_mapping.ilike."Dip & Workshop"')
+                        .or(SUPABASE_EXEMPT_OR_FILTER)
                 ]);
                 if (!totalRes.error && totalRes.count !== null && totalRes.count !== undefined) {
                     const exemptCnt = (!exemptRes.error && exemptRes.count) ? exemptRes.count : 0;

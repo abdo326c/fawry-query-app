@@ -444,30 +444,43 @@ test('FX rates support Per-Tx Value Date, Latest Daily Rate, Custom override, an
 });
 
 test('Dip & Workshop transactions are exempt from standard Student ID validation rules', () => {
+    expect(isIdValidationExempt('Dip')).toBe(true);
+    expect(isIdValidationExempt('Diploma')).toBe(true);
+    expect(isIdValidationExempt('Workshop')).toBe(true);
+    expect(isIdValidationExempt('Workshops')).toBe(true);
     expect(isIdValidationExempt('Dip & Workshop')).toBe(true);
     expect(isIdValidationExempt({ mapping: '  dip  &  workshop ' })).toBe(true);
-    expect(isIdValidationExempt({ mapping: 'Tuition', second_mapping: 'Dip & Workshop' })).toBe(true);
+    expect(isIdValidationExempt({ mapping: 'Other', second_mapping: 'Workshop' })).toBe(true);
     expect(isIdValidationExempt({ mapping: 'Tuition' })).toBe(false);
 
     // Effective status helpers treat legacy Dip & Workshop rows as Exempt & non-invalid
-    expect(getEffectiveIdStatus({ student_id: '', id_status: 'Missing ID', mapping: 'Dip & Workshop' })).toBe('Exempt');
-    expect(getEffectiveIdStatus({ student_id: 'ABC', id_status: 'Error: Text/Name detected', mapping: 'Dip & Workshop' })).toBe('Exempt');
-    expect(getEffectiveIdStatus({ student_id: '202312345', id_status: 'Valid', mapping: 'Dip & Workshop' })).toBe('Valid');
-    expect(isNonInvalidTransaction({ student_id: '', id_status: 'Missing ID', mapping: 'Dip & Workshop' })).toBe(true);
+    expect(getEffectiveIdStatus({ student_id: 'Aya Ramadan Rashed', id_status: 'Error: Text/Name detected', mapping: 'Dip' })).toBe('Exempt');
+    expect(getEffectiveIdStatus({ student_id: '', id_status: 'Missing ID', mapping: 'Workshop' })).toBe('Exempt');
+    expect(getEffectiveIdStatus({ student_id: '202312345', id_status: 'Valid', mapping: 'Dip' })).toBe('Valid');
+    expect(isNonInvalidTransaction({ student_id: 'Aya Ramadan Rashed', id_status: 'Error: Text/Name detected', mapping: 'Dip' })).toBe(true);
+    expect(isNonInvalidTransaction({ student_id: '', id_status: 'Missing ID', mapping: 'Workshop' })).toBe(true);
     expect(isNonInvalidTransaction({ student_id: '', id_status: 'Missing ID', mapping: 'Tuition' })).toBe(false);
 
-    // applyBusinessRules marks Dip & Workshop without a Valid ID as 'Exempt', never Missing/Error
+    // applyBusinessRules marks Dip / Workshop without a Valid ID as 'Exempt', never Missing/Error
     const lookupMapping = buildMappingLookup([
-        { item_name: 'AI Workshop Fee', mapping: 'Dip & Workshop', second_mapping: 'Executive Ed' },
+        { item_name: 'Diploma Transcript', mapping: 'Dip', second_mapping: null },
+        { item_name: 'AI Workshop Fee', mapping: 'Workshop', second_mapping: 'Executive Ed' },
         { item_name: 'Tuition Fall', mapping: 'Tuition', second_mapping: 'UG' }
     ]);
 
-    const resDipMissing = applyBusinessRules(
+    const resDipName = applyBusinessRules(
+        { studentId: 'Aya Ramadan Rashed', itemName: 'Diploma Transcript' },
+        { lookupMapping }
+    );
+    expect(resDipName.mapping).toBe('Dip');
+    expect(resDipName.idStatus).toBe('Exempt');
+
+    const resWorkshopMissing = applyBusinessRules(
         { studentId: '', itemName: 'AI Workshop Fee' },
         { lookupMapping }
     );
-    expect(resDipMissing.mapping).toBe('Dip & Workshop');
-    expect(resDipMissing.idStatus).toBe('Exempt');
+    expect(resWorkshopMissing.mapping).toBe('Workshop');
+    expect(resWorkshopMissing.idStatus).toBe('Exempt');
 
     const resDipText = applyBusinessRules(
         { studentId: '01001234567', itemName: 'AI Workshop Fee' },
