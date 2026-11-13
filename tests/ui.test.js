@@ -710,3 +710,173 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(deferredScripts.length).toBeGreaterThan(0);
     expect(deferredScripts.every(s => s.hasAttribute('defer'))).toBe(true);
 });
+
+test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, theme toggle, and SW cache integrity', async () => {
+    const appDir = path.resolve(__dirname, '..');
+    const swSrc = fs.readFileSync(path.join(appDir, 'sw.js'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(appDir, 'styles.css'), 'utf8');
+    const uiChromeSrc = fs.readFileSync(path.join(appDir, 'ui-chrome.js'), 'utf8');
+
+    // Mock lucide so ui-chrome's DOMContentLoaded icon init runs deterministically
+    let lucideRuns = 0;
+    window.lucide = { createIcons: () => { lucideRuns++; } };
+
+    // Load real ui-chrome.js and trigger DOMContentLoaded alongside app.js
+    const runChrome = new Function(uiChromeSrc);
+    runChrome();
+    await import('../app.js');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    expect(lucideRuns).toBeGreaterThanOrEqual(1);
+
+    // 1. Clean production references (no leftover preview assets or preview labels)
+    expect(html).not.toContain('preview.css');
+    expect(html).not.toContain('preview-ui.js');
+    expect(html).not.toContain('Studio Preview');
+    expect(html).toContain('styles.css?v=3.0.0');
+    expect(html).toContain('ui-chrome.js?v=1.0.0');
+
+    // 2. Service Worker cache consistency: every cached asset resolves to a real file
+    expect(swSrc).toContain('styles.css?v=3.0.0');
+    expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
+    const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
+    for (const rel of urlMatches) {
+        if (!rel) continue;
+        expect(fs.existsSync(path.join(appDir, rel)), `Missing SW asset: ${rel}`).toBe(true);
+    }
+
+    // 3. Light theme warm-stone & black-text palette tokens in styles.css + CSS brace balance
+    expect(cssSrc).toContain('--bg-canvas: #ebe8e1;');
+    expect(cssSrc).toContain('--bg-card: #f5f2eb;');
+    expect(cssSrc).toContain('--text-main: #09090b;');
+    expect(cssSrc).toContain('.app-layout.sidebar-collapsed .view');
+    expect((cssSrc.match(/\{/g) || []).length).toBe((cssSrc.match(/\}/g) || []).length);
+
+    // 4. Auth Overlay: NU Finance Team + Abdelrahman Mohamed attribution, zero Treasury, working password eye toggle
+    const authOverlay = document.getElementById('auth-overlay');
+    const authText = authOverlay.textContent || '';
+    expect(authText).toContain('NU Finance Team');
+    expect(authText).toContain('Abdelrahman Mohamed');
+    expect(authText).not.toMatch(/treasury/i);
+
+    const authPw = document.getElementById('auth-password');
+    const btnEye = document.getElementById('btn-toggle-auth-password');
+    expect(authPw.type).toBe('password');
+    btnEye.click();
+    expect(authPw.type).toBe('text');
+    btnEye.click();
+    expect(authPw.type).toBe('password');
+
+    // 5. Topbar / Sidebar Chrome: single global search in topbar, user profile in topbar, no breadcrumb or automatch badge
+    expect(document.querySelectorAll('.sidebar #btn-open-global-search').length).toBe(0);
+    expect(document.querySelectorAll('.workspace-topbar #btn-open-global-search').length).toBe(1);
+    expect(document.querySelectorAll('.sidebar #user-profile-section').length).toBe(0);
+    expect(document.querySelectorAll('.workspace-topbar #user-profile-section').length).toBe(1);
+    expect(document.querySelectorAll('.topbar-breadcrumb').length).toBe(0);
+    expect(document.getElementById('sidebar-automatch-badge')).toBeNull();
+
+    // 6. Sidebar Collapse Rail toggles .sidebar-collapsed & persists in localStorage
+    const appLayout = document.querySelector('.app-layout');
+    const btnRail = document.getElementById('btn-toggle-sidebar-rail');
+    const startCollapsed = appLayout.classList.contains('sidebar-collapsed');
+    btnRail.click();
+    expect(appLayout.classList.contains('sidebar-collapsed')).toBe(!startCollapsed);
+    expect(localStorage.getItem('spdb-sidebar-rail')).toBe(!startCollapsed ? 'collapsed' : 'expanded');
+    btnRail.click();
+    expect(appLayout.classList.contains('sidebar-collapsed')).toBe(startCollapsed);
+
+    // 7. Theme Toggle switches root .light class cleanly
+    const btnTheme = document.getElementById('btn-theme-toggle');
+    const wasLight = document.documentElement.classList.contains('light');
+    btnTheme.click();
+    expect(document.documentElement.classList.contains('light')).toBe(!wasLight);
+    btnTheme.click();
+    expect(document.documentElement.classList.contains('light')).toBe(wasLight);
+
+    // 8. All 11 views switch cleanly via sidebar navigation clicks
+    const allTabs = [
+        'dashboard', 'transactions', 'foreign-transactions', 'settlement',
+        'mappings', 'fixes', 'automatcher', 'student-master',
+        'payment-links', 'erp-export', 'users'
+    ];
+    for (const tab of allTabs) {
+        const link = document.querySelector(`.nav-link[data-tab="${tab}"]`);
+        const view = document.getElementById(`view-${tab}`);
+        expect(link).not.toBeNull();
+        expect(view).not.toBeNull();
+        link.click();
+        expect(view.classList.contains('active')).toBe(true);
+        expect(link.classList.contains('active')).toBe(true);
+    }
+
+    // 9. Tools dropdown popovers open, mutually exclude, close on Escape, and preserve RBAC visibility
+    const txToolsBtn = document.querySelector('[data-dropdown-toggle="tx-more-actions-menu"]');
+    const txToolsMenu = document.getElementById('tx-more-actions-menu');
+    const fxToolsBtn = document.querySelector('[data-dropdown-toggle="foreign-more-actions-menu"]');
+    const fxToolsMenu = document.getElementById('foreign-more-actions-menu');
+    expect(txToolsBtn).not.toBeNull();
+    expect(fxToolsBtn).not.toBeNull();
+    txToolsBtn.click();
+    expect(txToolsMenu.classList.contains('open')).toBe(true);
+    fxToolsBtn.click();
+    expect(txToolsMenu.classList.contains('open')).toBe(false);
+    expect(fxToolsMenu.classList.contains('open')).toBe(true);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(fxToolsMenu.classList.contains('open')).toBe(false);
+
+    // Structural Studio containers exist across Dashboard, Ledgers, Settlement, and ERP Export
+    expect(document.querySelector('.dashboard-bento-hero')).not.toBeNull();
+    expect(document.querySelectorAll('.ledger-sheet').length).toBe(3);
+    expect(document.querySelector('.upload-zone-inline')).not.toBeNull();
+    expect(document.querySelector('.erp-workbench-grid')).not.toBeNull();
+    expect(document.querySelector('.voucher-ticket')).not.toBeNull();
+
+    // RBAC toggles items inside Tools dropdowns cleanly
+    window.app.userRole = 'viewer';
+    window.app.applyRolePermissionsToUI();
+    expect(document.getElementById('btn-reapply-rules').style.display).toBe('none');
+    expect(document.getElementById('btn-foreign-automatch').style.display).toBe('none');
+    expect(document.getElementById('btn-show-history').style.display).not.toBe('none');
+    window.app.userRole = 'admin';
+    window.app.applyRolePermissionsToUI();
+    expect(document.getElementById('btn-reapply-rules').style.display).toBe('');
+    expect(document.getElementById('btn-foreign-automatch').style.display).toBe('');
+    expect(document.getElementById('btn-foreign-detect-duplicates').style.display).toBe('');
+
+    // 10. All 18 Modals + 4 alert-styled dialogs + customConfirm + XSS-safe Toast notifications
+    const modals = Array.from(document.querySelectorAll('.modal'));
+    expect(modals.length).toBe(18);
+    expect(document.querySelectorAll('.modal-dialog-alert').length).toBe(4);
+    for (const m of modals) {
+        expect(m.querySelector('.modal-content')).not.toBeNull();
+        const closeTrigger = m.querySelector('[onclick*="classList.add"]');
+        if (closeTrigger) {
+            m.classList.remove('hidden');
+            new Function(closeTrigger.getAttribute('onclick'))();
+            expect(m.classList.contains('hidden')).toBe(true);
+        }
+    }
+
+    // customConfirm OK & Cancel promises
+    const okPromise = window.customConfirm('Proceed with batch?', 'Confirm', 'Abort');
+    expect(document.getElementById('modal-custom-confirm').classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('custom-confirm-message').innerText).toBe('Proceed with batch?');
+    document.getElementById('btn-custom-confirm-ok').click();
+    expect(await okPromise).toBe(true);
+    expect(document.getElementById('modal-custom-confirm').classList.contains('hidden')).toBe(true);
+
+    const cancelPromise = window.customConfirm('Abort batch?');
+    document.getElementById('btn-custom-confirm-cancel').click();
+    expect(await cancelPromise).toBe(false);
+
+    // Toast types & XSS escaping
+    const toastContainer = document.getElementById('toast-container');
+    toastContainer.innerHTML = '';
+    for (const type of ['info', 'success', 'warning', 'error']) {
+        window.Toast.show(`<script>alert(1)</script> Message ${type}`, type);
+    }
+    const renderedToasts = toastContainer.querySelectorAll('.toast');
+    expect(renderedToasts.length).toBe(4);
+    expect(toastContainer.querySelectorAll('script').length).toBe(0);
+    expect(renderedToasts[1].classList.contains('toast-success')).toBe(true);
+    expect(renderedToasts[3].classList.contains('toast-error')).toBe(true);
+});

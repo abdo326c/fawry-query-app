@@ -11,7 +11,7 @@
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#0f172a">
+    <meta name="theme-color" content="#090a0d">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <!-- PWA SW Registration -->
@@ -30,8 +30,8 @@
             console.error("Promise Error: " + (event.reason && event.reason.message ? event.reason.message : event.reason));
         });
     </script>
-    <link rel="stylesheet" href="styles.css?v=2.5.1">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css?v=3.0.0">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
     <script defer src="https://unpkg.com/lucide@0.294.0"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script defer src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
@@ -47,32 +47,70 @@
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <!-- Auth Overlay -->
+    <!-- Auth Overlay (Balanced Centered Split Card) -->
     <div id="auth-overlay" class="auth-overlay">
-        <div class="auth-card">
-            <div class="app-brand logo-container" style="justify-content: center; margin-bottom: 2rem;">
-                <div class="brand-badge brand-badge-lg">
-                    <i data-lucide="database" class="brand-icon"></i>
+        <div class="auth-grid-bg" aria-hidden="true"></div>
+        <div class="auth-shell">
+            <div class="auth-left-pane">
+                <div class="app-brand logo-container" style="margin-bottom: 1.75rem;">
+                    <div class="brand-badge brand-badge-lg">
+                        <i data-lucide="database" class="brand-icon"></i>
+                    </div>
+                    <div class="brand-info">
+                        <span class="brand-name logo-text" style="font-size: 1.05rem;">Students Payments</span>
+                        <span class="brand-tag">DATABASE SYSTEM</span>
+                    </div>
                 </div>
-                <div class="brand-info">
-                    <span class="brand-name logo-text" style="font-size: 1.4rem;">Students Payments</span>
-                    <span class="brand-tag">DATABASE SYSTEM</span>
+
+                <div class="auth-card">
+                    <h1 class="auth-headline" style="margin-bottom: 1.35rem;">Sign in</h1>
+
+                    <form id="auth-form">
+                        <div class="form-group">
+                            <label for="auth-email">Email</label>
+                            <input type="email" id="auth-email" class="input-text" placeholder="name@nu.edu.eg" required>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 1.35rem;">
+                            <label for="auth-password">Password</label>
+                            <div class="password-input-wrap">
+                                <input type="password" id="auth-password" class="input-text" placeholder="Enter your password" required>
+                                <button type="button" id="btn-toggle-auth-password" class="password-eye-btn" aria-label="Show password" title="Show/hide password">
+                                    <i data-lucide="eye" style="width: 16px; height: 16px;"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width: 100%; height: 42px;" id="btn-login">
+                            <i data-lucide="log-in"></i> Sign In
+                        </button>
+                    </form>
+                    <div id="auth-error" style="color: var(--danger); font-size: 0.85rem; margin-top: 0.9rem; display: none;"></div>
                 </div>
             </div>
-            <form id="auth-form">
-                <div class="form-group" style="margin-bottom: 1rem;">
-                    <label>Email Address</label>
-                    <input type="email" id="auth-email" class="input-text" placeholder="admin@example.com" required>
+
+            <div class="auth-right-showcase" aria-hidden="true">
+                <div class="showcase-top">
+                    <span class="showcase-org-tag">Nile University</span>
                 </div>
-                <div class="form-group" style="margin-bottom: 1.5rem;">
-                    <label>Password</label>
-                    <input type="password" id="auth-password" class="input-text" required>
+
+                <div class="showcase-center">
+                    <h2 class="showcase-title">Students Payments Database</h2>
+                    <div class="showcase-accent-rule"></div>
+                    <div class="showcase-dedication">
+                        <span class="dedication-kicker">Made for</span>
+                        <div class="dedication-team">NU Finance Team</div>
+                    </div>
+                    <div class="dedication-author-pill">
+                        <i data-lucide="code-2" style="width: 14px; height: 14px;"></i>
+                        <span>By <strong>Abdelrahman Mohamed</strong></span>
+                    </div>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width: 100%;" id="btn-login">
-                    <i data-lucide="log-in"></i> Sign In
-                </button>
-            </form>
-            <div id="auth-error" style="color: #ef4444; font-size: 0.9rem; margin-top: 1rem; text-align: center; display: none;"></div>
+
+                <div class="showcase-bottom-marks">
+                    <img src="fawry-logo-dark.png" alt="" style="height: 18px; width: auto; opacity: 0.72;">
+                    <span class="showcase-marks-dot">·</span>
+                    <img src="banque-misr-emblem.png" alt="" style="height: 18px; width: auto; opacity: 0.82;">
+                </div>
+            </div>
         </div>
     </div>
 
@@ -113,86 +151,95 @@
                 </div>
             </div>
 
-            <button type="button" id="btn-open-global-search" class="sidebar-search-btn" title="Quick Search across Transactions & Students (Ctrl+K)">
-                <i data-lucide="search" style="width: 15px; height: 15px; flex-shrink: 0;"></i>
-                <span style="flex: 1; text-align: left;">Quick Search...</span>
-                <span class="search-shortcut">Ctrl+K</span>
-            </button>
-            
             <nav class="nav-menu">
-                <a href="#dashboard" class="nav-link" data-tab="dashboard">
-                    <i data-lucide="bar-chart-2"></i> Dashboard
+                <div class="nav-section-label">Analytics</div>
+                <a href="#dashboard" class="nav-link" data-tab="dashboard" title="Pivot Dashboard">
+                    <i data-lucide="bar-chart-2"></i> <span class="nav-label-text">Dashboard</span>
                 </a>
-                <a href="#transactions" class="nav-link active" data-tab="transactions">
+
+                <div class="nav-section-label">Ledgers</div>
+                <a href="#transactions" class="nav-link active" data-tab="transactions" title="Fawry Transactions">
                     <span class="nav-logo-wrap" aria-hidden="true">
                         <img src="fawry-logo-dark.png" alt="" class="fawry-theme-logo fawry-theme-logo-dark">
                         <img src="fawry-logo-light.png" alt="" class="fawry-theme-logo fawry-theme-logo-light">
-                    </span> Fawry Transactions
+                    </span> <span class="nav-label-text">Fawry Transactions</span>
                 </a>
-                <a href="#foreign-transactions" class="nav-link" data-tab="foreign-transactions">
+                <a href="#foreign-transactions" class="nav-link" data-tab="foreign-transactions" title="Foreign Transactions">
                     <span class="nav-logo-wrap" aria-hidden="true">
                         <img src="banque-misr-emblem.png" alt="" class="fawry-theme-logo">
-                    </span> Foreign Transactions
+                    </span> <span class="nav-label-text">Foreign Transactions</span>
                 </a>
-                <a href="#settlement" class="nav-link" data-tab="settlement">
-                    <i data-lucide="check-circle"></i> Fawry Settlements
+                <a href="#settlement" class="nav-link" data-tab="settlement" title="Fawry Settlements">
+                    <i data-lucide="check-circle"></i> <span class="nav-label-text">Fawry Settlements</span>
                 </a>
-                
-                
-                <a href="#mappings" class="nav-link" data-tab="mappings">
-                    <i data-lucide="git-merge"></i> Item Mappings
+
+                <div class="nav-section-label">Rules &amp; Matching</div>
+                <a href="#mappings" class="nav-link" data-tab="mappings" title="Item Mappings">
+                    <i data-lucide="git-merge"></i> <span class="nav-label-text">Item Mappings</span>
                 </a>
-                <a href="#fixes" class="nav-link" data-tab="fixes">
-                    <i data-lucide="wrench"></i> Manual Fixes
+                <a href="#fixes" class="nav-link" data-tab="fixes" title="Manual Fixes">
+                    <i data-lucide="wrench"></i> <span class="nav-label-text">Manual Fixes</span>
                 </a>
-                <a href="#automatcher" class="nav-link" data-tab="automatcher">
-                    <i data-lucide="zap"></i> Auto Matcher
-                    <span id="sidebar-automatch-badge" class="nav-badge" style="display: none;">0</span>
+                <a href="#automatcher" class="nav-link" data-tab="automatcher" title="Auto Matcher">
+                    <i data-lucide="zap"></i> <span class="nav-label-text">Auto Matcher</span>
                 </a>
-                <a href="#student-master" class="nav-link" data-tab="student-master">
-                    <i data-lucide="users"></i> Students Details
+
+                <div class="nav-section-label">Directory &amp; ERP</div>
+                <a href="#student-master" class="nav-link" data-tab="student-master" title="Students Details">
+                    <i data-lucide="users"></i> <span class="nav-label-text">Students Details</span>
                 </a>
-            
-                <a href="#payment-links" class="nav-link" data-tab="payment-links">
-                    <i data-lucide="link"></i> Payment Links
+                <a href="#payment-links" class="nav-link" data-tab="payment-links" title="Payment Links">
+                    <i data-lucide="link"></i> <span class="nav-label-text">Payment Links</span>
                 </a>
-                <a href="#erp-export" class="nav-link" data-tab="erp-export">
-                    <i data-lucide="download-cloud"></i> ERP Export
+                <a href="#erp-export" class="nav-link" data-tab="erp-export" title="ERP Export">
+                    <i data-lucide="download-cloud"></i> <span class="nav-label-text">ERP Export</span>
                 </a>
-                <a href="#users" class="nav-link" data-tab="users" id="nav-link-users" style="display: none;">
-                    <i data-lucide="shield"></i> Users &amp; Roles
+
+                <div class="nav-section-label">System</div>
+                <a href="#users" class="nav-link" data-tab="users" id="nav-link-users" style="display: none;" title="Users & Roles">
+                    <i data-lucide="shield"></i> <span class="nav-label-text">Users &amp; Roles</span>
                 </a>
             </nav>
 
-            <!-- User Profile & Logout -->
-            <div class="user-profile-compact" id="user-profile-section" style="display: none;">
-                <div class="user-avatar-mini">
-                    <i data-lucide="user"></i>
-                </div>
-                <div class="user-details-mini">
-                    <div class="user-email-text" id="user-email-display" title="user@example.com">user@example.com</div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;">
-                        <span id="user-role-badge" class="badge" style="font-size: 0.65rem; padding: 0.1rem 0.45rem; text-transform: uppercase; letter-spacing: 0.04em; background: rgba(56, 189, 248, 0.15); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.3);">Viewer</span>
-                        <div class="user-actions-mini">
-                            <button id="btn-theme-toggle" class="action-icon-btn" title="Toggle Theme">
-                                <i data-lucide="sun" id="theme-icon"></i>
-                            </button>
-                            <button id="btn-logout" class="action-icon-btn text-danger" title="Sign Out">
-                                <i data-lucide="log-out"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Signature Footer -->
-            <div style="margin-top: 1rem; text-align: center; font-size: 0.75rem; color: var(--text-muted); opacity: 0.7;">
-                Finance Team | Abdelrahman Mohamed
+            <div class="sidebar-footer-credit">
+                <span>Finance Team · Abdelrahman Mohamed</span>
             </div>
         </aside>
 
-        <!-- Main Content -->
-        <main class="main-content">
+        <div class="workspace-column">
+            <!-- Sticky Workspace Chrome Topbar -->
+            <header class="workspace-topbar">
+                <div class="topbar-left">
+                    <button type="button" id="btn-toggle-sidebar-rail" class="sidebar-collapse-btn" title="Collapse / Expand Sidebar">
+                        <i data-lucide="panel-left" style="width: 15px; height: 15px;"></i>
+                    </button>
+                    <button type="button" id="btn-open-global-search" class="topbar-search-trigger" title="Quick Search across Transactions & Students (Ctrl+K)">
+                        <i data-lucide="search" style="width: 14px; height: 14px;"></i>
+                        <span>Search Student ID or Ref...</span>
+                        <span class="search-shortcut">Ctrl+K</span>
+                    </button>
+                </div>
+                <div class="topbar-right">
+                    <!-- User Profile, Theme & Sign Out -->
+                    <div class="user-profile-topbar" id="user-profile-section" style="display: none;">
+                        <div class="user-avatar-mini">
+                            <i data-lucide="user"></i>
+                        </div>
+                        <span class="user-email-text" id="user-email-display" title="user@example.com">user@example.com</span>
+                        <span id="user-role-badge" class="role-pill">Viewer</span>
+                        <span class="topbar-user-divider" aria-hidden="true"></span>
+                        <button id="btn-theme-toggle" class="action-icon-btn" title="Toggle Light / Dark Theme">
+                            <i data-lucide="sun" id="theme-icon"></i>
+                        </button>
+                        <button id="btn-logout" class="action-icon-btn text-danger" title="Sign Out">
+                            <i data-lucide="log-out"></i>
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Main Content -->
+            <main class="main-content">
             
             <!-- Dashboard View -->
             <section id="view-dashboard" class="view">
@@ -217,81 +264,86 @@
                     </div>
                 </div>
 
-                <!-- Summary Stat Cards (6 Operational Cards with Drill-Down) -->
-                <div class="stat-cards-row" id="dashboard-stats-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 0.85rem; margin-bottom: 1rem;">
-                    <div class="stat-card" data-dash-drill="all_tx" style="cursor: pointer;" title="Click to view transactions in Orders Transactions">
-                        <div class="stat-card-header">
-                            <span class="stat-label">Total Collections</span>
-                            <i data-lucide="trending-up" class="stat-icon" style="color: var(--primary);"></i>
+                <!-- Bento Treasury Hero (60/40 Asymmetric Grid) -->
+                <div class="dashboard-bento-hero" id="dashboard-stats-row">
+                    <!-- Left Hero: Total Treasury Volume + Integrated Bank Split -->
+                    <div class="hero-treasury-card">
+                        <div class="hero-metric-top">
+                            <div class="hero-stat-clickable" data-dash-drill="all_tx" title="Click to view transactions in Fawry Transactions">
+                                <div class="hero-eyebrow">
+                                    <i data-lucide="wallet" style="width: 13px; height: 13px;"></i>
+                                    Total Collections (Selected Period)
+                                </div>
+                                <div class="hero-currency-value tnum" id="stat-total-collections">EGP 0.00</div>
+                                <div id="stat-avg-tx" class="stat-sub">Avg: EGP 0.00 / tx</div>
+                            </div>
+                            <div class="hero-tx-pill" data-dash-drill="all_tx" title="Click to view all matching transactions">
+                                <span class="stat-label" style="display: block;">Transactions</span>
+                                <div class="stat-value tnum" id="stat-total-transactions">0</div>
+                                <div id="stat-active-days" class="stat-sub" style="margin-top: 2px;">0 active days</div>
+                            </div>
                         </div>
-                        <div class="stat-value" id="stat-total-collections" style="font-size: 1.3rem;">EGP 0.00</div>
-                        <div id="stat-avg-tx" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Avg: EGP 0.00 / tx</div>
+
+                        <div class="hero-split-box" id="dashboard-insights-bar">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.45rem;">
+                                <span class="insights-title">Multi-Bank Channel Split</span>
+                                <span id="dashboard-bank-split-label" class="text-muted tnum" style="font-size: 0.74rem;">NUADCB136: 0% • NUADIB64: 0% • NuMisrUsd5: 0%</span>
+                            </div>
+                            <div class="bank-split-track">
+                                <div id="dashboard-bar-cb136" style="width: 34%; height: 100%; background: var(--info); transition: width 0.3s ease;" title="NUADCB136"></div>
+                                <div id="dashboard-bar-ib64" style="width: 33%; height: 100%; background: var(--warning); transition: width 0.3s ease;" title="NUADIB64"></div>
+                                <div id="dashboard-bar-misrusd5" style="width: 33%; height: 100%; background: var(--primary); transition: width 0.3s ease;" title="NuMisrUsd5"></div>
+                            </div>
+                            <div class="bank-split-legend tnum">
+                                <span><span class="legend-dot" style="background: var(--info);"></span>NUADCB136: <strong id="dashboard-split-cb136-val" style="color: var(--text-main);">EGP 0.00</strong></span>
+                                <span><span class="legend-dot" style="background: var(--warning);"></span>NUADIB64: <strong id="dashboard-split-ib64-val" style="color: var(--text-main);">EGP 0.00</strong></span>
+                                <span><span class="legend-dot" style="background: var(--primary);"></span>NuMisrUsd5: <strong id="dashboard-split-misrusd5-val" style="color: var(--text-main);">USD 0.00</strong> <span id="dashboard-split-misrusd5-egp" style="font-size: 0.72rem; color: var(--primary);">(≈ EGP 0.00)</span></span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="stat-card" data-dash-drill="all_tx" style="cursor: pointer;" title="Click to view all matching transactions">
-                        <div class="stat-card-header">
-                            <span class="stat-label">Transactions</span>
-                            <i data-lucide="layers" class="stat-icon" style="color: var(--primary);"></i>
+
+                    <!-- Right 2x2 Operational Health Quadrant -->
+                    <div class="health-quadrant-grid">
+                        <div class="stat-card" data-dash-drill="valid_tx" title="Click to view transactions with Valid Student IDs">
+                            <div class="stat-card-header">
+                                <span class="kpi-label-row"><span class="kpi-dot is-success"></span><span class="stat-label">Valid IDs</span></span>
+                                <i data-lucide="check-circle" class="stat-icon"></i>
+                            </div>
+                            <div class="stat-value" id="stat-valid-pct">0%</div>
+                            <div id="stat-valid-count" class="stat-sub">0 valid transactions</div>
                         </div>
-                        <div class="stat-value" id="stat-total-transactions" style="font-size: 1.3rem;">0</div>
-                        <div id="stat-active-days" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 active days</div>
-                    </div>
-                    <div class="stat-card" data-dash-drill="valid_tx" style="cursor: pointer;" title="Click to view transactions with Valid Student IDs">
-                        <div class="stat-card-header">
-                            <span class="stat-label">Valid IDs</span>
-                            <i data-lucide="check-circle" class="stat-icon" style="color: var(--success);"></i>
+                        <div class="stat-card stat-alert-card" data-dash-drill="invalid_tx" title="Click to resolve Invalid / Missing Student IDs in Auto Matcher">
+                            <div class="stat-card-header">
+                                <span class="kpi-label-row"><span class="kpi-dot is-danger"></span><span class="stat-label">Invalid / Missing IDs</span></span>
+                                <i data-lucide="alert-triangle" class="stat-icon" style="color: var(--danger);"></i>
+                            </div>
+                            <div class="stat-value is-danger" id="stat-errors">0</div>
+                            <div id="stat-unmapped-count" class="stat-sub">0 unmapped items</div>
                         </div>
-                        <div class="stat-value" style="color: var(--success); font-size: 1.3rem;" id="stat-valid-pct">0%</div>
-                        <div id="stat-valid-count" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 valid transactions</div>
-                    </div>
-                    <div class="stat-card" data-dash-drill="invalid_tx" style="cursor: pointer;" title="Click to resolve Invalid / Missing Student IDs in Auto Matcher">
-                        <div class="stat-card-header">
-                            <span class="stat-label">Invalid / Missing IDs</span>
-                            <i data-lucide="alert-triangle" class="stat-icon" style="color: var(--danger);"></i>
+                        <div class="stat-card" data-dash-drill="unsettled_tx" title="Click to view unsettled transactions in Fawry Transactions">
+                            <div class="stat-card-header">
+                                <span class="kpi-label-row"><span class="kpi-dot is-info"></span><span class="stat-label">Fawry Settled</span></span>
+                                <i data-lucide="shield-check" class="stat-icon"></i>
+                            </div>
+                            <div class="stat-value" id="stat-settled-pct">0%</div>
+                            <div id="stat-settled-sub" class="stat-sub">0 settled • 0 unsettled</div>
                         </div>
-                        <div class="stat-value" style="color: var(--danger); font-size: 1.3rem;" id="stat-errors">0</div>
-                        <div id="stat-unmapped-count" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 unmapped items</div>
-                    </div>
-                    <div class="stat-card" data-dash-drill="unsettled_tx" style="cursor: pointer;" title="Click to view unsettled transactions in Orders Transactions">
-                        <div class="stat-card-header">
-                            <span class="stat-label">Fawry Settled</span>
-                            <i data-lucide="shield-check" class="stat-icon" style="color: #38bdf8;"></i>
+                        <div class="stat-card" data-dash-drill="erp_export" title="Click to open ERP Export for this date range">
+                            <div class="stat-card-header">
+                                <span class="kpi-label-row"><span class="kpi-dot is-primary"></span><span class="stat-label">ERP Recorded</span></span>
+                                <i data-lucide="download-cloud" class="stat-icon"></i>
+                            </div>
+                            <div class="stat-value" id="stat-erp-pct">0%</div>
+                            <div id="stat-erp-sub" class="stat-sub">0 posted • 0 unposted</div>
                         </div>
-                        <div class="stat-value" style="color: #38bdf8; font-size: 1.3rem;" id="stat-settled-pct">0%</div>
-                        <div id="stat-settled-sub" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 settled • 0 unsettled</div>
-                    </div>
-                    <div class="stat-card" data-dash-drill="erp_export" style="cursor: pointer;" title="Click to open ERP Export for this date range">
-                        <div class="stat-card-header">
-                            <span class="stat-label">ERP Recorded</span>
-                            <i data-lucide="download-cloud" class="stat-icon" style="color: #a78bfa;"></i>
-                        </div>
-                        <div class="stat-value" style="color: #a78bfa; font-size: 1.3rem;" id="stat-erp-pct">0%</div>
-                        <div id="stat-erp-sub" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">0 posted • 0 unposted</div>
                     </div>
                 </div>
 
-                <!-- Bank Split & Top Categories Insights Bar -->
-                <div class="glass-card" id="dashboard-insights-bar" style="padding: 0.85rem 1.25rem; margin-bottom: 1rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; align-items: center;">
-                    <div>
-                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; margin-bottom: 0.35rem;">
-                            <span style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Bank Collection Split</span>
-                            <span id="dashboard-bank-split-label" style="color: var(--text-muted); font-size: 0.76rem;">NUADCB136: 0% • NUADIB64: 0% • NuMisrUsd5: 0%</span>
-                        </div>
-                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; display: flex;">
-                            <div id="dashboard-bar-cb136" style="width: 34%; height: 100%; background: var(--primary); transition: width 0.3s ease;" title="NUADCB136"></div>
-                            <div id="dashboard-bar-ib64" style="width: 33%; height: 100%; background: #f59e0b; transition: width 0.3s ease;" title="NUADIB64"></div>
-                            <div id="dashboard-bar-misrusd5" style="width: 33%; height: 100%; background: #10b981; transition: width 0.3s ease;" title="NuMisrUsd5"></div>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);">
-                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-right: 4px;"></span>NUADCB136: <strong id="dashboard-split-cb136-val" style="color: var(--text-main);">EGP 0.00</strong></span>
-                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; margin-right: 4px;"></span>NUADIB64: <strong id="dashboard-split-ib64-val" style="color: var(--text-main);">EGP 0.00</strong></span>
-                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; margin-right: 4px;"></span>NuMisrUsd5: <strong id="dashboard-split-misrusd5-val" style="color: var(--text-main);">USD 0.00</strong> <span id="dashboard-split-misrusd5-egp" style="font-size: 0.72rem; color: #10b981;">(≈ EGP 0.00)</span></span>
-                        </div>
-                    </div>
-                    <div style="border-left: 1px solid var(--border-color); padding-left: 1.25rem;">
-                        <div style="font-size: 0.78rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.4rem;">Top Categories (Selected Period)</div>
-                        <div id="dashboard-top-categories" style="display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; font-size: 0.78rem; color: var(--text-muted);">
-                            <span>Loading categories...</span>
-                        </div>
+                <!-- Top Categories Horizontal Ribbon -->
+                <div class="categories-ribbon">
+                    <span class="insights-title">Top Categories</span>
+                    <div id="dashboard-top-categories" style="display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; font-size: 0.78rem; color: var(--text-muted); flex: 1;">
+                        <span>Loading categories...</span>
                     </div>
                 </div>
 
@@ -323,7 +375,7 @@
                     </div>
 
                     <!-- Filters Area -->
-                    <div style="width: 310px; display: flex; flex-direction: column; gap: 1rem; flex-shrink: 0;">
+                    <div class="dashboard-filters-rail">
                         <!-- View & Sort Settings -->
                         <div class="glass-card filter-box">
                             <div class="filter-header">
@@ -373,9 +425,9 @@
                                 <button type="button" class="btn btn-outline btn-sm" data-dash-preset="this_month" style="padding: 0.1rem 0.45rem; font-size: 0.7rem;" title="Reset to This Month">Reset</button>
                             </div>
                             <div class="filter-body">
-                                <label style="font-size: 0.8rem; color: #a1a1aa; margin-bottom: 0.2rem; display: block;">Date From</label>
+                                <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Date From</label>
                                 <input type="date" id="dashboard-date-from" class="input-text" style="width: 100%; margin-bottom: 0.6rem;">
-                                <label style="font-size: 0.8rem; color: #a1a1aa; margin-bottom: 0.2rem; display: block;">Date To</label>
+                                <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Date To</label>
                                 <input type="date" id="dashboard-date-to" class="input-text" style="width: 100%; margin-bottom: 0.65rem;">
                                 <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
                                     <button type="button" class="btn btn-outline btn-sm" data-dash-preset="today" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Today</button>
@@ -428,9 +480,9 @@
                                 </button>
                             </div>
                             <div class="filter-body" style="display: flex; flex-direction: column; gap: 0.6rem;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0.6rem; border-radius: 6px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25);">
+                                <div class="fx-active-pill">
                                     <span style="font-size: 0.75rem; color: var(--text-muted);">Current / Active</span>
-                                    <strong id="dashboard-fx-badge" style="font-size: 0.85rem; color: #10b981; font-family: monospace;">Not synced</strong>
+                                    <strong id="dashboard-fx-badge" style="font-size: 0.85rem; color: var(--success); font-family: monospace;">Not synced</strong>
                                 </div>
                                 <div>
                                     <label style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Calculation Mode</label>
@@ -464,28 +516,40 @@
                             <img src="fawry-logo-dark.png" alt="Fawry Transactions" class="fawry-theme-logo fawry-theme-logo-dark">
                             <img src="fawry-logo-light.png" alt="Fawry Transactions" class="fawry-theme-logo fawry-theme-logo-light">
                         </div>
-                        <h1>Fawry Transactions</h1>
+                        <div>
+                            <h1>Fawry Transactions</h1>
+                            <p class="page-subtitle">Order payments ledger, Student ID validation &amp; bank settlement tracking</p>
+                        </div>
                     </div>
                     <div class="header-actions">
                         <button class="btn btn-primary" id="btn-show-import">
-                            <i data-lucide="upload"></i> Import orders or Invoice exports
-                        </button>
-                        <button class="btn btn-outline" id="btn-show-history">
-                            <i data-lucide="history"></i> Import History
-                        </button>
-        
-                        <button class="btn btn-outline" id="btn-detect-double-payments" title="Scan for potential duplicate / double payments by the same student"><i data-lucide="copy-check"></i> Double Payments</button>
-                        <button class="btn btn-outline" id="btn-reapply-rules">
-                            <i data-lucide="refresh-cw"></i> Re-apply Rules
+                            <i data-lucide="upload"></i> Import Orders / Invoices
                         </button>
                         <button class="btn btn-outline" id="btn-export">
                             <i data-lucide="download"></i> Export Excel
                         </button>
+                        <div class="action-dropdown-wrap">
+                            <button type="button" class="btn btn-outline" data-dropdown-toggle="tx-more-actions-menu">
+                                <i data-lucide="more-horizontal"></i> Tools
+                            </button>
+                            <div id="tx-more-actions-menu" class="action-dropdown-menu">
+                                <button class="btn" id="btn-detect-double-payments" title="Scan for potential duplicate / double payments by the same student">
+                                    <i data-lucide="copy-check"></i> Double Payments Detector
+                                </button>
+                                <button class="btn" id="btn-reapply-rules">
+                                    <i data-lucide="refresh-cw"></i> Re-apply Rules
+                                </button>
+                                <button class="btn" id="btn-show-history">
+                                    <i data-lucide="history"></i> Import History
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                
-                <!-- Unified Filters & Search Bar -->
-                <div class="filters-bar glass-card" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding: 1rem;">
+
+                <!-- Unified Ledger Sheet (Filters + Telemetry + Grid) -->
+                <div class="ledger-sheet">
+                <div class="ledger-toolbar">
                     <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
                         <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                             <label style="font-size: 0.75rem">Date From</label>
@@ -513,19 +577,18 @@
                             <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="last_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last Month</button>
                             <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="all" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">All Dates</button>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" id="tx-quick-filter-group">
-                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Quick Filter:</span>
-                            <button type="button" class="btn btn-primary btn-sm" data-tx-quick-filter="all" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">All</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="missing_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Missing ID</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="error_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Error ID</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unmapped" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Unmapped Item</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unsettled" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Unsettled</button>
+                        <div class="segmented-tabs" id="tx-quick-filter-group">
+                            <button type="button" class="btn btn-primary btn-sm" data-tx-quick-filter="all">All</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="missing_id">Missing ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="error_id">Error ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unmapped">Unmapped</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unsettled">Unsettled</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Transactions Live Summary Bar -->
-                <div id="transactions-summary-bar" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; padding: 0.75rem 1.25rem; border-radius: 8px;">
+                <!-- Attached Telemetry Strip -->
+                <div id="transactions-summary-bar" class="ledger-telemetry-strip">
                     <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.45rem;">
                             <span style="color: var(--text-muted); font-size: 0.82rem;">Matching Records:</span>
@@ -545,9 +608,9 @@
                     </div>
                 </div>
                 
-                <div id="transactions-filter-chips" class="filter-chips"></div>
+                <div id="transactions-filter-chips" class="filter-chips" style="padding: 0.65rem 1.2rem 0; margin-bottom: 0;"></div>
 
-                <div class="table-container glass-card">
+                <div class="table-container">
                     <table class="data-table" id="transactions-table">
                         <thead>
                             <tr>
@@ -643,6 +706,7 @@
                         </div>
                     </div>
                 </div>
+                </div>
             </section>
 
             <!-- Foreign Transactions (Bank Statement Student Deposit Extractor) View -->
@@ -653,29 +717,40 @@
                             <img src="banque-misr-logo-dark.png" alt="Banque Misr - Foreign Transactions" class="fawry-theme-logo fawry-theme-logo-dark">
                             <img src="banque-misr-logo-light.png" alt="Banque Misr - Foreign Transactions" class="fawry-theme-logo fawry-theme-logo-light">
                         </div>
-                        <h1>Foreign Transactions</h1>
+                        <div>
+                            <h1>Foreign Transactions</h1>
+                            <p class="page-subtitle">Banque Misr NuMisrUsd5 USD student deposit extractor &amp; Arabic/English name matching</p>
+                        </div>
                     </div>
-                    <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                    <div class="header-actions">
                         <button class="btn btn-primary" id="btn-show-foreign-import" title="Upload PDF, Excel, or CSV Bank Statement to extract Student Deposits">
-                            <i data-lucide="upload"></i> Import Bank Statement (PDF / Excel)
-                        </button>
-                        <button class="btn btn-outline" id="btn-foreign-detect-duplicates" style="color: var(--danger); border-color: rgba(239, 68, 68, 0.45);" title="Scan and remove duplicate foreign transactions">
-                            <i data-lucide="search"></i> Detect Duplicates
-                        </button>
-                        <button class="btn btn-outline" id="btn-foreign-double-payments" title="Scan for potential duplicate / double payments by the same student">
-                            <i data-lucide="copy-check"></i> Double Payments
-                        </button>
-                        <button class="btn btn-outline" id="btn-foreign-automatch" title="Re-apply Manual Fixes &amp; Auto-Match Student Names against Student Directory">
-                            <i data-lucide="refresh-cw"></i> Re-apply &amp; Match IDs
+                            <i data-lucide="upload"></i> Import Bank Statement
                         </button>
                         <button class="btn btn-outline" id="btn-foreign-export-excel" title="Export Foreign Transactions to Excel">
                             <i data-lucide="download"></i> Export Excel
                         </button>
+                        <div class="action-dropdown-wrap">
+                            <button type="button" class="btn btn-outline" data-dropdown-toggle="foreign-more-actions-menu">
+                                <i data-lucide="more-horizontal"></i> Tools
+                            </button>
+                            <div id="foreign-more-actions-menu" class="action-dropdown-menu">
+                                <button class="btn" id="btn-foreign-automatch" title="Re-apply Manual Fixes &amp; Auto-Match Student Names against Student Directory">
+                                    <i data-lucide="refresh-cw"></i> Re-apply &amp; Match IDs
+                                </button>
+                                <button class="btn" id="btn-foreign-double-payments" title="Scan for potential duplicate / double payments by the same student">
+                                    <i data-lucide="copy-check"></i> Double Payments
+                                </button>
+                                <button class="btn" id="btn-foreign-detect-duplicates" style="color: var(--danger);" title="Scan and remove duplicate foreign transactions">
+                                    <i data-lucide="search"></i> Detect Duplicates
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Unified Filters & Search Bar (Matches Fawry Transactions) -->
-                <div class="filters-bar glass-card" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding: 1rem;">
+                <!-- Unified Ledger Sheet -->
+                <div class="ledger-sheet">
+                <div class="ledger-toolbar">
                     <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
                         <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                             <label style="font-size: 0.75rem;">Date From</label>
@@ -703,19 +778,17 @@
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="last_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last Month</button>
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="all" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">All Dates</button>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" id="foreign-quick-filter-group">
-                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Quick Filter:</span>
-                            <button type="button" class="btn btn-primary btn-sm" data-foreign-quick-filter="all" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">All</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="missing_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Missing ID</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="error_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Error ID</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="valid_id" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Valid ID</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="name_match" style="padding: 0.15rem 0.6rem; font-size: 0.74rem;">Matched by Name</button>
+                        <div class="segmented-tabs" id="foreign-quick-filter-group">
+                            <button type="button" class="btn btn-primary btn-sm" data-foreign-quick-filter="all">All</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="missing_id">Missing ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="error_id">Error ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="valid_id">Valid ID</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="name_match">Matched by Name</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Foreign Transactions Live Summary Bar (Matches Fawry Transactions) -->
-                <div id="foreign-summary-bar" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; padding: 0.75rem 1.25rem; border-radius: 8px;">
+                <div id="foreign-summary-bar" class="ledger-telemetry-strip">
                     <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.45rem;">
                             <span style="color: var(--text-muted); font-size: 0.82rem;">Matching Records:</span>
@@ -788,6 +861,7 @@
                         </div>
                     </div>
                 </div>
+                </div>
             </section>
 
             <!-- Foreign Statement Reader & Preview Modal (PDF / Excel / CSV) -->
@@ -795,7 +869,7 @@
                 <div class="modal-content glass-card" style="max-width: 1020px; max-height: 92vh; display: flex; flex-direction: column;">
                     <div class="modal-header">
                         <div style="display: flex; align-items: center; gap: 0.65rem;">
-                            <div style="background: rgba(56, 189, 248, 0.14); color: #38bdf8; width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                            <div style="background: var(--primary-soft); color: var(--primary); width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
                                 <i data-lucide="landmark" style="width: 20px; height: 20px;"></i>
                             </div>
                             <div>
@@ -818,20 +892,20 @@
 
                         <!-- Live Extraction Preview Panel -->
                         <div id="foreign-import-preview-panel" class="hidden" style="display: flex; flex-direction: column; gap: 0.85rem;">
-                            <div id="foreign-import-meta-banner" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.75rem 1rem; background: rgba(56, 189, 248, 0.07); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.82rem;">
+                            <div id="foreign-import-meta-banner" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.75rem 1rem; background: var(--primary-soft); border: 1px solid var(--primary-border); border-radius: 8px; font-size: 0.82rem;">
                                 <!-- Populated dynamically -->
                             </div>
 
                             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
                                 <div style="display: flex; gap: 0.45rem; flex-wrap: wrap;">
-                                    <button type="button" class="btn btn-primary btn-sm" id="btn-foreign-preview-tab-deposits" style="border-radius: 999px;">
+                                    <button type="button" class="btn btn-primary btn-sm" id="btn-foreign-preview-tab-deposits" style="border-radius: 6px;">
                                         Extracted Student Deposits (<span id="foreign-preview-deposits-count">0</span>)
                                     </button>
-                                    <button type="button" class="btn btn-outline btn-sm" id="btn-foreign-preview-tab-excluded" style="border-radius: 999px;">
+                                    <button type="button" class="btn btn-outline btn-sm" id="btn-foreign-preview-tab-excluded" style="border-radius: 6px;">
                                         Auto-Excluded Reversals &amp; Bank Ops (<span id="foreign-preview-excluded-count">0</span>)
                                     </button>
                                 </div>
-                                <span id="foreign-preview-total-label" style="font-size: 0.84rem; font-weight: 600; color: #38bdf8;"></span>
+                                <span id="foreign-preview-total-label" style="font-size: 0.84rem; font-weight: 600; color: var(--primary);"></span>
                             </div>
 
                             <div class="table-container" style="max-height: 340px; overflow-y: auto; margin: 0;">
@@ -871,13 +945,13 @@
                     </div>
                     <div class="modal-body" style="display: flex; flex-direction: column; gap: 0.85rem;">
                         <input type="hidden" id="foreign-fix-ref">
-                        <div id="foreign-fix-narrative-box" style="padding: 0.75rem 0.9rem; border-radius: 8px; background: rgba(15, 23, 42, 0.55); border: 1px solid var(--border-color); font-size: 0.82rem; line-height: 1.45;">
+                        <div id="foreign-fix-narrative-box" style="padding: 0.75rem 0.9rem; border-radius: 8px; background: var(--bg-subtle); border: 1px solid var(--border-color); font-size: 0.82rem; line-height: 1.45;">
                             <!-- Populated by JS -->
                         </div>
                         <div class="form-group" style="margin: 0;">
                             <label>Search Student Directory (by Arabic Name, English Name, or ID)</label>
                             <input type="text" id="foreign-fix-student-search" class="input-text" placeholder="Type student name (e.g. سولاف or ادم or 24100...)" autocomplete="off">
-                            <div id="foreign-fix-search-results" style="display: none; max-height: 170px; overflow-y: auto; margin-top: 0.4rem; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(15, 23, 42, 0.9);"></div>
+                            <div id="foreign-fix-search-results" style="display: none; max-height: 170px; overflow-y: auto; margin-top: 0.4rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-subtle);"></div>
                         </div>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
                             <div class="form-group" style="margin: 0;">
@@ -950,7 +1024,7 @@
             
     <!-- History Modal -->
     <div id="modal-history" class="modal hidden" style="z-index: 10010;">
-        <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-content glass-card" style="max-width: 1000px;">
             <div class="modal-header" style="justify-content: space-between; align-items: center; width: 100%; display: flex;">
                 <h2 style="margin:0;">Import History</h2>
                 <div style="display: flex; gap: 10px; align-items: center;">
@@ -1013,7 +1087,7 @@
                 </div>
 
                 <!-- Mappings Summary Bar -->
-                <div id="mappings-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+                <div id="mappings-summary-card" class="summary-bar-strip">
                     <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.85rem;">Total Rules:</span>
@@ -1145,7 +1219,7 @@
                 </div>
 
                 <!-- Manual Fixes Summary Bar -->
-                <div id="fixes-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+                <div id="fixes-summary-card" class="summary-bar-strip">
                     <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.85rem;">Total Fixes:</span>
@@ -1262,7 +1336,7 @@
                     </div>
 
                     <!-- Students Summary KPI Bar -->
-                    <div id="students-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+                    <div id="students-summary-card" class="summary-bar-strip">
                         <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                             <div style="display: flex; align-items: center; gap: 0.5rem;">
                                 <span style="color: var(--text-muted); font-size: 0.85rem;">Total Students:</span>
@@ -1278,11 +1352,11 @@
                             </div>
                             <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
                                 <span style="color: var(--text-muted); font-size: 0.85rem;">With National ID:</span>
-                                <strong id="students-stat-nat-id" style="font-size: 1.05rem; color: #38bdf8;">0</strong>
+                                <strong id="students-stat-nat-id" style="font-size: 1.05rem; color: var(--primary);">0</strong>
                             </div>
                             <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
                                 <span style="color: var(--text-muted); font-size: 0.85rem;">Merged Profiles:</span>
-                                <strong id="students-stat-merged" style="font-size: 1.05rem; color: #a855f7;">0</strong>
+                                <strong id="students-stat-merged" style="font-size: 1.05rem; color: var(--info);">0</strong>
                             </div>
                         </div>
                     </div>
@@ -1449,9 +1523,9 @@
                         </div>
                         <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Select the Invalid ID transactions you want the system to try and fix using the Students Details list and Links data.</p>
                         
-                        <div style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; background: rgba(234, 179, 8, 0.1); border: 1px solid rgba(234, 179, 8, 0.3); padding: 0.8rem; border-radius: 8px;">
-                            <input type="checkbox" id="automatch-enable-name" style="width: 1.2rem; height: 1.2rem; cursor: pointer;">
-                            <label for="automatch-enable-name" style="cursor: pointer; color: #b45309; font-weight: 500; font-size: 0.9rem;">Enable Fallback Name Matching (Warning: Can produce false positive matches)</label>
+                        <div class="callout-banner callout-warning">
+                            <input type="checkbox" id="automatch-enable-name" style="width: 1.1rem; height: 1.1rem; cursor: pointer;">
+                            <label for="automatch-enable-name" style="cursor: pointer; font-weight: 500; font-size: 0.85rem;">Enable Fallback Name Matching (Warning: Can produce false positive matches)</label>
                         </div>
 
                         <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem; align-items: flex-end;">
@@ -1478,7 +1552,7 @@
                                 <button type="button" class="btn btn-outline btn-sm" id="btn-select-high-confidence" style="display: none;">
                                     <i data-lucide="shield-check" style="width: 15px; height: 15px; color: var(--success);"></i> Select All High-Confidence
                                 </button>
-                                <button class="btn btn-primary" id="btn-apply-automatch-fixes" style="display: none; padding: 0.65rem 1.5rem; font-size: 0.95rem; font-weight: bold; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);"><i data-lucide="check-circle" style="width: 18px; height: 18px; margin-right: 0.4rem; vertical-align: middle;"></i> <span id="btn-apply-automatch-label">Apply Selected Fixes</span></button>
+                                <button class="btn btn-primary" id="btn-apply-automatch-fixes" style="display: none; padding: 0.65rem 1.5rem; font-size: 0.95rem; font-weight: bold; "><i data-lucide="check-circle" style="width: 18px; height: 18px; margin-right: 0.4rem; vertical-align: middle;"></i> <span id="btn-apply-automatch-label">Apply Selected Fixes</span></button>
                             </div>
                         </div>
 
@@ -1512,7 +1586,7 @@
                                     </div>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                                    <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.82rem; user-select: none; background: rgba(255,255,255,0.05); padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+                                    <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.82rem; user-select: none; background: var(--bg-subtle); padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
                                         <input type="checkbox" id="automatch-toggle-unmatched" style="cursor: pointer; width: 15px; height: 15px;">
                                         <span>Show unmatched transactions</span>
                                     </label>
@@ -1629,7 +1703,7 @@
             </div>
 
             <!-- Payment Links KPI Summary Bar -->
-            <div id="links-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+            <div id="links-summary-card" class="summary-bar-strip">
                 <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                         <span style="color: var(--text-muted); font-size: 0.85rem;">Total Links:</span>
@@ -1675,11 +1749,11 @@
                 </div>
                 <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
                     <span style="font-size: 0.78rem; color: var(--text-muted); margin-right: 0.25rem;">Status Filter:</span>
-                    <button type="button" class="btn btn-outline btn-sm active" data-link-filter="all" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">All</button>
-                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="active" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Active</button>
-                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="expiring" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Expiring Soon (&le;7d)</button>
-                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="expired" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Expired</button>
-                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="missing_invoice" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Missing Invoice #</button>
+                    <button type="button" class="btn btn-outline btn-sm active" data-link-filter="all" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 6px;">All</button>
+                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="active" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 6px;">Active</button>
+                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="expiring" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 6px;">Expiring Soon (&le;7d)</button>
+                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="expired" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 6px;">Expired</button>
+                    <button type="button" class="btn btn-outline btn-sm" data-link-filter="missing_invoice" style="padding: 0.22rem 0.65rem; font-size: 0.76rem; border-radius: 6px;">Missing Invoice #</button>
                 </div>
             </div>
 
@@ -1709,151 +1783,155 @@
             </div>
         </section>
 
-                <!-- ERP Export View -->
+                <!-- ERP Export View (2-Column Journal Posting Workbench) -->
             <section id="view-erp-export" class="view">
                 <div class="header">
-                    <h1>ERP Export (Dynamics 365)</h1>
-                    <div class="header-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
+                    <div>
+                        <h1>ERP Export (Dynamics 365)</h1>
+                        <p class="page-subtitle">Prepare General Journal templates and stamp Dynamics 365 Batch &amp; Voucher references</p>
+                    </div>
+                    <div class="header-actions">
                         <button class="btn btn-primary" id="btn-export-erp-file">
                             <i data-lucide="download"></i> Download ERP Template
                         </button>
                     </div>
                 </div>
-                
-                <div class="filters-bar glass-card" style="margin-bottom: 1.5rem; padding: 1.1rem 1.25rem;">
-                    <div style="display: flex; gap: 0.85rem; flex-wrap: wrap; align-items: flex-end;">
-                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem">Date From</label>
-                            <input type="date" id="erp-filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+
+                <div class="erp-workbench-grid">
+                    <!-- Left: Filters + Segmented Tabs + Preview Journal Lines -->
+                    <div class="ledger-sheet">
+                        <div class="ledger-toolbar">
+                            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end;">
+                                <div class="form-group" style="margin: 0; min-width: 120px; flex: 1;">
+                                    <label>Date From</label>
+                                    <input type="date" id="erp-filter-date-from" class="input-text">
+                                </div>
+                                <div class="form-group" style="margin: 0; min-width: 120px; flex: 1;">
+                                    <label>Date To</label>
+                                    <input type="date" id="erp-filter-date-to" class="input-text">
+                                </div>
+                                <div class="form-group" style="margin: 0; min-width: 115px; flex: 1;">
+                                    <label>Bank</label>
+                                    <select id="erp-filter-bank" class="input-text">
+                                        <option value="">All Banks</option>
+                                        <option value="NUADIB64">NUADIB64</option>
+                                        <option value="NUADCB136">NUADCB136</option>
+                                        <option value="NuMisrUsd5">NuMisrUsd5</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
+                                    <label>ERP Batch #</label>
+                                    <select id="erp-filter-batch" class="input-text">
+                                        <option value="">All Batches</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin: 0; min-width: 140px; flex: 1.2;">
+                                    <label>Item Name</label>
+                                    <select id="erp-filter-item-name" class="input-select" multiple><option value="">All Items</option></select>
+                                </div>
+                                <div class="form-group" style="margin: 0; min-width: 140px; flex: 1.2;">
+                                    <label>Mapping</label>
+                                    <select id="erp-filter-mapping" class="input-select" multiple><option value="">All Mappings</option></select>
+                                </div>
+                            </div>
+
+                            <div class="filters-row-presets">
+                                <div style="flex: 1; min-width: 220px;">
+                                    <input type="text" id="erp-search" class="input-text" placeholder="Search Ref Number, Student ID, Description, or Batch #...">
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                                    <button type="button" class="btn btn-outline btn-sm filter-preset-btn erp-date-preset" data-preset="today">Today</button>
+                                    <button type="button" class="btn btn-outline btn-sm filter-preset-btn erp-date-preset" data-preset="yesterday">Yesterday</button>
+                                    <button type="button" class="btn btn-outline btn-sm filter-preset-btn erp-date-preset" data-preset="7d">7d</button>
+                                    <button type="button" class="btn btn-outline btn-sm filter-preset-btn erp-date-preset" data-preset="this_month">This Month</button>
+                                    <button type="button" class="btn btn-outline btn-sm filter-preset-btn erp-date-preset" data-preset="last_month">Last Month</button>
+                                    <button type="button" class="btn btn-ghost btn-sm filter-preset-btn" id="btn-clear-erp-filters">Reset</button>
+                                </div>
+                            </div>
+
+                            <div class="segmented-tabs">
+                                <button type="button" class="btn btn-outline btn-sm active" data-erp-filter="all">All</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="ready">Ready to Export</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="unposted">Unposted</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="recorded">Already in ERP</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="invalid">Invalid IDs</button>
+                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="settled">Settled Only</button>
+                            </div>
                         </div>
-                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem">Date To</label>
-                            <input type="date" id="erp-filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
-                        </div>
-                        <div class="form-group" style="margin: 0; min-width: 125px; flex: 1;">
-                            <label style="font-size: 0.75rem">Bank</label>
-                            <select id="erp-filter-bank" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
-                                <option value="">All Banks</option>
-                                <option value="NUADIB64">NUADIB64</option>
-                                <option value="NUADCB136">NUADCB136</option>
-                                <option value="NuMisrUsd5">NuMisrUsd5</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="margin: 0; min-width: 145px; flex: 1;">
-                            <label style="font-size: 0.75rem">ERP Batch #</label>
-                            <select id="erp-filter-batch" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
-                                <option value="">All Batches</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="margin: 0; min-width: 150px; flex: 1.2;">
-                            <label style="font-size: 0.75rem">Item Name</label>
-                            <select id="erp-filter-item-name" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Items</option></select>
-                        </div>
-                        <div class="form-group" style="margin: 0; min-width: 150px; flex: 1.2;">
-                            <label style="font-size: 0.75rem">Mapping</label>
-                            <select id="erp-filter-mapping" class="input-select" multiple style="padding: 0.4rem; font-size: 0.85rem"><option value="">All Mappings</option></select>
+
+                        <div class="table-container">
+                            <table class="data-table" id="erp-preview-table" style="min-width: 100%;">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Account / Status</th>
+                                        <th>Description</th>
+                                        <th style="text-align: right;">Credit</th>
+                                        <th>Offset Bank</th>
+                                        <th>ERP Status / Action</th>
+                                        <th style="text-align: right;">Line #</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="erp-preview-body">
+                                    <!-- Data populated by JS -->
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.9rem; padding-top: 0.85rem; border-top: 1px solid var(--border-color);">
-                        <div style="flex: 1; min-width: 240px; max-width: 420px;">
-                            <input type="text" id="erp-search" class="input-text" placeholder="Search Ref Number, Account / Student ID, Description, or Batch #..." style="padding: 0.4rem 0.75rem; font-size: 0.84rem;">
+                    <!-- Right: Sticky Dynamics 365 Posting Voucher Ticket -->
+                    <aside class="voucher-ticket">
+                        <div class="voucher-ticket-head">
+                            <h3>Dynamics 365 Posting Ticket</h3>
+                            <p style="font-size: 0.77rem; color: var(--text-muted); margin: 0;">Live journal summary &amp; batch stamp</p>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
-                            <span style="font-size: 0.76rem; color: var(--text-muted); margin-right: 0.2rem;">Quick Dates:</span>
-                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="today" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">Today</button>
-                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="yesterday" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">Yesterday</button>
-                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="7d" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">7d</button>
-                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="this_month" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">This Month</button>
-                            <button type="button" class="btn btn-outline btn-sm erp-date-preset" data-preset="last_month" style="padding: 0.18rem 0.55rem; font-size: 0.74rem; height: 28px;">Last Month</button>
-                            <button type="button" class="btn btn-outline btn-sm" id="btn-clear-erp-filters" style="padding: 0.18rem 0.65rem; font-size: 0.74rem; height: 28px;">Reset</button>
-                        </div>
-                    </div>
+                        <div class="voucher-ticket-body">
+                            <div id="erp-summary-card" class="voucher-mini-grid">
+                                <div class="voucher-stat-cell">
+                                    <span>Filtered Lines</span>
+                                    <strong id="erp-stat-total">0</strong>
+                                </div>
+                                <div class="voucher-stat-cell">
+                                    <span>Total Credit</span>
+                                    <strong id="erp-stat-amount" style="color: var(--primary);">EGP 0.00</strong>
+                                </div>
+                                <div class="voucher-stat-cell">
+                                    <span>Ready Export</span>
+                                    <strong id="erp-stat-ready" style="color: var(--info);">0</strong>
+                                </div>
+                                <div class="voucher-stat-cell">
+                                    <span>Already Posted</span>
+                                    <strong id="erp-stat-recorded" style="color: var(--warning);">0</strong>
+                                </div>
+                                <div class="voucher-stat-cell">
+                                    <span>Valid IDs</span>
+                                    <strong id="erp-stat-valid" style="color: var(--success);">0</strong>
+                                </div>
+                                <div class="voucher-stat-cell">
+                                    <span>Invalid IDs</span>
+                                    <strong id="erp-stat-invalid" style="color: var(--danger);">0</strong>
+                                </div>
+                            </div>
 
-                    <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
-                        <span style="font-size: 0.78rem; color: var(--text-muted); margin-right: 0.25rem;">Filter Lines:</span>
-                        <button type="button" class="btn btn-outline btn-sm active" data-erp-filter="all" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">All</button>
-                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="ready" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Ready to Export (Valid &amp; Unposted)</button>
-                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="unposted" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Unposted Only</button>
-                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="recorded" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Already in ERP</button>
-                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="invalid" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Invalid IDs Only</button>
-                        <button type="button" class="btn btn-outline btn-sm" data-erp-filter="settled" style="padding: 0.2rem 0.65rem; font-size: 0.76rem; border-radius: 999px;">Settled Only</button>
-                    </div>
-                </div>
-
-                <!-- ERP Batch Summary Bar -->
-                <div id="erp-summary-card" class="glass-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
-                    <div style="display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap;">
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span style="color: var(--text-muted); font-size: 0.85rem;">Filtered Lines:</span>
-                            <strong id="erp-stat-total" style="font-size: 1.05rem; color: var(--text-main);">0</strong>
+                            <div style="border-top: 1px dashed var(--border-strong); padding-top: 0.85rem;">
+                                <div class="form-group" style="margin-bottom: 0.75rem;">
+                                    <label>Journal Batch Number</label>
+                                    <input type="text" id="erp-batch-number" class="input-text" placeholder="e.g. BATCH-2026-09">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0.85rem;">
+                                    <label>Starting Voucher (Optional)</label>
+                                    <input type="text" id="erp-voucher" class="input-text" placeholder="e.g. VCH-0001">
+                                </div>
+                                <label style="display: inline-flex; align-items: center; gap: 0.48rem; font-size: 0.8rem; color: var(--text-muted); cursor: pointer; margin-bottom: 0.9rem;">
+                                    <input type="checkbox" id="erp-record-valid-only" checked style="width: 15px; height: 15px; cursor: pointer;">
+                                    <span>Only stamp <strong>Valid ID</strong> rows</span>
+                                </label>
+                                <button class="btn btn-primary" id="btn-record-erp" style="width: 100%; height: 38px;">
+                                    <i data-lucide="check-circle"></i> <span id="btn-record-erp-label">Save ERP References</span>
+                                </button>
+                            </div>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.85rem;">Total Credit:</span>
-                            <strong id="erp-stat-amount" style="font-size: 1.05rem; color: var(--primary);">EGP 0.00</strong>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.85rem;">Ready to Export:</span>
-                            <strong id="erp-stat-ready" style="font-size: 1.05rem; color: #38bdf8;">0</strong>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span class="status-badge valid-id" style="font-size: 0.75rem;">Valid IDs</span>
-                            <strong id="erp-stat-valid" style="font-size: 1.05rem; color: var(--success);">0</strong>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span class="status-badge invalid-id" style="font-size: 0.75rem;">Invalid IDs</span>
-                            <strong id="erp-stat-invalid" style="font-size: 1.05rem; color: var(--danger);">0</strong>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.85rem;">Already in ERP:</span>
-                            <strong id="erp-stat-recorded" style="font-size: 1.05rem; color: var(--warning);">0</strong>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="glass-card table-container" style="padding: 0;">
-                    <table class="data-table" id="erp-preview-table" style="min-width: 100%;">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Account / Status</th>
-                                <th>Description</th>
-                                <th style="text-align: right;">Credit</th>
-                                <th>Offset Bank</th>
-                                <th>ERP Status / Action</th>
-                                <th style="text-align: right;">Line #</th>
-                            </tr>
-                        </thead>
-                        <tbody id="erp-preview-body">
-                            <!-- Data populated by JS -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="glass-card mt-4" style="margin-top: 1.5rem; padding: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem;">
-                        <div>
-                            <h3 style="margin: 0 0 0.35rem 0;">Record ERP Posting Details</h3>
-                            <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0;">After importing the template into Dynamics 365, record the generated Batch Number and Voucher numbers for these transactions.</p>
-                        </div>
-                        <label style="display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.84rem; color: var(--text-muted); cursor: pointer;">
-                            <input type="checkbox" id="erp-record-valid-only" checked style="width: 15px; height: 15px; cursor: pointer;">
-                            <span>Only stamp <strong>Valid ID</strong> rows</span>
-                        </label>
-                    </div>
-                    <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem;">
-                        <div class="form-group" style="margin: 0; flex: 1; min-width: 200px;">
-                            <label>Journal Batch Number</label>
-                            <input type="text" id="erp-batch-number" class="input-text" placeholder="e.g. BATCH-2026-09">
-                        </div>
-                        <div class="form-group" style="margin: 0; flex: 1; min-width: 200px;">
-                            <label>Starting Voucher (Optional)</label>
-                            <input type="text" id="erp-voucher" class="input-text" placeholder="e.g. VCH-0001">
-                        </div>
-                        <button class="btn btn-success" id="btn-record-erp" style="padding: 0.5rem 1.5rem;">
-                            <i data-lucide="check-circle"></i> <span id="btn-record-erp-label">Save References</span>
-                        </button>
-                    </div>
+                    </aside>
                 </div>
             </section>
                     <!-- Fawry Settlements View -->
@@ -1882,11 +1960,18 @@
                     </div>
                 </div>
 
-                <div class="glass-card" style="margin-bottom: 1.5rem;">
-                    <div id="settlement-drop-zone" class="drop-zone" style="border: 2px dashed var(--border-color); padding: 1.75rem; text-align: center; border-radius: 8px; cursor: pointer;">
-                        <i data-lucide="upload-cloud" style="width: 44px; height: 44px; color: var(--primary-color); margin-bottom: 0.75rem;"></i>
-                        <p style="margin: 0; font-weight: 500;">Drag &amp; Drop Fawry Settlement ZIP or Excel files here, or click to browse</p>
-                        <p style="margin: 0.35rem 0 0 0; font-size: 0.8rem; color: var(--text-muted);">Supports multiple .zip, .xlsx, .xls, and .xlsm settlement sheets</p>
+                <div class="surface-card" style="margin-bottom: 1.15rem; padding: 1rem 1.2rem;">
+                    <div id="settlement-drop-zone" class="drop-zone upload-zone-inline" style="padding: 1.05rem 1.25rem;">
+                        <div style="display: flex; align-items: center; gap: 0.9rem;">
+                            <div style="width: 42px; height: 42px; border-radius: 10px; background: var(--primary-soft); border: 1px solid var(--primary-border); color: var(--primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                <i data-lucide="upload-cloud" style="width: 20px; height: 20px;"></i>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-weight: 600; font-size: 0.9rem;">Drop Fawry Settlement ZIP or Excel files here</p>
+                                <p style="margin: 0.15rem 0 0 0; font-size: 0.78rem; color: var(--text-muted);">Supports multiple .zip, .xlsx, .xls, and .xlsm payout sheets</p>
+                            </div>
+                        </div>
+                        <span class="btn btn-outline btn-sm" style="pointer-events: none;">Browse Files</span>
                         <input type="file" id="settlement-file-input" accept=".zip,.xlsx,.xls,.xlsm" multiple style="display: none;">
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.85rem;">
@@ -1962,7 +2047,7 @@
                             <span>Amount Mismatch: <strong id="stl-stat-mismatch" style="color: var(--warning, #eab308);">0</strong></span>
                             <span>Missing in System: <strong id="stl-stat-missing-sys" style="color: var(--danger);">0</strong></span>
                             <span>Missing in Settlement: <strong id="stl-stat-missing-stl" style="color: #f97316;">0</strong></span>
-                            <span>Ready to Settle: <strong id="stl-stat-unsettled-matched" style="color: #38bdf8;">0</strong></span>
+                            <span>Ready to Settle: <strong id="stl-stat-unsettled-matched" style="color: var(--primary);">0</strong></span>
                         </div>
                     </div>
 
@@ -1970,13 +2055,13 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.85rem;">
                         <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                             <span style="font-size: 0.78rem; color: var(--text-muted); margin-right: 0.2rem;">Filter:</span>
-                            <button type="button" class="btn btn-outline btn-sm active" data-stl-filter="all" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">All</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="issues" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">Discrepancies Only</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Matched" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">Matched</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Amount Mismatch" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">Amount Mismatch</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Missing in System" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">Missing in System</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Missing in Settlement" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">Missing in Settlement</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="unsettled_matched" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 999px;">Not Yet Settled in DB</button>
+                            <button type="button" class="btn btn-outline btn-sm active" data-stl-filter="all" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">All</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="issues" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">Discrepancies Only</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Matched" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">Matched</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Amount Mismatch" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">Amount Mismatch</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Missing in System" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">Missing in System</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="Missing in Settlement" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">Missing in Settlement</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-stl-filter="unsettled_matched" style="padding: 0.2rem 0.6rem; font-size: 0.76rem; border-radius: 6px;">Not Yet Settled in DB</button>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 260px; justify-content: flex-end;">
                             <input type="text" id="settlement-search" class="input-text" placeholder="Search Ref Number, Settlement No, File..." style="padding: 0.35rem 0.65rem; font-size: 0.82rem; min-width: 200px; max-width: 280px;">
@@ -2071,22 +2156,22 @@
                             <i data-lucide="layers" style="width: 18px; height: 18px; color: var(--success);"></i>
                             4-Tier Permission Summary
                         </h3>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; font-size: 0.78rem;">
-                            <div style="padding: 0.55rem 0.7rem; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border-color);">
-                                <strong style="color: #94a3b8;">1. Viewer</strong>
-                                <div style="color: var(--text-muted); margin-top: 2px;">View all pages, Copy for Email, &amp; Export Excel reports.</div>
+                        <div class="role-tier-grid">
+                            <div class="role-tier-box role-tier-viewer">
+                                <strong>1. Viewer</strong>
+                                <div class="text-muted">View all pages, Copy for Email, &amp; Export Excel reports.</div>
                             </div>
-                            <div style="padding: 0.55rem 0.7rem; background: rgba(56, 189, 248, 0.06); border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.2);">
-                                <strong style="color: #38bdf8;">2. Operator</strong>
-                                <div style="color: var(--text-muted); margin-top: 2px;">Viewer + Import transactions/students, add/edit Payment Links.</div>
+                            <div class="role-tier-box role-tier-operator">
+                                <strong>2. Operator</strong>
+                                <div class="text-muted">Viewer + Import transactions/students, add/edit Payment Links.</div>
                             </div>
-                            <div style="padding: 0.55rem 0.7rem; background: rgba(16, 185, 129, 0.06); border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.2);">
-                                <strong style="color: #10b981;">3. Accountant</strong>
-                                <div style="color: var(--text-muted); margin-top: 2px;">Operator + Fixes, Mappings, Auto-Matcher, Settle &amp; ERP Posting.</div>
+                            <div class="role-tier-box role-tier-accountant">
+                                <strong>3. Accountant</strong>
+                                <div class="text-muted">Operator + Fixes, Mappings, Auto-Matcher, Settle &amp; ERP Posting.</div>
                             </div>
-                            <div style="padding: 0.55rem 0.7rem; background: rgba(168, 85, 247, 0.08); border-radius: 6px; border: 1px solid rgba(168, 85, 247, 0.25);">
-                                <strong style="color: #c084fc;">4. Admin</strong>
-                                <div style="color: var(--text-muted); margin-top: 2px;">Accountant + Revert imports, delete records &amp; manage roles.</div>
+                            <div class="role-tier-box role-tier-admin">
+                                <strong>4. Admin</strong>
+                                <div class="text-muted">Accountant + Revert imports, delete records &amp; manage roles.</div>
                             </div>
                         </div>
                     </div>
@@ -2140,6 +2225,7 @@
                 </div>
             </section>
         </main>
+        </div>
     </div>
 
     <!-- Mappings Modal -->
@@ -2190,7 +2276,7 @@
                     <label>Reference Number</label>
                     <input type="text" id="fix-ref" class="input-text" placeholder="Enter Fawry Reference Number...">
                     <div id="fix-duplicate-warning" style="display: none; margin-top: 0.5rem; font-size: 0.85rem; color: #f59e0b; cursor: pointer; background: rgba(245, 158, 11, 0.12); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.35);"></div>
-                    <div id="fix-tx-preview" style="display: none; margin-top: 0.5rem; font-size: 0.82rem; padding: 0.6rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.03);"></div>
+                    <div id="fix-tx-preview" style="display: none; margin-top: 0.5rem; font-size: 0.82rem; padding: 0.6rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-subtle);"></div>
                 </div>
                 <div class="form-group">
                     <label>Correct Student ID (Optional)</label>
@@ -2201,7 +2287,7 @@
                     <label>Correct Item Name (Optional)</label>
                     <input type="text" id="fix-name" class="input-text" list="datalist-fix-item-names" placeholder="Leave blank to keep item name from rules">
                     <datalist id="datalist-fix-item-names"></datalist>
-                    <div id="fix-item-suggestion" style="display: none; margin-top: 0.45rem; font-size: 0.82rem; color: var(--primary); cursor: pointer; background: rgba(59, 130, 246, 0.1); padding: 0.45rem 0.65rem; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3);"></div>
+                    <div id="fix-item-suggestion" style="display: none; margin-top: 0.45rem; font-size: 0.82rem; color: var(--primary); cursor: pointer; background: var(--primary-soft); padding: 0.45rem 0.65rem; border-radius: 6px; border: 1px solid var(--primary-border);"></div>
                 </div>
                 <div class="form-group">
                     <label>Correct Mapping (Optional)</label>
@@ -2233,10 +2319,10 @@
     </div>
 
     <!-- Auto-Matcher Confirm Modal -->
-    <div id="modal-automatch-confirm" class="modal hidden" style="z-index: 10020;">
+    <div id="modal-automatch-confirm" class="modal modal-dialog-alert hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
-                <div style="background: rgba(59, 130, 246, 0.1); color: var(--primary); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                <div style="background: var(--primary-soft); color: var(--primary); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
                     <i data-lucide="alert-circle" style="width: 30px; height: 30px;"></i>
                 </div>
             </div>
@@ -2252,10 +2338,10 @@
     </div>
     
     <!-- Name Matching Warn Modal -->
-    <div id="modal-name-match-warn" class="modal hidden" style="z-index: 10020;">
+    <div id="modal-name-match-warn" class="modal modal-dialog-alert hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 400px; text-align: center;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
-                <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                <div style="background: var(--warning-bg); color: var(--warning); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
                     <i data-lucide="alert-triangle" style="width: 30px; height: 30px;"></i>
                 </div>
             </div>
@@ -2264,16 +2350,17 @@
                 <p style="color: var(--text-muted); margin-bottom: 2rem;">Matching purely by name can be highly inaccurate and lead to misleading data if multiple students share similar names. Are you sure you want to enable this fallback method?</p>
                 <div style="display: flex; gap: 1rem; justify-content: center;">
                     <button class="btn btn-outline" onclick="document.getElementById('modal-name-match-warn').classList.add('hidden')" style="flex: 1;">Cancel</button>
-                    <button class="btn btn-primary" id="btn-confirm-name-match" style="flex: 1; background-color: #eab308; color: black; border: none;">Yes, Enable</button>
+                    <button class="btn btn-primary" id="btn-confirm-name-match" style="flex: 1; background: var(--warning); color: #ffffff; border: 1px solid var(--warning);">Yes, Enable</button>
                 </div>
             </div>
         </div>
     </div>
     
     <script type="module" src="app.js?v=2.5.0"></script>
+    <script defer src="ui-chrome.js?v=1.0.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">
-        <div class="modal-content glass-card" style="max-width: 1000px; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-content glass-card" style="max-width: 1000px;">
             <div class="modal-header">
                 <h2 id="modal-reapply-title">Review Proposed Changes</h2>
                 <button class="btn-close" onclick="document.getElementById('modal-reapply-preview').classList.add('hidden')"><i data-lucide="x"></i></button>
@@ -2422,10 +2509,10 @@
     </div>
 
     <!-- ERP Warning Modal -->
-    <div id="modal-erp-warning" class="modal hidden" style="z-index: 10020;">
+    <div id="modal-erp-warning" class="modal modal-dialog-alert hidden" style="z-index: 10020;">
         <div class="modal-content glass-card" style="max-width: 820px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
-                <div style="background: rgba(234, 179, 8, 0.1); color: #eab308; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
+                <div style="background: var(--warning-bg); color: var(--warning); width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem;">
                     <i data-lucide="alert-triangle" style="width: 30px; height: 30px;"></i>
                 </div>
             </div>
@@ -2464,7 +2551,7 @@
         <div class="modal-content glass-card" style="max-width: 600px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header">
                 <div style="display: flex; align-items: center; gap: 0.65rem;">
-                    <div style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                    <div style="background: var(--primary-soft); color: var(--primary); width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
                         <i data-lucide="calendar-clock" style="width: 20px; height: 20px;"></i>
                     </div>
                     <div>
@@ -2476,24 +2563,24 @@
             </div>
             <div class="modal-body" style="overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;">
                 <!-- Option 1: Auto Settlement Date -->
-                <label class="erp-date-mode-option" data-mode="settlement" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.45); background: rgba(56, 189, 248, 0.06); cursor: pointer; transition: all 0.15s ease;">
+                <label class="erp-date-mode-option" data-mode="settlement" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid var(--primary-border); background: var(--primary-soft); cursor: pointer; transition: all 0.15s ease;">
                     <input type="radio" name="erp-export-date-mode" value="settlement" checked style="margin-top: 0.25rem; accent-color: var(--primary);">
                     <div style="flex: 1; min-width: 0;">
                         <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                             <strong style="font-size: 0.92rem; color: var(--text-main);">Settlement Date (Auto-Calculated)</strong>
-                            <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; font-size: 0.7rem;">Recommended</span>
+                            <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--success); font-size: 0.7rem;">Recommended</span>
                         </div>
                         <p id="erp-date-settlement-desc" style="margin: 0.25rem 0 0.55rem 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
                             Automatically shifts each order to its bank transfer date: <strong>Sun–Wed &rarr; Next Day (+1d)</strong>, while <strong>Thu, Fri &amp; Sat &rarr; Sunday</strong>.
                         </p>
-                        <div id="erp-date-choice-preview" style="background: rgba(15, 23, 42, 0.45); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.55rem 0.75rem; font-size: 0.78rem; max-height: 135px; overflow-y: auto;">
+                        <div id="erp-date-choice-preview" style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.55rem 0.75rem; font-size: 0.78rem; max-height: 135px; overflow-y: auto;">
                             <!-- Populated dynamically with Payment Date -> Settlement Date mappings -->
                         </div>
                     </div>
                 </label>
 
                 <!-- Option 2: Original Payment Date -->
-                <label class="erp-date-mode-option" data-mode="payment" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.02); cursor: pointer; transition: all 0.15s ease;">
+                <label class="erp-date-mode-option" data-mode="payment" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-subtle); cursor: pointer; transition: all 0.15s ease;">
                     <input type="radio" name="erp-export-date-mode" value="payment" style="margin-top: 0.25rem; accent-color: var(--primary);">
                     <div style="flex: 1;">
                         <strong style="font-size: 0.92rem; color: var(--text-main);">Original Payment Date (Order Date)</strong>
@@ -2504,7 +2591,7 @@
                 </label>
 
                 <!-- Option 3: Custom Single Date Override -->
-                <label class="erp-date-mode-option" data-mode="custom" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border-color); background: rgba(255, 255, 255, 0.02); cursor: pointer; transition: all 0.15s ease;">
+                <label class="erp-date-mode-option" data-mode="custom" style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-subtle); cursor: pointer; transition: all 0.15s ease;">
                     <input type="radio" name="erp-export-date-mode" value="custom" style="margin-top: 0.25rem; accent-color: var(--primary);">
                     <div style="flex: 1;">
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;">
@@ -2573,7 +2660,7 @@
                 <button class="btn-close" onclick="document.getElementById('modal-double-payments').classList.add('hidden')"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1rem 1.5rem;">
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem 1rem; background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px;">
                     <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
                         <label style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Max Days Between Payments:</label>
                         <select id="double-payments-window" class="input-text" style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.84rem;">
@@ -2621,10 +2708,10 @@
 
     <!-- Automated Hygiene & Deduplication Report Modal (Admin Only) -->
     <div id="modal-hygiene-report" class="modal hidden" style="z-index: 10030;">
-        <div class="modal-content glass-card" style="max-width: 680px; max-height: 90vh; display: flex; flex-direction: column; border: 1px solid rgba(56, 189, 248, 0.3); box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
+        <div class="modal-content glass-card" style="max-width: 680px; max-height: 90vh; display: flex; flex-direction: column; border: 1px solid rgba(56, 189, 248, 0.3); ">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding: 1.25rem 1.5rem;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="width: 38px; height: 38px; border-radius: 8px; background: rgba(56, 189, 248, 0.15); display: flex; align-items: center; justify-content: center; color: var(--primary);">
+                    <div style="width: 38px; height: 38px; border-radius: 8px; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; color: var(--primary);">
                         <i data-lucide="shield-check" style="width: 22px; height: 22px;"></i>
                     </div>
                     <div>
@@ -2636,52 +2723,52 @@
             </div>
             <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1.5rem;">
                 <!-- Health Score Hero Banner -->
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-radius: 10px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(56, 189, 248, 0.08)); border: 1px solid rgba(16, 185, 129, 0.3); margin-bottom: 1.25rem;">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-radius: 10px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), var(--primary-soft)); border: 1px solid rgba(16, 185, 129, 0.3); margin-bottom: 1.25rem;">
                     <div>
                         <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600;">Database Integrity Status</div>
-                        <div id="hygiene-health-status-text" style="font-size: 1.05rem; font-weight: 600; color: #10b981; margin-top: 2px;">Pristine Data Quality</div>
+                        <div id="hygiene-health-status-text" style="font-size: 1.05rem; font-weight: 600; color: var(--success); margin-top: 2px;">Pristine Data Quality</div>
                     </div>
                     <div style="text-align: right;">
-                        <span id="hygiene-modal-score" style="font-size: 1.8rem; font-weight: 700; color: #10b981; font-family: monospace;">99.2%</span>
+                        <span id="hygiene-modal-score" style="font-size: 1.8rem; font-weight: 700; color: var(--success); font-family: monospace;">99.2%</span>
                         <div style="font-size: 0.7rem; color: var(--text-muted);">Health Score</div>
                     </div>
                 </div>
 
                 <!-- Metrics Grid -->
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1.25rem;">
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Total Transactions</div>
                         <div id="hygiene-modal-tx-count" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">-</div>
                     </div>
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Duplicate Mappings</div>
                         <div id="hygiene-modal-dup-mappings" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Duplicate Fixes</div>
                         <div id="hygiene-modal-dup-fixes" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Identical Duplicates</div>
                         <div id="hygiene-modal-identical-dups" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Missing Mappings</div>
                         <div id="hygiene-modal-unmapped" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Unmatched IDs</div>
                         <div id="hygiene-modal-invalid-ids" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">595</div>
                     </div>
                 </div>
 
                 <!-- Explanation & Status Box -->
-                <div id="hygiene-modal-explanation-box" style="padding: 0.9rem 1.1rem; border-radius: 8px; background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.2); font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 1rem;">
+                <div id="hygiene-modal-explanation-box" style="padding: 0.9rem 1.1rem; border-radius: 8px; background: var(--primary-soft); border: 1px solid rgba(56, 189, 248, 0.2); font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 1rem;">
                     <div id="hygiene-modal-explanation-text">The automated deduplication scanner ran in the background. All rules and transactions are verified and in sync.</div>
                 </div>
 
                 <!-- Cloud Drive Link Row -->
-                <div id="hygiene-modal-drive-row" style="display: flex; align-items: center; justify-content: space-between; font-size: 0.82rem; padding: 0.6rem 0.8rem; background: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid var(--border-color);">
+                <div id="hygiene-modal-drive-row" style="display: flex; align-items: center; justify-content: space-between; font-size: 0.82rem; padding: 0.6rem 0.8rem; background: var(--bg-subtle); border-radius: 6px; border: 1px solid var(--border-color);">
                     <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted);">
                         <i data-lucide="cloud" style="width: 16px; height: 16px; color: var(--primary);"></i>
                         <span>Audit report saved to Google Drive:</span>
@@ -2694,7 +2781,7 @@
             </div>
             <div class="modal-footer" style="padding: 1.25rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
                 <div>
-                    <button class="btn btn-outline" id="btn-hygiene-revert" style="display: none; border-color: rgba(239, 68, 68, 0.4); color: #ef4444;" title="Revert any changes made by this automated run">
+                    <button class="btn btn-outline" id="btn-hygiene-revert" style="display: none; border-color: rgba(239, 68, 68, 0.4); color: var(--danger);" title="Revert any changes made by this automated run">
                         <i data-lucide="undo-2"></i> Reverse Clean (Undo)
                     </button>
                 </div>
@@ -2708,10 +2795,10 @@
     </div>
 
     <!-- Custom Confirm Modal -->
-    <div id="modal-custom-confirm" class="modal hidden" style="z-index: 99999;">
+    <div id="modal-custom-confirm" class="modal modal-dialog-alert hidden" style="z-index: 99999;">
         <div class="modal-content glass-card" style="max-width: 450px; text-align: center;">
             <div class="modal-header" style="flex-direction: column; justify-content: center; border-bottom: none; padding-bottom: 0;">
-                <div style="background-color: rgba(255,193,7,0.1); color: var(--warning); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 1rem; margin-left: auto; margin-right: auto;">
+                <div style="background-color: var(--warning-bg); color: var(--warning); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 1rem; margin-left: auto; margin-right: auto;">
                     <i data-lucide="help-circle" style="width: 32px; height: 32px;"></i>
                 </div>
                 <h2 id="custom-confirm-title" style="font-size: 1.5rem; margin-bottom: 0.5rem; text-align: center; width: 100%;">Confirm</h2>
