@@ -497,16 +497,17 @@ export function escapeHTML(str) {
  */
 export function sanitizeExcelValue(val) {
     if (typeof val !== 'string' || val.length === 0) return val;
-    const trimmed = val.trimStart();
-    if (!trimmed) return val;
+    const normalized = /[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(val) ? val.normalize('NFKC') : val;
+    const trimmed = normalized.trimStart();
+    if (!trimmed) return normalized;
     const first = trimmed[0];
     if (first === '=' || first === '+' || first === '@' || first === '\t' || first === '\r') {
-        return `'${val}`;
+        return `'${normalized}`;
     }
     if (first === '-' && !/^-\d+(\.\d+)?$/.test(trimmed) && trimmed !== '-') {
-        return `'${val}`;
+        return `'${normalized}`;
     }
-    return val;
+    return normalized;
 }
 
 /**

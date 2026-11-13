@@ -5342,7 +5342,8 @@ class App {
                     XLSX.writeFile(wb, `Auto_Matcher_Results_${toDateOnly(new Date())}.xlsx`);
                 } else {
                     const csv = Papa.unparse(safeExportRows);
-                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    // Include UTF-8 BOM so Microsoft Excel renders Arabic text cleanly when opening CSV exports
+                    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement('a');
                     const url = URL.createObjectURL(blob);
                     link.href = url;
@@ -10055,9 +10056,11 @@ class App {
         const amount = Number(r.amount ?? r.item_price) || 0;
         const effectiveDate = r.value_date || r.payment_date || r.transaction_date || '';
         const ref = r.reference_number || r.external_ref || r.transaction_ref || '';
-        let desc = r.description ?? r.item_name ?? '';
+        let desc = String(r.description ?? r.item_name ?? '');
+        if (/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(desc)) desc = desc.normalize('NFKC');
         let studentId = r.student_id || '';
-        let matchedName = r.matched_student_name || '';
+        let matchedName = String(r.matched_student_name || '');
+        if (/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(matchedName)) matchedName = matchedName.normalize('NFKC');
         let matchSource = r.match_source || (studentId ? 'statement_id' : 'unmatched');
         let mapping = r.mapping || DEFAULT_FOREIGN_MAPPING;
         let secondMapping = r.second_mapping || '';

@@ -11,6 +11,7 @@ export const DEFAULT_FOREIGN_MAPPING = 'Tuition';
 export function normalizePersonName(str) {
     if (!str) return '';
     return String(str)
+        .normalize('NFKC')
         .toLowerCase()
         .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // strip tashkeel & tatweel
         .replace(/[أإآٱ]/g, 'ا')
@@ -190,7 +191,7 @@ export function processBankStatementRows(rawRows, metadata = {}) {
         const txRef = String(r.transaction_ref || '').trim();
         const txCode = String(r.transaction_code || '').trim().toUpperCase();
         const event = String(r.event || '').trim().toUpperCase();
-        const description = String(r.description || '').replace(/\s+/g, ' ').trim();
+        const description = normalizeArabicPresentation(r.description || '').replace(/\s+/g, ' ').trim();
 
         return {
             _rowIndex: idx + 1,
@@ -421,13 +422,69 @@ export function parseBankStatementGrid(gridRows) {
  * Description items to their nearest row Y-coordinate, emitting every row in clean column order:
  *   `<Balance> <Credit> <Debit> <DateTime> <ValueDate> <Full Description> <ExtRef> <TxCode> <TxRef> <Event>`
  */
+const ARABIC_CHAR_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const ARABIC_PRESENTATION_RE = /[\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const NEUTRAL_SEP_RE = /^[\s\-\/.,:()]+$/;
+
+/**
+ * Normalizes Arabic Presentation Forms-A/B (often emitted by PDF fonts)
+ * into canonical standard UTF-8 Arabic characters.
+ */
+export function normalizeArabicPresentation(str) {
+    if (!str) return '';
+    const s = String(str);
+    return ARABIC_PRESENTATION_RE.test(s) ? s.normalize('NFKC') : s;
+}
+
+/**
+ * Sorts spans on a single horizontal PDF line left-to-right by X, while
+ * reversing contiguous Right-to-Left Arabic segments (including neutral
+ * punctuation separators bridged by Arabic tokens) so multi-word Arabic names
+ * and narratives reconstruct in logical reading order rather than reversed.
+ */
+export function orderBidiPdfLineItems(items) {
+    const sorted = [...(items || [])].sort((a, b) => a.x - b.x);
+    const ordered = [];
+    let i = 0;
+
+    while (i < sorted.length) {
+        if (ARABIC_CHAR_RE.test(sorted[i].str)) {
+            let j = i + 1;
+            while (j < sorted.length) {
+                if (ARABIC_CHAR_RE.test(sorted[j].str)) {
+                    j++;
+                } else if (NEUTRAL_SEP_RE.test(sorted[j].str)) {
+                    let k = j + 1;
+                    while (k < sorted.length && NEUTRAL_SEP_RE.test(sorted[k].str)) {
+                        k++;
+                    }
+                    if (k < sorted.length && ARABIC_CHAR_RE.test(sorted[k].str)) {
+                        j = k + 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            ordered.push(...sorted.slice(i, j).reverse());
+            i = j;
+        } else {
+            ordered.push(sorted[i]);
+            i++;
+        }
+    }
+
+    return ordered;
+}
+
 export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
     const outputLines = [];
 
     for (const pageItems of pagesItems || []) {
         const cleanItems = (pageItems || [])
             .map(it => ({
-                str: String(it.str || '').trim(),
+                str: normalizeArabicPresentation(it.str).trim(),
                 x: Number(it.x) || 0,
                 y: Number(it.y) || 0
             }))
@@ -446,7 +503,9 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
                 hLines.push({ y: item.y, items: [item] });
             }
         }
-        hLines.forEach(line => line.items.sort((a, b) => a.x - b.x));
+        hLines.forEach(line => {
+            line.items = orderBidiPdfLineItems(line.items);
+        });
 
         // Identify Anchor Lines: lines that contain a transaction date-time (\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})
         // or an Event code (INIT|REVR|DEBK|ILIQ|IMAT) + numeric balances
@@ -555,7 +614,7 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
  * into metadata and transaction rows, then runs processBankStatementRows.
  */
 export function parseBanqueMisrPdfText(fullText) {
-    const text = String(fullText || '');
+    const text = normalizeArabicPresentation(fullText || '');
     const metadata = {
         customerName: 'جامعة النيل الاهلية',
         accountNumber: '',

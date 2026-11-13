@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
-import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents } from '../foreign-transactions.js';
+import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -290,4 +290,90 @@ test('reconstructBanqueMisrPdfLinesFromPages handles vertically centered cells a
     expect(parsed.deposits[1].id_status).toBe('Missing ID');
     expect(parsed.deposits[1].mapping).toBe('Tuition');
     expect(parsed.deposits[1].bank).toBe('NuMisrUsd5');
+});
+
+test('reconstructBanqueMisrPdfLinesFromPages normalizes Arabic presentation forms and restores RTL word order', () => {
+    // Reproduces real Banque Misr PDF spans: Presentation Forms-B tokens ordered visually left-to-right (so Arabic runs right-to-left)
+    const pdfSpans = [
+        { str: '\uFE8D\uFEDF\uFE8E\uFEEB\uFEE0\uFEF4\uFE94', x: 12.82, y: 540.03 }, // الاهلية
+        { str: '\uFE8D\uFEDF\uFEE8\uFEF4\uFEDE', x: 40.62, y: 540.03 }, // النيل
+        { str: '\uFE9F\uFE8E\uFEE3\uFECC\uFE94', x: 58.90, y: 540.03 }, // جامعة
+        { str: 'Statement of Account', x: 360.00, y: 540.03 },
+        { str: 'Account Number', x: 12.82, y: 453.00 },
+        { str: '7700120000000557', x: 12.82, y: 438.00 },
+        { str: 'Currency', x: 250.00, y: 492.00 },
+        { str: 'USD', x: 250.00, y: 477.00 },
+
+        // Transaction 1: multi-line Arabic with Presentation Forms in visual LTR order
+        { str: 'Cash Deposit ', x: 329.77, y: 290.27 },
+        { str: '\uFEB3\uFE8E\uFEAE\uFEE9', x: 365.14, y: 290.27 }, // ساره
+        { str: '\uFEE3\uFEE8\uFE8E\uFEED\uFEDF\uFEEA', x: 378.15, y: 290.27 }, // مناوله
+        { str: '\uFE8D\uFEDF\uFEAF\uFECB\uFE92\uFEF2', x: 395.13, y: 290.27 }, // الزعبي
+        { str: '\uFE8D\uFEE7\uFEB2', x: 412.01, y: 290.27 }, // انس
+        { str: '\uFEB3\uFEEE\uFEFC\uFED1', x: 423.91, y: 290.27 }, // سولاف
+
+        { str: '448,798.76', x: 13.00, y: 284.27 },
+        { str: '907.47', x: 90.00, y: 284.27 },
+        { str: '0.00', x: 150.00, y: 284.27 },
+        { str: '05-01-2026 13:10:13', x: 205.00, y: 284.27 },
+        { str: '05-01-2026', x: 285.00, y: 284.27 },
+        { str: 'FJB2600526662342', x: 560.00, y: 284.27 },
+        { str: 'CHF', x: 650.00, y: 284.27 },
+        { str: '519CHFD260050014', x: 690.00, y: 284.27 },
+        { str: 'INIT', x: 780.00, y: 284.27 },
+
+        // Transaction 2: Arabic with bridged '/' separator and Student ID on left
+        { str: 'Cash Deposit  - ', x: 329.77, y: 231.84 },
+        { str: '\uFECB\uFE92\uFEAA\uFE8D\uFEDF\uFEAE\uFEA3\uFEE3\uFEE6', x: 369.90, y: 231.84 }, // عبدالرحمن
+        { str: '\uFE8D\uFEDF\uFEC1\uFEF4\uFE90', x: 396.27, y: 231.84 }, // الطيب
+        { str: '\uFEA9\uFECB\uFE8E\uFE80', x: 411.89, y: 231.84 }, // دعاء
+
+        { str: '449,700.00', x: 13.00, y: 225.84 },
+        { str: '901.24', x: 90.00, y: 225.84 },
+        { str: '0.00', x: 150.00, y: 225.84 },
+        { str: '06-01-2026 10:00:00', x: 205.00, y: 225.84 },
+        { str: '06-01-2026', x: 285.00, y: 225.84 },
+        { str: 'FJB2600626700001', x: 560.00, y: 225.84 },
+        { str: 'CHF', x: 650.00, y: 225.84 },
+        { str: '519CHFD260060001', x: 690.00, y: 225.84 },
+        { str: 'INIT', x: 780.00, y: 225.84 },
+
+        { str: '231002670', x: 329.77, y: 219.84 },
+        { str: '\uFECB\uFE92\uFEAA\uFE8D\uFEDF\uFEAE\uFEA3\uFEE3\uFEE6', x: 357.52, y: 219.84 }, // عبدالرحمن
+        { str: '\uFE8D\uFEDF\uFEC1\uFEF4\uFE90', x: 383.89, y: 219.84 }, // الطيب
+        { str: '\uFE8D\uFEDF\uFE92\uFEAE\uFE8D\uFE80', x: 399.51, y: 219.84 }, // البراء
+        { str: '/', x: 411.22, y: 219.84 },
+        { str: '\uFE91\uFEE3\uFEE8\uFE8E\uFEED\uFEDF\uFE94', x: 413.62, y: 219.84 } // بمناولة
+    ];
+
+    expect(normalizeArabicPresentation('\uFEB3\uFEEE\uFEFC\uFED1')).toBe('سولاف');
+    const orderedHeader = orderBidiPdfLineItems([
+        { str: 'الاهلية', x: 12.82 },
+        { str: 'النيل', x: 40.62 },
+        { str: 'جامعة', x: 58.90 }
+    ]);
+    expect(orderedHeader.map(i => i.str).join(' ')).toBe('جامعة النيل الاهلية');
+
+    const text = reconstructBanqueMisrPdfLinesFromPages([pdfSpans]);
+    expect(text).not.toMatch(/[\uFB50-\uFDFF\uFE70-\uFEFF]/);
+    expect(text).toContain('جامعة النيل الاهلية');
+
+    const parsed = parseBanqueMisrPdfText(text);
+    expect(parsed.deposits.length).toBe(2);
+    expect(parsed.deposits[0].description).toBe('Cash Deposit سولاف انس الزعبي مناوله ساره');
+    expect(parsed.deposits[1].student_id).toBe('231002670');
+    expect(parsed.deposits[1].description).toContain('دعاء الطيب عبدالرحمن');
+    expect(parsed.deposits[1].description).toContain('بمناولة / البراء الطيب عبدالرحمن');
+});
+
+test('sanitizeExcelRows normalizes Arabic presentation forms for Excel exports', () => {
+    const clean = sanitizeExcelRows([
+        {
+            Description: 'Cash Deposit \uFEB3\uFEEE\uFEFC\uFED1 \uFE8D\uFEE7\uFEB2',
+            Note: '=\uFEB3\uFEEE\uFEFC\uFED1'
+        }
+    ]);
+    expect(clean[0].Description).toBe('Cash Deposit سولاف انس');
+    expect(clean[0].Description).not.toMatch(/[\uFB50-\uFDFF\uFE70-\uFEFF]/);
+    expect(clean[0].Note).toBe("'=سولاف");
 });
