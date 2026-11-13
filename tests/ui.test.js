@@ -292,7 +292,7 @@ test('App brand icon and responsive header components are properly structured', 
     expect(sidebar).not.toBeNull();
     const sidebarBrand = sidebar.querySelector('.app-brand');
     expect(sidebarBrand).not.toBeNull();
-    expect(sidebarBrand.querySelector('.brand-badge svg.brand-icon')).not.toBeNull();
+    expect(sidebarBrand.querySelector('.brand-badge img.brand-icon')?.getAttribute('src')).toBe('brand-emblem.png');
     expect(sidebarBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
     expect(sidebarBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
@@ -301,16 +301,17 @@ test('App brand icon and responsive header components are properly structured', 
     expect(mobileHeader).not.toBeNull();
     const mobileBrand = mobileHeader.querySelector('.app-brand');
     expect(mobileBrand).not.toBeNull();
-    expect(mobileBrand.querySelector('.brand-badge svg.brand-icon')).not.toBeNull();
+    expect(mobileBrand.querySelector('.brand-badge img.brand-icon')?.getAttribute('src')).toBe('brand-emblem.png');
     expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
     expect(mobileBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
-    // Auth Overlay keeps clean sign-in form (no redundant left-pane .app-brand or Nile University tag)
+    // Auth Overlay keeps clean sign-in form and showcases full custom brand lockup
     const authOverlay = document.getElementById('auth-overlay');
     expect(authOverlay).not.toBeNull();
     expect(authOverlay.querySelector('.app-brand')).toBeNull();
     expect(authOverlay.querySelector('.showcase-org-tag')).toBeNull();
-    expect(authOverlay.querySelector('.showcase-title')?.textContent?.trim()).toBe('Students Payments Database');
+    expect(authOverlay.querySelector('img.showcase-brand-logo')?.getAttribute('src')).toBe('brand-logo.png');
+    expect(authOverlay.querySelector('img.showcase-brand-logo')?.getAttribute('alt')).toBe('Students Payments Database');
 });
 
 test('Transactions table renders compact .tx-quick-fix-btn with proper classes', () => {
@@ -731,11 +732,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(html).not.toContain('preview.css');
     expect(html).not.toContain('preview-ui.js');
     expect(html).not.toContain('Studio Preview');
-    expect(html).toContain('styles.css?v=3.0.4');
+    expect(html).toContain('styles.css?v=3.0.5');
     expect(html).toContain('ui-chrome.js?v=1.0.0');
 
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
-    expect(swSrc).toContain('styles.css?v=3.0.4');
+    expect(swSrc).toContain('styles.css?v=3.0.5');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {

@@ -292,6 +292,15 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
     padding: 1.5rem 0;
 }
 
+.showcase-brand-logo {
+    display: block;
+    width: 100%;
+    max-width: 340px;
+    height: auto;
+    object-fit: contain;
+    margin: 0;
+}
+
 .showcase-title {
     font-family: var(--font-display);
     font-size: 1.95rem;
@@ -371,6 +380,7 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
         border-top: 1px solid rgba(255, 255, 255, 0.1);
     }
     .showcase-center { padding: 0.75rem 0; }
+    .showcase-brand-logo { max-width: 260px; }
     .showcase-title { font-size: 1.4rem; }
     .dedication-team { font-size: 1.1rem; }
     .showcase-bottom-marks { display: none; }
@@ -548,21 +558,21 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
 }
 
 .brand-badge {
-    width: 32px;
-    height: 32px;
-    border-radius: 9px;
-    background: radial-gradient(circle at 38% 15%, rgba(20, 184, 166, 0.28), transparent 62%), linear-gradient(155deg, #112624 0%, #090b0f 100%);
-    border: 1px solid rgba(20, 184, 166, 0.38);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
 }
 
-.brand-badge-lg { width: 42px; height: 42px; border-radius: 11px; }
-.brand-badge-lg .brand-icon { width: 28px; height: 28px; }
-.brand-icon { width: 22px; height: 22px; display: block; }
+.brand-badge-lg { width: 44px; height: 44px; border-radius: 10px; }
+.brand-badge-lg .brand-icon { width: 100%; height: 100%; }
+.brand-icon { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 .brand-info { display: flex; flex-direction: column; justify-content: center; min-width: 0; overflow: hidden; }
 .brand-name, .logo-text {

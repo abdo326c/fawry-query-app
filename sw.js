@@ -1,8 +1,8 @@
-const CACHE_NAME = 'fawry-app-cache-v31';
+const CACHE_NAME = 'fawry-app-cache-v32';
 const urlsToCache = [
   './',
   './index.html',
-  './styles.css?v=3.0.4',
+  './styles.css?v=3.0.5',
   './app.js?v=2.5.5',
   './ui-chrome.js?v=1.0.0',
   './rules.js',
@@ -11,6 +11,8 @@ const urlsToCache = [
   './foreign-transactions.js',
   './fx-rates.js',
   './supabase.js',
+  './brand-emblem.png',
+  './brand-logo.png',
   './nu-logo.png',
   './fawry-logo-dark.png',
   './fawry-logo-light.png',
