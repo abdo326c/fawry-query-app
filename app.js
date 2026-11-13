@@ -10770,8 +10770,8 @@ class App {
         const searchRaw = (document.getElementById('foreign-search-input')?.value || '').trim().toLowerCase();
         const searchNorm = normalizePersonName(searchRaw);
 
-        let rows = (this.foreignTransactions || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
-        this.foreignTransactions = rows;
+        this.foreignTransactions = (this.foreignTransactions || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
+        let rows = [...this.foreignTransactions];
 
         if (dateFrom) {
             rows = rows.filter(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date || '') >= dateFrom);
