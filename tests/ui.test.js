@@ -701,4 +701,12 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.detect_double_payments');
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.revert_audit_log_entry');
     expect(schemaSql).toContain("ELSIF v_table = 'foreign_transactions_erp'");
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.get_dashboard_summary');
+    expect(schemaSql).toContain('idx_transactions_mapping_trgm');
+    expect(schemaSql).toContain('(SELECT public.has_min_role(');
+
+    // Verify head libraries use defer so initial render is unblocked
+    const deferredScripts = Array.from(document.querySelectorAll('head script[src]'));
+    expect(deferredScripts.length).toBeGreaterThan(0);
+    expect(deferredScripts.every(s => s.hasAttribute('defer'))).toBe(true);
 });

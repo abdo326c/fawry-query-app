@@ -208,9 +208,18 @@ export function resolveUsdToEgpRate(dateStr, store, { mode = null, customRate = 
         };
     }
 
-    const availableDates = Object.keys(ratesByDate)
-        .filter(d => ratesByDate[d]?.rate > 0)
-        .sort();
+    // Reuse cached sorted date array when available and valid to avoid O(D log D) sorting per row
+    const keyCount = Object.keys(ratesByDate).length;
+    let availableDates = store?._sortedDates;
+    if (!Array.isArray(availableDates) || store?._sortedDatesCount !== keyCount) {
+        availableDates = Object.keys(ratesByDate)
+            .filter(d => ratesByDate[d]?.rate > 0)
+            .sort();
+        if (store && typeof store === 'object') {
+            store._sortedDates = availableDates;
+            store._sortedDatesCount = keyCount;
+        }
+    }
 
     if (cleanDate && availableDates.length > 0) {
         // Nearest prior date first
@@ -331,6 +340,11 @@ export async function syncMissingFxRates(dates = [], store, { fetchImpl = typeof
                 failedCount++;
             }
         }
+    }
+
+    if (updatedRecords.length > 0 && targetStore) {
+        delete targetStore._sortedDates;
+        delete targetStore._sortedDatesCount;
     }
 
     return {

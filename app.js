@@ -48,6 +48,42 @@ async function runConcurrent(tasks, concurrency = 4) {
     return results;
 }
 
+const _loadedScripts = new Map();
+function loadScriptOnce(src) {
+    if (_loadedScripts.has(src)) return _loadedScripts.get(src);
+    const promise = new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[src="${src}"]`);
+        if (existing) {
+            resolve();
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => {
+            _loadedScripts.delete(src);
+            reject(new Error(`Failed to load script: ${src}`));
+        };
+        document.head.appendChild(script);
+    });
+    _loadedScripts.set(src, promise);
+    return promise;
+}
+
+function renderIcons(root = null) {
+    if (!window.lucide) return;
+    try {
+        if (root && typeof Element !== 'undefined' && root instanceof Element) {
+            window.lucide.createIcons({ root });
+        } else {
+            window.lucide.createIcons();
+        }
+    } catch (_e) {
+        window.lucide.createIcons();
+    }
+}
+
 // Promise-based confirm dialog using the in-page modal
 window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
     if (typeof window._activeConfirmCancel === 'function') {
@@ -153,6 +189,10 @@ class App {
         this.automatchDistinctItems = [];
         this.invalidTx = [];
         this.currentProfileStudent = null;
+        this._tabLoadedAt = {};
+        this._dirtyTabs = new Set();
+        this._txCountCache = null;
+        this._authUsersSynced = false;
         
         this.isImporting = false;
         this.initTheme();
@@ -180,6 +220,37 @@ class App {
         this.initAuth();
     }
 
+    invalidateTabs(...tabIds) {
+        if (!this._dirtyTabs) this._dirtyTabs = new Set();
+        if (tabIds.length === 0) {
+            this._tabLoadedAt = {};
+            this._txCountCache = null;
+            return;
+        }
+        for (const id of tabIds) {
+            this._dirtyTabs.add(id);
+            if (id === 'transactions') this._txCountCache = null;
+            if (id === 'erp-export') {
+                this.erpBaseData = null;
+                this.erpBaseKey = null;
+            }
+        }
+    }
+
+    markTabLoaded(tabId) {
+        if (!this._tabLoadedAt) this._tabLoadedAt = {};
+        if (!this._dirtyTabs) this._dirtyTabs = new Set();
+        this._tabLoadedAt[tabId] = Date.now();
+        this._dirtyTabs.delete(tabId);
+    }
+
+    shouldReloadTab(tabId, maxAgeMs = 120000) {
+        if (!this._tabLoadedAt || this._dirtyTabs?.has(tabId)) return true;
+        const loadedAt = this._tabLoadedAt[tabId];
+        if (!loadedAt) return true;
+        return (Date.now() - loadedAt) > maxAgeMs;
+    }
+
     async initAuth() {
         // Handle Session State
         const { data: { session } } = await supabase.auth.getSession();
@@ -204,6 +275,10 @@ class App {
                 this.allMappings = [];
                 this.allManualFixes = [];
                 this.allStudents = [];
+                this._tabLoadedAt = {};
+                this._dirtyTabs = new Set();
+                this._txCountCache = null;
+                this._authUsersSynced = false;
             }
         });
 
@@ -225,7 +300,7 @@ class App {
                 errDiv.style.display = 'block';
                 btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
                 btn.disabled = false;
-                if (window.lucide) lucide.createIcons();
+                renderIcons(btn);
             } else {
                 Toast.show('Successfully signed in', 'success');
                 btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
@@ -644,6 +719,7 @@ class App {
                     // Throttle reloads to prevent spamming the database
                     if (this.realtimeTimeout) clearTimeout(this.realtimeTimeout);
                     this.realtimeTimeout = setTimeout(() => {
+                        this.invalidateTabs('dashboard', 'transactions', 'erp-export', 'history');
                         // Refresh the active view dynamically
                         const views = document.querySelectorAll('.view.active');
                         if (views.length > 0) {
@@ -654,7 +730,7 @@ class App {
                             } else if (activeId === 'view-dashboard') {
                                 this.loadDashboard();
                             } else if (activeId === 'view-erp-export') {
-                                this.loadErpExport();
+                                this.loadErpExport({ refresh: true });
                             }
                         }
                         this.updateSidebarBadges();
@@ -784,6 +860,7 @@ class App {
         document.getElementById('btn-import-done')?.addEventListener('click', () => {
             document.getElementById('modal-import')?.classList.add('hidden');
             document.getElementById('import-progress')?.classList.add('hidden');
+            this.invalidateTabs('dashboard', 'transactions', 'history', 'erp-export');
             document.querySelector('.nav-link[data-tab="transactions"]')?.click();
             this.loadTransactions();
             this.updateSidebarBadges();
@@ -799,7 +876,7 @@ class App {
         
         const links = document.querySelectorAll('.nav-link');
         links.forEach(link => {
-            link.addEventListener('click', (e) => {
+            link.addEventListener('click', async (e) => {
                 e.preventDefault();
                 const tabId = link.getAttribute('data-tab');
                 
@@ -815,26 +892,36 @@ class App {
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
                 if (tabId === 'settlement') {
-                    if (!window.settlementApp) {
-                        window.settlementApp = new SettlementProcessor(supabase);
-                    } else if (typeof window.settlementApp.loadSettlementHistory === 'function') {
-                        window.settlementApp.loadSettlementHistory();
+                    try {
+                        if (typeof window.SettlementProcessor === 'undefined') {
+                            await loadScriptOnce('./settlement.js?v=2.5.0');
+                        }
+                        if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
+                            window.settlementApp = new window.SettlementProcessor(supabase);
+                        } else if (this.shouldReloadTab('settlement') && typeof window.settlementApp?.loadSettlementHistory === 'function') {
+                            window.settlementApp.loadSettlementHistory();
+                            this.markTabLoaded('settlement');
+                        }
+                    } catch (err) {
+                        Toast.show('Could not load Settlement module: ' + err.message, 'error');
                     }
                 }
-                if (tabId === 'dashboard') this.loadDashboard();
-                if (tabId === 'transactions') this.loadTransactions();
-                if (tabId === 'foreign-transactions') this.loadForeignTransactions();
-                if (tabId === 'mappings') this.loadMappings();
-                if (tabId === 'fixes') this.loadFixes();
-                if (tabId === 'history') this.loadHistory();
-                if (tabId === 'payment-links') this.loadPaymentLinks();
-                if (tabId === 'erp-export') this.loadErpExport();
+                if (tabId === 'dashboard' && this.shouldReloadTab('dashboard')) this.loadDashboard();
+                if (tabId === 'transactions' && this.shouldReloadTab('transactions')) this.loadTransactions();
+                if (tabId === 'foreign-transactions' && this.shouldReloadTab('foreign-transactions')) this.loadForeignTransactions();
+                if (tabId === 'mappings' && this.shouldReloadTab('mappings')) this.loadMappings();
+                if (tabId === 'fixes' && this.shouldReloadTab('fixes')) this.loadFixes();
+                if (tabId === 'history' && this.shouldReloadTab('history')) this.loadHistory();
+                if (tabId === 'payment-links' && this.shouldReloadTab('payment-links')) this.loadPaymentLinks();
+                if (tabId === 'erp-export' && this.shouldReloadTab('erp-export')) this.loadErpExport();
                 if (tabId === 'student-master') {
                     document.getElementById('inline-student-profile')?.classList.add('hidden');
                     document.getElementById('student-directory-view')?.classList.remove('hidden');
-                    this.loadStudents({ skipAutoProfile: true });
+                    if (this.shouldReloadTab('student-master', 300000)) {
+                        this.loadStudents({ skipAutoProfile: true });
+                    }
                 }
-                if (tabId === 'users') {
+                if (tabId === 'users' && this.shouldReloadTab('users')) {
                     this.loadUsersAndRoles();
                 }
             });
@@ -1130,10 +1217,10 @@ class App {
                 navigator.clipboard.write(data).then(() => {
                     const orig = btnCopy.innerHTML;
                     btnCopy.innerHTML = '<i data-lucide="check"></i> Copied!';
-                    if (window.lucide) lucide.createIcons();
+                    renderIcons(btnCopy);
                     setTimeout(() => {
                         btnCopy.innerHTML = orig;
-                        if (window.lucide) lucide.createIcons();
+                        renderIcons(btnCopy);
                     }, 2000);
                 }).catch(err => {
                     Toast.show('Failed to copy: ' + err.message, 'error');
@@ -1552,18 +1639,22 @@ class App {
         try {
             let allData = [];
             let rpcSucceeded = false;
+            let summaryRpcData = null;
             
             // 1. Query Fawry transactions only when at least one Fawry bank is checked
             if (fawryBanksSelected.length > 0) {
                 if (statusFilter === 'all') {
-                    const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
+                    // Single-scan combined summary RPC (pivot + KPIs + categories in 1 query)
+                    const { data: summaryRes, error: summaryErr } = await supabase.rpc('get_dashboard_summary', {
                         start_date: dateFrom,
                         end_date: dateTo,
-                        group_col: groupBy
+                        group_col: groupBy,
+                        banks: fawryBanksSelected
                     });
-                    if (!pivotByErr && Array.isArray(pivotByData)) {
+                    if (!summaryErr && summaryRes && summaryRes.kpis && Array.isArray(summaryRes.pivot)) {
                         rpcSucceeded = true;
-                        allData = pivotByData
+                        summaryRpcData = summaryRes;
+                        allData = summaryRes.pivot
                             .filter(row => fawryBanksSelected.includes(row.bank))
                             .map(row => ({
                                 payment_date: groupBy === 'date' ? row.group_key : null,
@@ -1573,18 +1664,37 @@ class App {
                                 bank: row.bank,
                                 item_price: row.total_amount
                             }));
-                    } else if (groupBy === 'date') {
-                        // 2. Fallback to legacy date-only RPC
-                        const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
-                        rpcSucceeded = !rpcError && Array.isArray(rpcData);
-                        if (rpcSucceeded) {
-                            allData = rpcData
+                    } else {
+                        const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
+                            start_date: dateFrom,
+                            end_date: dateTo,
+                            group_col: groupBy
+                        });
+                        if (!pivotByErr && Array.isArray(pivotByData)) {
+                            rpcSucceeded = true;
+                            allData = pivotByData
                                 .filter(row => fawryBanksSelected.includes(row.bank))
                                 .map(row => ({
-                                    payment_date: row.payment_date,
+                                    payment_date: groupBy === 'date' ? row.group_key : null,
+                                    mapping: groupBy === 'mapping' ? row.group_key : null,
+                                    second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
+                                    item_name: groupBy === 'item_name' ? row.group_key : null,
                                     bank: row.bank,
-                                    item_price: row.daily_total
+                                    item_price: row.total_amount
                                 }));
+                        } else if (groupBy === 'date') {
+                            // 2. Fallback to legacy date-only RPC
+                            const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
+                            rpcSucceeded = !rpcError && Array.isArray(rpcData);
+                            if (rpcSucceeded) {
+                                allData = rpcData
+                                    .filter(row => fawryBanksSelected.includes(row.bank))
+                                    .map(row => ({
+                                        payment_date: row.payment_date,
+                                        bank: row.bank,
+                                        item_price: row.daily_total
+                                    }));
+                            }
                         }
                     }
                 }
@@ -2038,48 +2148,62 @@ class App {
 
             if (rpcSucceeded) {
                 if (fawryBanksSelected.length > 0) {
-                    // RPC only returned daily/group aggregates, so fetch Fawry KPI counts + top categories in parallel
-                    const baseFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
-                        .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected);
+                    if (summaryRpcData && summaryRpcData.kpis) {
+                        validCount = Number(summaryRpcData.kpis.valid_count) || 0;
+                        totalCountAll = Number(summaryRpcData.kpis.total_count) || 0;
+                        settledCount = Number(summaryRpcData.kpis.settled_count) || 0;
+                        erpRecordedCount = Number(summaryRpcData.kpis.erp_count) || 0;
+                        unmappedCount = Number(summaryRpcData.kpis.unmapped_count) || 0;
+                        if (Array.isArray(summaryRpcData.categories)) {
+                            summaryRpcData.categories.forEach(r => {
+                                const k = r.group_key || 'Unmapped';
+                                categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
+                            });
+                        }
+                    } else {
+                        // Fallback when get_dashboard_summary RPC is unavailable: fetch Fawry KPI counts + top categories in parallel
+                        const baseFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
+                            .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected);
 
-                    const validQuery = baseFilter().eq('id_status', 'Valid');
-                    const totalQuery = baseFilter();
-                    const settledQuery = baseFilter().eq('is_settled', true);
-                    const erpQuery = baseFilter().not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
-                    const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
-                    const catPromise = (groupBy === 'mapping')
-                        ? Promise.resolve({ data: null })
-                        : supabase.rpc('get_dashboard_pivot_by', { start_date: dateFrom, end_date: dateTo, group_col: 'mapping' });
+                        const validQuery = baseFilter().eq('id_status', 'Valid');
+                        const totalQuery = baseFilter();
+                        const settledQuery = baseFilter().eq('is_settled', true);
+                        const erpQuery = baseFilter().not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
+                        const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
+                        const catPromise = (groupBy === 'mapping')
+                            ? Promise.resolve({ data: null })
+                            : supabase.rpc('get_dashboard_pivot_by', { start_date: dateFrom, end_date: dateTo, group_col: 'mapping' });
 
-                    const [
-                        { count: vCnt, error: vErr },
-                        { count: tCnt, error: tErr },
-                        { count: sCnt },
-                        { count: eCnt },
-                        { count: uCnt },
-                        catRes
-                    ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, catPromise]);
+                        const [
+                            { count: vCnt, error: vErr },
+                            { count: tCnt, error: tErr },
+                            { count: sCnt },
+                            { count: eCnt },
+                            { count: uCnt },
+                            catRes
+                        ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, catPromise]);
 
-                    if (vErr) throw vErr;
-                    if (tErr) throw tErr;
-                    validCount = vCnt || 0;
-                    totalCountAll = tCnt || 0;
-                    settledCount = sCnt || 0;
-                    erpRecordedCount = eCnt || 0;
-                    unmappedCount = uCnt || 0;
+                        if (vErr) throw vErr;
+                        if (tErr) throw tErr;
+                        validCount = vCnt || 0;
+                        totalCountAll = tCnt || 0;
+                        settledCount = sCnt || 0;
+                        erpRecordedCount = eCnt || 0;
+                        unmappedCount = uCnt || 0;
 
-                    if (groupBy === 'mapping') {
-                        allData.forEach(tx => {
-                            if (!fawryBanksSelected.includes(tx.bank)) return;
-                            const k = tx.mapping || 'Unmapped';
-                            categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
-                        });
-                    } else if (catRes && Array.isArray(catRes.data)) {
-                        catRes.data.forEach(r => {
-                            if (!fawryBanksSelected.includes(r.bank)) return;
-                            const k = r.group_key || 'Unmapped';
-                            categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
-                        });
+                        if (groupBy === 'mapping') {
+                            allData.forEach(tx => {
+                                if (!fawryBanksSelected.includes(tx.bank)) return;
+                                const k = tx.mapping || 'Unmapped';
+                                categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
+                            });
+                        } else if (catRes && Array.isArray(catRes.data)) {
+                            catRes.data.forEach(r => {
+                                if (!fawryBanksSelected.includes(r.bank)) return;
+                                const k = r.group_key || 'Unmapped';
+                                categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
+                            });
+                        }
                     }
                 }
 
@@ -2214,8 +2338,8 @@ class App {
             }
 
             this.updateSidebarBadges();
-            
-            if (window.lucide) lucide.createIcons();
+            this.markTabLoaded('dashboard');
+            renderIcons(document.getElementById('view-dashboard'));
 
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="${totalColSpan}" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
@@ -2381,7 +2505,10 @@ class App {
         });
         const open = all.filter(c => !c.diff.locked);
         const updated = open.length > 0 ? await updateRuleFields(open) : 0;
-        if (updated > 0) this.invalidateDistinctCache();
+        if (updated > 0) {
+            this.invalidateDistinctCache();
+            this.invalidateTabs('dashboard', 'transactions', 'erp-export');
+        }
         return { updated, lockedSkipped: all.length - open.length, appliedChanges: open, allChanges: all };
     }
 
@@ -2401,6 +2528,7 @@ class App {
             records_inserted: inserted,
             details: { type, error_message: errorMessage }
         });
+        this.invalidateTabs('history');
         if (error) console.warn('Could not record import history:', error.message);
     }
 
@@ -4400,14 +4528,24 @@ class App {
         });
     }
 
+    getTransactionsFilterKey() {
+        const dateFrom = document.getElementById('filter-date-from')?.value || '';
+        const dateTo = document.getElementById('filter-date-to')?.value || '';
+        const search = document.getElementById('search-input')?.value?.trim() || '';
+        return JSON.stringify([dateFrom, dateTo, search, this.txQuickFilter || 'all', this.headerFilters?.transactions || {}]);
+    }
+
     async loadTransactions() {
         this.renderFilterChips('transactions');
         const requestId = (this.txRequestId = (this.txRequestId || 0) + 1);
         const tbody = document.getElementById('transactions-body');
         tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(10) + '</tr>').join('');
 
+        const filterKey = this.getTransactionsFilterKey();
+        const reuseCount = this.currentPage > 1 && this._txCountCache?.key === filterKey && typeof this._txCountCache.count === 'number';
+
         let query = this.applyTransactionFiltersToQuery(
-            supabase.from('transactions').select('*', { count: 'exact' })
+            supabase.from('transactions').select('*', reuseCount ? {} : { count: 'exact' })
         );
 
         const fromRange = (this.currentPage - 1) * this.pageSize;
@@ -4415,13 +4553,19 @@ class App {
         const sortCol = this.txSortCol || 'payment_date';
         const sortAsc = Boolean(this.txSortAsc);
 
-        const { data, count: totalCount, error } = await query
+        const { data, count: fetchedCount, error } = await query
             .order(sortCol, { ascending: sortAsc })
             .order('id', { ascending: sortAsc })
             .range(fromRange, toRange);
 
         // A newer request was started while this one was running – ignore this (stale) result
         if (requestId !== this.txRequestId) return;
+
+        const totalCount = reuseCount ? this._txCountCache.count : fetchedCount;
+        if (!error && typeof totalCount === 'number') {
+            this._txCountCache = { key: filterKey, count: totalCount };
+        }
+        if (!error) this.markTabLoaded('transactions');
 
         const totalPages = totalCount ? Math.ceil(totalCount / this.pageSize) : 1;
         this.txTotalPages = totalPages;
@@ -4450,7 +4594,7 @@ class App {
             if (elPageAmt) elPageAmt.textContent = 'EGP 0.00';
             if (elHealth) elHealth.textContent = '0 Valid';
             tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
-            if (window.lucide) lucide.createIcons();
+            renderIcons(tbody);
             return;
         }
 
@@ -4746,12 +4890,13 @@ class App {
             if (this.hasRole('admin') && !this._mappingsDedupedOnce) {
                 await this.deduplicateItemMappings({ silent: true });
             }
-            const allData = await fetchAll('item_mappings', '*', null, 'item_name');
+            const allData = await fetchAll('item_mappings', 'item_name, adjusted_item_name, mapping, second_mapping', null, 'item_name');
             this.allMappingsData = allData;
             this.mappingsPage = 1;
             this.updateMappingsStatsAndDropdowns(allData);
             this.renderMappingsPage();
             this.loadUnmappedItemsSummary();
+            this.markTabLoaded('mappings');
         } catch (err) {
             if (tbody) {
                 tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
@@ -5010,7 +5155,7 @@ class App {
                 });
             }
         }
-        if (window.lucide) lucide.createIcons();
+        renderIcons(document.getElementById('view-mappings'));
     }
 
     async deduplicateManualFixes({ silent = true, prefetchedRows = null } = {}) {
@@ -5122,7 +5267,7 @@ class App {
             tbody.innerHTML = Array(3).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(6) + '</tr>').join('');
         }
         try {
-            let allData = await fetchAll('manual_fixes', '*', null, 'reference_number');
+            let allData = await fetchAll('manual_fixes', 'reference_number, correct_id, item_name, mapping, second_mapping', null, 'reference_number');
             if (this.hasRole('admin') && !this._fixesDedupedOnce) {
                 const dedupRes = await this.deduplicateManualFixes({ silent: true, prefetchedRows: allData });
                 if (Array.isArray(dedupRes.cleanRows)) {
@@ -5134,6 +5279,7 @@ class App {
             this.updateFixesStatsAndDropdowns(allData);
             this.renderFixesPage();
             this.loadUnresolvedTransactionsSummary();
+            this.markTabLoaded('fixes');
         } catch (err) {
             if (tbody) {
                 tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger);">${escapeHTML(err.message)}</td></tr>`;
@@ -5461,7 +5607,7 @@ class App {
                 });
             }
         }
-        if (window.lucide) lucide.createIcons();
+        renderIcons(document.getElementById('view-fixes'));
     }
 
     initStudentMaster() {
@@ -6050,7 +6196,7 @@ class App {
         if (!tbody) return;
         
         tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;"><i data-lucide="loader" class="spin"></i> Loading...</td></tr>';
-        if (window.lucide) lucide.createIcons();
+        renderIcons(tbody);
         
         try {
             const { data, error } = await supabase.from('import_batches').select('*').order('created_at', { ascending: false }).limit(50);
@@ -6058,6 +6204,7 @@ class App {
             
             if (!data || data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No import history found.</td></tr>';
+                this.markTabLoaded('history');
                 return;
             }
             
@@ -6089,7 +6236,8 @@ class App {
                 `;
             }).join('');
             
-            if (window.lucide) lucide.createIcons();
+            this.markTabLoaded('history');
+            renderIcons(tbody);
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger); text-align: center;">Error loading history: ${escapeHTML(err.message)}</td></tr>`;
         }
@@ -7063,7 +7211,7 @@ class App {
                 });
             }
         }
-        if (window.lucide) lucide.createIcons();
+        renderIcons(document.getElementById('view-automatcher'));
     }
 
     async applyAutoMatches() {
@@ -7635,11 +7783,12 @@ class App {
         try {
             if (!this.allPaymentLinks || forceReload) {
                 tbody.innerHTML = '<tr><td colspan="6" class="loading-state"><i data-lucide="loader" class="spin"></i> Loading links...</td></tr>';
-                if (window.lucide) lucide.createIcons();
+                renderIcons(tbody);
                 const all = await fetchAll('payment_links', '*', null, 'id');
                 this.allPaymentLinks = all || [];
                 this.updatePaymentLinksStats();
             }
+            this.markTabLoaded('payment-links');
 
             const now = new Date();
             const search = (this.paymentLinksSearch || '').trim().toLowerCase();
@@ -7874,7 +8023,7 @@ class App {
         if (btnPrev) btnPrev.disabled = this.paymentLinksPage <= 1;
         if (btnNext) btnNext.disabled = this.paymentLinksPage >= totalPages;
 
-        if (window.lucide) lucide.createIcons();
+        renderIcons(document.getElementById('view-payment-links'));
     }
 
 
@@ -8073,11 +8222,17 @@ class App {
             if (key) byRef.set(key, r);
         });
         try {
-            let fq = supabase.from('foreign_transactions').select('*');
-            if (dateFrom) fq = fq.gte('value_date', dateFrom);
-            if (dateTo) fq = fq.lte('value_date', dateTo);
-            const { data: dbForeign, error } = await fq.order('value_date', { ascending: true });
-            if (!error && Array.isArray(dbForeign)) {
+            const dbForeign = await fetchAll(
+                'foreign_transactions',
+                'reference_number, transaction_ref, transaction_code, event, value_date, transaction_date, transaction_datetime, amount, currency, account_number, student_id, extracted_name, matched_student_name, handler_name, deposit_method, description, id_status, match_source, erp_batch_number, erp_voucher',
+                fq => {
+                    if (dateFrom) fq = fq.gte('value_date', dateFrom);
+                    if (dateTo) fq = fq.lte('value_date', dateTo);
+                    return fq;
+                },
+                'value_date'
+            );
+            if (Array.isArray(dbForeign)) {
                 dbForeign.forEach(r => {
                     const key = String(r.reference_number || '').trim();
                     if (!key) return;
@@ -8241,6 +8396,7 @@ class App {
         });
         this.erpPage = 1;
         this.renderErpPreview();
+        this.markTabLoaded('erp-export');
     }
 
     updateErpRecordButtonLabel() {
@@ -8914,9 +9070,10 @@ class App {
             Toast.show(`Saved ERP batch "${batchNum}" on ${totalStamped.toLocaleString()} row(s)${skippedInvalid > 0 ? ` (${skippedInvalid} invalid skipped)` : ''}`, 'success');
             document.getElementById('erp-batch-number').value = '';
             document.getElementById('erp-voucher').value = '';
+            this.invalidateTabs('dashboard', 'transactions', 'foreign-transactions', 'users');
             
             // Reload ERP data to reflect saved references
-            await this.loadErpExport();
+            await this.loadErpExport({ refresh: true });
 
         } catch (err) {
             Toast.show('Error saving: ' + err.message, 'error');
@@ -8924,7 +9081,7 @@ class App {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
             this.updateErpRecordButtonLabel();
-            if (window.lucide) lucide.createIcons();
+            renderIcons(btn);
         }
     }
 
@@ -9001,12 +9158,19 @@ class App {
             if (!this.allStudentsData || forceReload) {
                 if (tbody) {
                     tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="loader" class="spin" style="width:36px;height:36px;opacity:0.6;"></i><h3>Loading student directory...</h3></div></td></tr>';
-                    if (window.lucide) lucide.createIcons({ root: tbody });
+                    renderIcons(tbody);
                 }
-                const data = await fetchAll('student_master', '*', null, 'student_id');
+                const data = await fetchAll(
+                    'student_master',
+                    'student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source',
+                    null,
+                    'student_id'
+                );
                 this.allStudentsData = (data || []).map(s => this.indexStudentRecord(s));
+                this.allStudents = this.allStudentsData;
                 this.updateStudentsStatsAndDropdowns();
             }
+            this.markTabLoaded('student-master');
 
             const termRaw = (document.getElementById('student-search-input')?.value || '').trim();
             const term = termRaw.toLowerCase();
@@ -9106,7 +9270,7 @@ class App {
                     </td>
                 </tr>`;
             if (paginationEl) paginationEl.innerHTML = '';
-            if (window.lucide) lucide.createIcons();
+            renderIcons(tbody);
             return;
         }
 
@@ -10125,10 +10289,11 @@ class App {
             return;
         }
 
-        // Auto-sync missing accounts from auth.users if function is installed
-        if (!skipSync) {
+        // Auto-sync missing accounts from auth.users once per session unless forced
+        if (!skipSync && !this._authUsersSynced) {
             try {
                 await supabase.rpc('sync_auth_users');
+                this._authUsersSynced = true;
             } catch (e) {
                 // Ignore if migration 2.3.1 not yet run in Supabase
             }
@@ -10138,20 +10303,24 @@ class App {
         const auditTbody = document.getElementById('audit-logs-table-body');
         if (rolesTbody) {
             rolesTbody.innerHTML = '<tr><td colspan="4" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading user roles...</td></tr>';
+            renderIcons(rolesTbody);
         }
         if (auditTbody) {
             auditTbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading audit log...</td></tr>';
+            renderIcons(auditTbody);
         }
-        if (window.lucide) lucide.createIcons();
 
-        try {
-            const { data: rolesData, error: rolesErr } = await supabase
-                .from('user_roles')
-                .select('*')
-                .order('updated_at', { ascending: false });
-            if (rolesErr) throw rolesErr;
+        const [rolesRes, logsRes] = await Promise.all([
+            supabase.from('user_roles').select('*').order('updated_at', { ascending: false }),
+            supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)
+        ]);
 
-            const rows = Array.isArray(rolesData) ? [...rolesData] : [];
+        if (rolesRes.error) {
+            if (rolesTbody) {
+                rolesTbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger); text-align: center; padding: 1.25rem;">Could not load user_roles table (${escapeHTML(rolesRes.error.message)}). Run migration <code>2.3.0_user_roles_rbac.sql</code> in Supabase SQL Editor.</td></tr>`;
+            }
+        } else {
+            const rows = Array.isArray(rolesRes.data) ? [...rolesRes.data] : [];
             if (!rows.some(r => String(r.email || '').toLowerCase() === 'ammahmoud@nu.edu.eg')) {
                 rows.unshift({
                     email: 'ammahmoud@nu.edu.eg',
@@ -10162,26 +10331,17 @@ class App {
             }
             this.allUserRoles = rows;
             this.renderUserRolesTable();
-        } catch (err) {
-            if (rolesTbody) {
-                rolesTbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger); text-align: center; padding: 1.25rem;">Could not load user_roles table (${escapeHTML(err.message)}). Run migration <code>2.3.0_user_roles_rbac.sql</code> in Supabase SQL Editor.</td></tr>`;
-            }
         }
 
-        try {
-            const { data: logsData, error: logsErr } = await supabase
-                .from('audit_logs')
-                .select('*')
-                .order('created_at', { ascending: false })
-                .limit(200);
-            if (logsErr) throw logsErr;
-            this.allAuditLogs = logsData || [];
-            this.renderAuditLogsTable();
-        } catch (err) {
+        if (logsRes.error) {
             if (auditTbody) {
-                auditTbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center; padding: 1.25rem;">Error loading audit logs: ${escapeHTML(err.message)}</td></tr>`;
+                auditTbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center; padding: 1.25rem;">Error loading audit logs: ${escapeHTML(logsRes.error.message)}</td></tr>`;
             }
+        } else {
+            this.allAuditLogs = logsRes.data || [];
+            this.renderAuditLogsTable();
         }
+        this.markTabLoaded('users');
     }
 
     renderUserRolesTable() {
@@ -10769,8 +10929,9 @@ class App {
             }
 
             // Show Modal
-            document.getElementById('modal-hygiene-report')?.classList.remove('hidden');
-            if (window.lucide) lucide.createIcons();
+            const hygieneModal = document.getElementById('modal-hygiene-report');
+            hygieneModal?.classList.remove('hidden');
+            renderIcons(hygieneModal);
         } catch (err) {
             console.warn('Failed to check hygiene audit report:', err);
         }
@@ -10963,15 +11124,17 @@ class App {
         if (updatedCount > 0) {
             this.persistForeignTransactionsLocal();
             this.applyForeignFilters();
+            this.invalidateTabs('dashboard', 'erp-export');
             try {
-                for (const r of updatedRowsForDb) {
-                    await supabase.from('foreign_transactions').update({
+                await runConcurrent(
+                    updatedRowsForDb.map(r => () => supabase.from('foreign_transactions').update({
                         student_id: r.student_id,
                         description: r.description,
                         id_status: r.id_status,
                         match_source: r.match_source
-                    }).eq('reference_number', r.reference_number);
-                }
+                    }).eq('reference_number', r.reference_number)),
+                    6
+                );
             } catch (_e) {
                 // ignore if table not migrated yet
             }
@@ -11251,6 +11414,10 @@ class App {
 
     async ensureStudentsLoadedForForeign() {
         if (Array.isArray(this.allStudents) && this.allStudents.length > 0) return this.allStudents;
+        if (Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
+            this.allStudents = this.allStudentsData;
+            return this.allStudents;
+        }
         try {
             const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, mobile', null, 'student_id');
             if (Array.isArray(rows) && rows.length > 0) {
@@ -11264,11 +11431,8 @@ class App {
 
     async loadForeignTransactions() {
         try {
-            const { data, error } = await supabase
-                .from('foreign_transactions')
-                .select('*')
-                .order('value_date', { ascending: false });
-            if (!error && Array.isArray(data)) {
+            const data = await fetchAll('foreign_transactions', '*', null, 'value_date');
+            if (Array.isArray(data)) {
                 const cloudRefs = new Set(data.map(r => r.reference_number).filter(Boolean));
                 const unsyncedLocal = (this.foreignTransactions || []).filter(r => r.reference_number && !cloudRefs.has(r.reference_number));
 
@@ -11287,6 +11451,7 @@ class App {
             } else if (Array.isArray(this.foreignTransactions)) {
                 this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
             }
+            this.markTabLoaded('foreign-transactions');
         } catch (_e) {
             if (Array.isArray(this.foreignTransactions)) {
                 this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
@@ -11950,7 +12115,7 @@ class App {
         if (btn) {
             btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Detecting...';
             btn.disabled = true;
-            if (window.lucide) lucide.createIcons();
+            renderIcons(btn);
         }
 
         try {
@@ -12039,13 +12204,14 @@ class App {
                 btnCleanup.style.display = toDeleteUidsSet.size > 0 ? 'inline-flex' : 'none';
             }
             document.getElementById('modal-detect-duplicates')?.classList.remove('hidden');
+            renderIcons(document.getElementById('modal-detect-duplicates'));
         } catch (err) {
             Toast.show('Error detecting duplicates: ' + err.message, 'error');
         } finally {
             if (btn) {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
-                if (window.lucide) lucide.createIcons();
+                renderIcons(btn);
             }
         }
     }
@@ -12059,7 +12225,7 @@ class App {
         if (btn) {
             btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Deleting...';
             btn.disabled = true;
-            if (window.lucide) lucide.createIcons();
+            renderIcons(btn);
         }
 
         try {
@@ -12094,6 +12260,7 @@ class App {
 
             document.getElementById('modal-detect-duplicates')?.classList.add('hidden');
             window.duplicateForeignUidsToDelete = [];
+            this.invalidateTabs('dashboard', 'erp-export');
             this.applyForeignFilters();
             Toast.show(`Successfully deleted ${deletedCount} duplicate foreign transaction(s).`, 'success');
         } catch (err) {
@@ -12102,7 +12269,7 @@ class App {
             if (btn) {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
-                if (window.lucide) lucide.createIcons();
+                renderIcons(btn);
             }
         }
     }
@@ -12152,9 +12319,10 @@ class App {
         }
 
         this.doublePaymentClusters = clusters;
-        document.getElementById('modal-double-payments')?.classList.remove('hidden');
+        const dpModal = document.getElementById('modal-double-payments');
+        dpModal?.classList.remove('hidden');
         this.renderDoublePaymentsTable();
-        if (window.lucide) lucide.createIcons();
+        renderIcons(dpModal);
     }
 
     async runForeignAutoMatchNames() {

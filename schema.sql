@@ -74,8 +74,8 @@ CREATE INDEX IF NOT EXISTS idx_transactions_second_mapping ON transactions(secon
 CREATE INDEX IF NOT EXISTS idx_transactions_erp_batch ON transactions(erp_batch_number);
 CREATE INDEX IF NOT EXISTS idx_transactions_settlement_batch ON transactions(settlement_batch);
 CREATE INDEX IF NOT EXISTS idx_transactions_is_settled ON transactions(is_settled);
-CREATE INDEX IF NOT EXISTS idx_transactions_bank_date ON transactions(bank, payment_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_date_bank ON transactions(payment_date, bank);
+DROP INDEX IF EXISTS public.idx_transactions_bank_date;
 CREATE INDEX IF NOT EXISTS idx_transactions_id_status ON transactions(id_status);
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_id ON transactions(batch_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_ref_trgm ON transactions USING gin (reference_number gin_trgm_ops);
@@ -83,6 +83,8 @@ CREATE INDEX IF NOT EXISTS idx_transactions_student_trgm ON transactions USING g
 CREATE INDEX IF NOT EXISTS idx_transactions_mobile_trgm ON transactions USING gin (customer_mobile gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_transactions_item_trgm ON transactions USING gin (item_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_transactions_check_col_trgm ON transactions USING gin (check_column gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transactions_mapping_trgm ON transactions USING gin (mapping gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transactions_second_mapping_trgm ON transactions USING gin (second_mapping gin_trgm_ops);
 
 -- 3. Links Table
 CREATE TABLE IF NOT EXISTS links (
@@ -139,7 +141,14 @@ CREATE TABLE IF NOT EXISTS student_master (
 );
 CREATE INDEX IF NOT EXISTS idx_student_master_national_id ON student_master(national_id);
 CREATE INDEX IF NOT EXISTS idx_student_master_email ON student_master(email);
+CREATE INDEX IF NOT EXISTS idx_student_master_email_lower ON public.student_master (LOWER(BTRIM(email)));
 CREATE INDEX IF NOT EXISTS idx_student_master_mobile ON student_master(mobile);
+CREATE INDEX IF NOT EXISTS idx_student_master_college ON public.student_master(college);
+CREATE INDEX IF NOT EXISTS idx_student_master_name_trgm ON public.student_master USING gin (full_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_student_master_mobile_trgm ON public.student_master USING gin (mobile gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_student_master_gmobile_trgm ON public.student_master USING gin (guardian_mobile gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_student_master_email_trgm ON public.student_master USING gin (email gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_student_master_natid_trgm ON public.student_master USING gin (national_id gin_trgm_ops);
 
 -- 7. Payment Links Catalog Table
 CREATE TABLE IF NOT EXISTS payment_links (
@@ -285,8 +294,10 @@ INSERT INTO user_roles (email, role, updated_by)
 VALUES ('ammahmoud@nu.edu.eg', 'admin', 'system')
 ON CONFLICT (email) DO UPDATE SET role = 'admin', updated_at = NOW();
 
+CREATE INDEX IF NOT EXISTS idx_user_roles_email_lower ON public.user_roles (LOWER(BTRIM(email)));
+
 CREATE OR REPLACE FUNCTION public.role_level(r TEXT)
-RETURNS INTEGER LANGUAGE sql IMMUTABLE AS $$
+RETURNS INTEGER LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = public AS $$
   SELECT CASE LOWER(COALESCE(r, 'viewer'))
     WHEN 'admin' THEN 4
     WHEN 'accountant' THEN 3
@@ -296,21 +307,21 @@ RETURNS INTEGER LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION public.current_user_role()
-RETURNS TEXT LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+RETURNS TEXT LANGUAGE plpgsql STABLE PARALLEL SAFE SECURITY INVOKER SET search_path = public AS $$
 DECLARE
   v_email TEXT;
   v_role  TEXT;
 BEGIN
-  v_email := LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', '')));
+  v_email := LOWER(BTRIM(COALESCE(auth.jwt() ->> 'email', '')));
   IF v_email = '' THEN RETURN 'viewer'; END IF;
   IF v_email = 'ammahmoud@nu.edu.eg' THEN RETURN 'admin'; END IF;
-  SELECT role INTO v_role FROM public.user_roles WHERE LOWER(TRIM(email)) = v_email LIMIT 1;
+  SELECT role INTO v_role FROM public.user_roles WHERE LOWER(BTRIM(email)) = v_email LIMIT 1;
   RETURN COALESCE(v_role, 'viewer');
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.has_min_role(required_role TEXT)
-RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+RETURNS BOOLEAN LANGUAGE sql STABLE PARALLEL SAFE SECURITY INVOKER SET search_path = public AS $$
   SELECT public.role_level(public.current_user_role()) >= public.role_level(required_role);
 $$;
 
@@ -319,7 +330,7 @@ ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS user_roles_select ON user_roles;
 CREATE POLICY user_roles_select ON user_roles FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS user_roles_admin_write ON user_roles;
-CREATE POLICY user_roles_admin_write ON user_roles FOR ALL TO authenticated USING (public.has_min_role('admin')) WITH CHECK (public.has_min_role('admin'));
+CREATE POLICY user_roles_admin_write ON user_roles FOR ALL TO authenticated USING ((SELECT public.has_min_role('admin'))) WITH CHECK ((SELECT public.has_min_role('admin')));
 
 DO $$
 DECLARE
@@ -339,35 +350,35 @@ BEGIN
   END LOOP;
 END $$;
 
-CREATE POLICY rbac_insert ON transactions FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_update ON transactions FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_delete ON transactions FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON transactions FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_update ON transactions FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_delete ON transactions FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
-CREATE POLICY rbac_insert ON links FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_update ON links FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_delete ON links FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON links FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_update ON links FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_delete ON links FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
-CREATE POLICY rbac_insert ON student_master FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_update ON student_master FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_delete ON student_master FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON student_master FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_update ON student_master FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_delete ON student_master FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
-CREATE POLICY rbac_insert ON payment_links FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_update ON payment_links FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_delete ON payment_links FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON payment_links FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_update ON payment_links FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_delete ON payment_links FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
-CREATE POLICY rbac_insert ON import_batches FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_update ON import_batches FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
-CREATE POLICY rbac_delete ON import_batches FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON import_batches FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_update ON import_batches FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
+CREATE POLICY rbac_delete ON import_batches FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
-CREATE POLICY rbac_insert ON audit_logs FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY rbac_insert ON audit_logs FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
 
-CREATE POLICY rbac_insert ON item_mappings FOR INSERT TO authenticated WITH CHECK (public.has_min_role('accountant'));
-CREATE POLICY rbac_update ON item_mappings FOR UPDATE TO authenticated USING (public.has_min_role('accountant')) WITH CHECK (public.has_min_role('accountant'));
-CREATE POLICY rbac_delete ON item_mappings FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON item_mappings FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('accountant')));
+CREATE POLICY rbac_update ON item_mappings FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('accountant'))) WITH CHECK ((SELECT public.has_min_role('accountant')));
+CREATE POLICY rbac_delete ON item_mappings FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
-CREATE POLICY rbac_insert ON manual_fixes FOR INSERT TO authenticated WITH CHECK (public.has_min_role('accountant'));
-CREATE POLICY rbac_update ON manual_fixes FOR UPDATE TO authenticated USING (public.has_min_role('accountant')) WITH CHECK (public.has_min_role('accountant'));
-CREATE POLICY rbac_delete ON manual_fixes FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY rbac_insert ON manual_fixes FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('accountant')));
+CREATE POLICY rbac_update ON manual_fixes FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('accountant'))) WITH CHECK ((SELECT public.has_min_role('accountant')));
+CREATE POLICY rbac_delete ON manual_fixes FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
 -- 12. Auth.Users Sync Function & Trigger
 CREATE OR REPLACE FUNCTION public.sync_auth_users()
@@ -1121,3 +1132,90 @@ $function$;
 
 REVOKE EXECUTE ON FUNCTION public.revert_audit_log_entry(bigint) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.revert_audit_log_entry(bigint) TO authenticated;
+
+-- 21. Single-Scan Dashboard Summary RPC (combines Pivot + KPI counts + Category breakdown)
+CREATE OR REPLACE FUNCTION public.get_dashboard_summary(
+  start_date DATE,
+  end_date DATE,
+  group_col TEXT DEFAULT 'date',
+  banks TEXT[] DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $function$
+DECLARE
+  v_group_col TEXT := LOWER(BTRIM(COALESCE(group_col, 'date')));
+  v_kpis JSONB;
+  v_pivot JSONB;
+  v_categories JSONB;
+BEGIN
+  IF v_group_col NOT IN ('date', 'mapping', 'second_mapping', 'item_name') THEN
+    RAISE EXCEPTION 'Invalid group_col for dashboard summary: %', group_col;
+  END IF;
+
+  WITH filtered AS (
+    SELECT
+      t.payment_date,
+      t.bank,
+      COALESCE(t.item_price, 0) AS item_price,
+      t.mapping,
+      t.second_mapping,
+      t.item_name,
+      t.id_status,
+      COALESCE(t.is_settled, false) AS is_settled,
+      t.erp_batch_number
+    FROM public.transactions t
+    WHERE t.payment_date >= start_date
+      AND t.payment_date <= end_date
+      AND (banks IS NULL OR CARDINALITY(banks) = 0 OR t.bank = ANY(banks))
+  ),
+  kpis_agg AS (
+    SELECT
+      COUNT(*)::BIGINT AS total_count,
+      COUNT(*) FILTER (WHERE id_status = 'Valid')::BIGINT AS valid_count,
+      COUNT(*) FILTER (WHERE is_settled = true)::BIGINT AS settled_count,
+      COUNT(*) FILTER (WHERE NULLIF(BTRIM(COALESCE(erp_batch_number, '')), '') IS NOT NULL)::BIGINT AS erp_count,
+      COUNT(*) FILTER (WHERE NULLIF(BTRIM(COALESCE(mapping, '')), '') IS NULL)::BIGINT AS unmapped_count
+    FROM filtered
+  ),
+  pivot_agg AS (
+    SELECT
+      CASE v_group_col
+        WHEN 'date' THEN payment_date::TEXT
+        WHEN 'mapping' THEN COALESCE(NULLIF(mapping, ''), 'Unmapped')::TEXT
+        WHEN 'second_mapping' THEN COALESCE(NULLIF(second_mapping, ''), 'Unmapped')::TEXT
+        WHEN 'item_name' THEN COALESCE(NULLIF(item_name, ''), 'Unknown Item')::TEXT
+      END AS group_key,
+      bank::TEXT AS bank,
+      COALESCE(SUM(item_price), 0) AS total_amount
+    FROM filtered
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+  ),
+  cat_agg AS (
+    SELECT
+      COALESCE(NULLIF(mapping, ''), 'Unmapped')::TEXT AS group_key,
+      COALESCE(SUM(item_price), 0) AS total_amount
+    FROM filtered
+    GROUP BY 1
+    ORDER BY 2 DESC
+  )
+  SELECT
+    to_jsonb(kpis_agg),
+    COALESCE((SELECT jsonb_agg(to_jsonb(pivot_agg)) FROM pivot_agg), '[]'::jsonb),
+    COALESCE((SELECT jsonb_agg(to_jsonb(cat_agg)) FROM cat_agg), '[]'::jsonb)
+  INTO v_kpis, v_pivot, v_categories
+  FROM kpis_agg;
+
+  RETURN jsonb_build_object(
+    'kpis', v_kpis,
+    'pivot', v_pivot,
+    'categories', v_categories
+  );
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.get_dashboard_summary(DATE, DATE, TEXT, TEXT[]) TO authenticated;
