@@ -8897,7 +8897,17 @@ class App {
                     batch_number: batchNum,
                     voucher: startVoucher,
                     count: foreignRows.length,
-                    skipped_invalid: skippedInvalid
+                    skipped_invalid: skippedInvalid,
+                    revert_data: {
+                        table_name: 'foreign_transactions_erp',
+                        operation: 'update',
+                        batch_number: batchNum,
+                        previous_rows: foreignRows.slice(0, 500).map(r => ({
+                            reference_number: r.reference_number,
+                            erp_batch_number: r.erp_batch_number || null,
+                            erp_voucher: r.erp_voucher || null
+                        }))
+                    }
                 });
             }
 
@@ -10345,7 +10355,30 @@ class App {
                     await this.reapplyRulesTo(rows);
                 }
                 this.loadFixes();
-            } else if (tableName === 'transactions_erp') {
+            } else if (tableName === 'transactions_erp' || tableName === 'foreign_transactions_erp') {
+                const batchNum = String(log.details?.revert_data?.batch_number || '').trim();
+                const prevMap = new Map(
+                    (log.details?.revert_data?.previous_rows || [])
+                        .filter(r => r && r.reference_number)
+                        .map(r => [String(r.reference_number), r])
+                );
+                let foreignChanged = false;
+                (this.foreignTransactions || []).forEach(r => {
+                    const prev = prevMap.get(String(r.reference_number || ''));
+                    if (prev) {
+                        r.erp_batch_number = prev.erp_batch_number || '';
+                        r.erp_voucher = prev.erp_voucher || '';
+                        foreignChanged = true;
+                    } else if (batchNum && r.erp_batch_number === batchNum) {
+                        r.erp_batch_number = '';
+                        r.erp_voucher = '';
+                        foreignChanged = true;
+                    }
+                });
+                if (foreignChanged) {
+                    this.persistForeignTransactionsLocal();
+                    this.applyForeignFilters();
+                }
                 if (document.getElementById('view-erp-export')?.classList.contains('active')) {
                     this.loadErpExport({ refresh: true });
                 }
@@ -11032,11 +11065,9 @@ class App {
         document.getElementById('btn-foreign-clear-filters')?.addEventListener('click', () => {
             const df = document.getElementById('foreign-date-from');
             const dt = document.getElementById('foreign-date-to');
-            const cf = document.getElementById('foreign-code-filter');
             const si = document.getElementById('foreign-search-input');
             if (df) df.value = '';
             if (dt) dt.value = '';
-            if (cf) cf.value = '';
             if (si) si.value = '';
             this.foreignQuickFilter = 'all';
             document.querySelectorAll('[data-foreign-quick-filter]').forEach(btn => {
@@ -11047,10 +11078,6 @@ class App {
             this.applyForeignFilters();
         });
         document.getElementById('foreign-search-input')?.addEventListener('input', () => {
-            this.foreignPage = 1;
-            this.applyForeignFilters();
-        });
-        document.getElementById('foreign-code-filter')?.addEventListener('change', () => {
             this.foreignPage = 1;
             this.applyForeignFilters();
         });
@@ -11154,9 +11181,6 @@ class App {
         });
         document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
             this.runForeignAutoMatchNames();
-        });
-        document.getElementById('btn-foreign-copy-email')?.addEventListener('click', () => {
-            this.copyForeignTransactionsForEmail();
         });
         document.getElementById('btn-foreign-export-excel')?.addEventListener('click', () => {
             this.exportForeignTransactionsExcel();
@@ -11543,7 +11567,6 @@ class App {
     applyForeignFilters() {
         const dateFrom = document.getElementById('foreign-date-from')?.value || '';
         const dateTo = document.getElementById('foreign-date-to')?.value || '';
-        const codeFilter = document.getElementById('foreign-code-filter')?.value || '';
         const searchRaw = (document.getElementById('foreign-search-input')?.value || '').trim().toLowerCase();
         const searchNorm = normalizePersonName(searchRaw);
 
@@ -11555,9 +11578,6 @@ class App {
         }
         if (dateTo) {
             rows = rows.filter(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date || '') <= dateTo);
-        }
-        if (codeFilter) {
-            rows = rows.filter(r => String(r.transaction_code || '').toUpperCase() === codeFilter.toUpperCase());
         }
         if (this.foreignQuickFilter === 'valid_id') {
             rows = rows.filter(r => r.id_status === 'Valid');

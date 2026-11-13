@@ -692,4 +692,13 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     window.app.foreignQuickFilter = 'error_id';
     window.app.applyForeignFilters();
     expect(window.app.filteredForeignTransactions.map(r => r.reference_number)).toEqual(['Q_ERR']);
+
+    // Verify schema.sql consolidates all required tables & RPCs including foreign ERP revert
+    const schemaSql = fs.readFileSync(path.resolve(process.cwd(), 'schema.sql'), 'utf-8');
+    expect(schemaSql).toContain('CREATE TABLE IF NOT EXISTS public.settlement_batches');
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.run_database_hygiene_audit');
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.rollback_database_hygiene_audit');
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.detect_double_payments');
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.revert_audit_log_entry');
+    expect(schemaSql).toContain("ELSIF v_table = 'foreign_transactions_erp'");
 });
