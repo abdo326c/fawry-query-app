@@ -617,9 +617,6 @@
                         <button class="btn btn-outline" id="btn-foreign-automatch" title="Re-apply Manual Fixes &amp; Auto-Match Student Names against Student Directory">
                             <i data-lucide="refresh-cw"></i> Re-apply &amp; Match IDs
                         </button>
-                        <button class="btn btn-outline" id="btn-foreign-export-erp" title="Export Dynamics 365 ERP Template for Foreign Deposits">
-                            <i data-lucide="download-cloud"></i> Export ERP Template
-                        </button>
                         <button class="btn btn-outline" id="btn-foreign-export-excel" title="Export Foreign Transactions to Excel">
                             <i data-lucide="download"></i> Export Excel
                         </button>
@@ -686,7 +683,7 @@
                         </div>
                     </div>
                     <div style="font-size: 0.78rem; color: var(--text-muted);">
-                        <span id="foreign-stat-account-badge">Bank: NuMisrUsd5 · Click any row to fix Student ID or inspect details</span>
+                        <span id="foreign-stat-account-badge">Bank: NuMisrUsd5 · Click any row for full transaction details, or click the Fix icon to edit Student ID</span>
                     </div>
                 </div>
 
@@ -2435,7 +2432,7 @@
                             <strong style="font-size: 0.92rem; color: var(--text-main);">Settlement Date (Auto-Calculated)</strong>
                             <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; font-size: 0.7rem;">Recommended</span>
                         </div>
-                        <p style="margin: 0.25rem 0 0.55rem 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+                        <p id="erp-date-settlement-desc" style="margin: 0.25rem 0 0.55rem 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
                             Automatically shifts each order to its bank transfer date: <strong>Sun–Wed &rarr; Next Day (+1d)</strong>, while <strong>Thu, Fri &amp; Sat &rarr; Sunday</strong>.
                         </p>
                         <div id="erp-date-choice-preview" style="background: rgba(15, 23, 42, 0.45); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.55rem 0.75rem; font-size: 0.78rem; max-height: 135px; overflow-y: auto;">

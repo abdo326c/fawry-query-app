@@ -544,4 +544,45 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(fixedForeignCount).toBe(1);
     expect(window.app.foreignTransactions[1].student_id).toBe('241009888');
     expect(window.app.foreignTransactions[1].id_status).toBe('Valid');
+
+    // Verify Export ERP Template button was moved out of Foreign Transactions into ERP Export
+    expect(document.getElementById('btn-foreign-export-erp')).toBeNull();
+    expect(document.querySelector('#erp-filter-bank option[value="NuMisrUsd5"]')).not.toBeNull();
+
+    // Clicking a foreign transaction row opens #modal-tx-details (not #modal-foreign-fix)
+    const txDetailsModal = document.getElementById('modal-tx-details');
+    const foreignFixModal = document.getElementById('modal-foreign-fix');
+    txDetailsModal.classList.add('hidden');
+    foreignFixModal.classList.add('hidden');
+
+    const firstRow = document.querySelector('#foreign-transactions-body tr.foreign-tx-row');
+    expect(firstRow).not.toBeNull();
+    firstRow.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(txDetailsModal.classList.contains('hidden')).toBe(false);
+    expect(foreignFixModal.classList.contains('hidden')).toBe(true);
+    expect(document.getElementById('modal-tx-details-body').textContent).toContain('NuMisrUsd5');
+
+    // Clicking the Fix icon button opens #modal-foreign-fix directly without bubbling
+    txDetailsModal.classList.add('hidden');
+    window.app.currentUser = { email: 'admin@nu.edu.eg' };
+    window.app.currentUserRole = 'admin';
+    const fixBtn = firstRow.querySelector('.foreign-fix-btn');
+    expect(fixBtn).not.toBeNull();
+    fixBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(foreignFixModal.classList.contains('hidden')).toBe(false);
+    expect(txDetailsModal.classList.contains('hidden')).toBe(true);
+    foreignFixModal.classList.add('hidden');
+
+    // Verify NuMisrUsd5 deposits appear in ERP Export preview with Same Date & USD currency
+    const foreignErpRows = await window.app.fetchForeignRowsForErp('2026-01-01', '2026-01-31');
+    expect(foreignErpRows.length).toBe(2);
+    expect(window.app.resolveErpExportDate(foreignErpRows[1], 'settlement')).toBe('2026-01-08');
+    window.app.erpData = foreignErpRows;
+    window.app.renderErpPreview();
+    const erpPreviewBody = document.getElementById('erp-preview-body');
+    expect(erpPreviewBody.textContent).toContain('NuMisrUsd5');
+    expect(erpPreviewBody.textContent).toContain('Same Date');
+    expect(document.getElementById('erp-stat-amount').textContent).toContain('USD');
 });

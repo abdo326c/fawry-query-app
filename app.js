@@ -16,7 +16,9 @@ import {
     sanitizeExcelRows,
     toDateOnly,
     dateToExcelSerial,
-    calculateSettlementDate
+    calculateSettlementDate,
+    isSameDaySettlementBank,
+    resolveErpJournalDate
 } from './rules.js';
 import {
     parseBankStatementGrid,
@@ -4130,6 +4132,9 @@ class App {
     }
 
     async openTransactionDetailsModal(txOrRef) {
+        if (txOrRef && typeof txOrRef === 'object' && isSameDaySettlementBank(txOrRef)) {
+            return this.openForeignTransactionDetailsModal(txOrRef);
+        }
         const modal = document.getElementById('modal-tx-details');
         const body = document.getElementById('modal-tx-details-body');
         if (!modal || !body || !txOrRef) return;
@@ -7601,6 +7606,75 @@ class App {
         }
     }
 
+    formatErpCurrencySummary(rows = []) {
+        if (!rows || rows.length === 0) return 'EGP 0.00';
+        const totals = new Map();
+        for (const r of rows) {
+            const cur = String(r.currency || 'EGP').toUpperCase();
+            totals.set(cur, (totals.get(cur) || 0) + this.erpAmount(r));
+        }
+        return [...totals.entries()].map(([cur, amt]) => `${cur} ${formatMoney(amt)}`).join(' · ');
+    }
+
+    async fetchForeignRowsForErp(dateFrom, dateTo) {
+        const byRef = new Map();
+        (this.foreignTransactions || []).forEach(r => {
+            const key = String(r.reference_number || '').trim();
+            if (key) byRef.set(key, r);
+        });
+        try {
+            let fq = supabase.from('foreign_transactions').select('*');
+            if (dateFrom) fq = fq.gte('value_date', dateFrom);
+            if (dateTo) fq = fq.lte('value_date', dateTo);
+            const { data: dbForeign, error } = await fq.order('value_date', { ascending: true });
+            if (!error && Array.isArray(dbForeign)) {
+                dbForeign.forEach(r => {
+                    const key = String(r.reference_number || '').trim();
+                    if (!key) return;
+                    const existing = byRef.get(key);
+                    byRef.set(key, existing ? { ...r, ...existing, erp_batch_number: r.erp_batch_number ?? existing.erp_batch_number, erp_voucher: r.erp_voucher ?? existing.erp_voucher } : r);
+                });
+            }
+        } catch (_e) {
+            // Fall back cleanly to localStorage / in-memory foreignTransactions when offline or table unmigrated
+        }
+
+        const foreignRows = [];
+        let idx = 0;
+        for (const raw of byRef.values()) {
+            const norm = this.normalizeForeignTransactionRow(raw, idx++);
+            const effDate = toDateOnly(norm.value_date || norm.payment_date || norm.transaction_date);
+            if (dateFrom && (!effDate || effDate < dateFrom)) continue;
+            if (dateTo && (!effDate || effDate > dateTo)) continue;
+            const erpRow = {
+                ...norm,
+                _erpSource: 'foreign',
+                payment_date: effDate,
+                item_price: Number(norm.amount ?? norm.item_price) || 0,
+                item_name: norm.description || norm.item_name || '',
+                mapping: norm.mapping || DEFAULT_FOREIGN_MAPPING,
+                second_mapping: norm.second_mapping || '',
+                bank: DEFAULT_FOREIGN_BANK,
+                currency: norm.currency || 'USD'
+            };
+            erpRow._erpSearchHaystack = [
+                erpRow.reference_number,
+                erpRow.transaction_ref,
+                erpRow.student_id,
+                this.erpAccount(erpRow),
+                erpRow.item_name,
+                erpRow.matched_student_name,
+                erpRow.extracted_name,
+                erpRow.mapping,
+                erpRow.second_mapping,
+                erpRow.erp_batch_number,
+                erpRow.erp_voucher
+            ].filter(Boolean).join('\n').toLowerCase();
+            foreignRows.push(erpRow);
+        }
+        return foreignRows;
+    }
+
     /**
      * @param {{refresh?: boolean}} [opts]
      *   refresh – re-download the date/bank range from the database (default true).
@@ -7618,26 +7692,37 @@ class App {
         if (refresh || !this.erpBaseData || this.erpBaseKey !== baseKey) {
             let baseData = [];
             try {
-                const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, check_column, item_price, mapping, second_mapping, merchant_name, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher';
-                baseData = await fetchAll('transactions', erpCols, q => {
-                    if (dateFrom) q = q.gte('payment_date', dateFrom);
-                    if (dateTo) q = q.lte('payment_date', dateTo);
-                    if (bank) q = q.eq('bank', bank);
-                    return q;
-                }, 'id');
-                for (let i = 0; i < baseData.length; i++) {
-                    const t = baseData[i];
-                    t._erpSearchHaystack = [
-                        t.reference_number,
-                        t.student_id,
-                        this.erpAccount(t),
-                        t.item_name,
-                        t.mapping,
-                        t.second_mapping,
-                        t.erp_batch_number,
-                        t.erp_voucher
-                    ].filter(Boolean).join('\n').toLowerCase();
+                const includeFawry = bank !== DEFAULT_FOREIGN_BANK;
+                const includeForeign = !bank || bank === DEFAULT_FOREIGN_BANK;
+
+                let fawryRows = [];
+                if (includeFawry) {
+                    const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, check_column, item_price, mapping, second_mapping, merchant_name, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher';
+                    fawryRows = await fetchAll('transactions', erpCols, q => {
+                        if (dateFrom) q = q.gte('payment_date', dateFrom);
+                        if (dateTo) q = q.lte('payment_date', dateTo);
+                        if (bank) q = q.eq('bank', bank);
+                        return q;
+                    }, 'id');
+                    for (let i = 0; i < fawryRows.length; i++) {
+                        const t = fawryRows[i];
+                        t._erpSource = 'fawry';
+                        t.currency = t.currency || 'EGP';
+                        t._erpSearchHaystack = [
+                            t.reference_number,
+                            t.student_id,
+                            this.erpAccount(t),
+                            t.item_name,
+                            t.mapping,
+                            t.second_mapping,
+                            t.erp_batch_number,
+                            t.erp_voucher
+                        ].filter(Boolean).join('\n').toLowerCase();
+                    }
                 }
+
+                const foreignRows = includeForeign ? await this.fetchForeignRowsForErp(dateFrom, dateTo) : [];
+                baseData = [...fawryRows, ...foreignRows];
             } catch (err) {
                 if (requestId !== this.erpRequestId) return;
                 // Never keep partial data – exporting it would silently miss transactions
@@ -7752,7 +7837,6 @@ class App {
         const summaryCard = document.getElementById('erp-summary-card');
         if (summaryCard) {
             summaryCard.style.display = 'flex';
-            const totalAmt = rows.reduce((sum, r) => sum + this.erpAmount(r), 0);
             const validCnt = rows.filter(r => !r.id_status || r.id_status === 'Valid').length;
             const invalidCnt = rows.length - validCnt;
             const recordedCnt = rows.filter(r => r.erp_batch_number).length;
@@ -7766,7 +7850,7 @@ class App {
             const elRecorded = document.getElementById('erp-stat-recorded');
 
             if (elTotal) elTotal.textContent = rows.length.toLocaleString();
-            if (elAmount) elAmount.textContent = `EGP ${formatMoney(totalAmt)}`;
+            if (elAmount) elAmount.textContent = this.formatErpCurrencySummary(rows);
             if (elReady) elReady.textContent = readyCnt.toLocaleString();
             if (elValid) elValid.textContent = validCnt.toLocaleString();
             if (elInvalid) elInvalid.textContent = invalidCnt.toLocaleString();
@@ -7806,13 +7890,14 @@ class App {
 
             let erpStatusHtml = '';
             const canManageErp = this.hasRole('accountant');
+            const isForeignRow = isSameDaySettlementBank(row);
             if (row.erp_batch_number) {
                 erpStatusHtml = `
                     <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
                         <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; font-size: 0.72rem;" title="${row.erp_voucher ? 'Voucher: ' + escapeHTML(row.erp_voucher) : 'Posted to ERP'}">
                             Batch: ${escapeHTML(row.erp_batch_number)}${row.erp_voucher ? ` (${escapeHTML(row.erp_voucher)})` : ''}
                         </span>
-                        ${canManageErp ? `<button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id)}" data-batch="${escapeHTML(row.erp_batch_number)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
+                        ${canManageErp ? `<button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id ?? '')}" data-ref="${escapeHTML(row.reference_number || '')}" data-source="${isForeignRow ? 'foreign' : 'fawry'}" data-batch="${escapeHTML(row.erp_batch_number)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
                             <i data-lucide="x" style="width: 13px; height: 13px;"></i>
                         </button>` : ''}
                     </div>`;
@@ -7825,14 +7910,20 @@ class App {
                 erpStatusHtml = `<span class="badge" style="background: rgba(16, 185, 129, 0.14); color: #10b981; font-size: 0.72rem;">Ready</span>`;
             }
 
-            const payDate = toDateOnly(row.payment_date) || '';
-            const stlDate = calculateSettlementDate(row.payment_date) || '';
+            const payDate = toDateOnly(row.value_date || row.payment_date || row.transaction_date) || '';
+            const stlDate = isForeignRow ? payDate : (calculateSettlementDate(payDate) || '');
             const stlDay = this.erpDayShort(stlDate);
             const dateCellHtml = `
                 <div style="line-height: 1.25;">
                     <div style="font-weight: 500;">${escapeHTML(payDate)}</div>
-                    ${stlDate ? `<div style="font-size: 0.7rem; color: #38bdf8; margin-top: 2px;" title="Auto-calculated Fawry bank settlement date (Sun-Wed +1d, Thu/Fri/Sat -> Sun)">Settles: ${escapeHTML(stlDate)}${stlDay ? ` (${escapeHTML(stlDay)})` : ''}</div>` : ''}
+                    ${isForeignRow
+                        ? `<div style="font-size: 0.7rem; color: #10b981; margin-top: 2px;" title="Foreign bank deposit settles on the same Value Date (no next-day shift)">Same Date${stlDay ? ` (${escapeHTML(stlDay)})` : ''}</div>`
+                        : (stlDate ? `<div style="font-size: 0.7rem; color: #38bdf8; margin-top: 2px;" title="Auto-calculated Fawry bank settlement date (Sun-Wed +1d, Thu/Fri/Sat -> Sun)">Settles: ${escapeHTML(stlDate)}${stlDay ? ` (${escapeHTML(stlDay)})` : ''}</div>` : '')
+                    }
                 </div>`;
+
+            const rowCur = String(row.currency || 'EGP').toUpperCase();
+            const creditDisplay = `${rowCur !== 'EGP' ? escapeHTML(rowCur) + ' ' : ''}${escapeHTML(formatMoney(this.erpAmount(row)))}`;
 
             tr.innerHTML = `
                 <td style="white-space: nowrap;">${dateCellHtml}</td>
@@ -7840,7 +7931,7 @@ class App {
                 <td>
                     <a href="#" class="erp-ref-inspect-link" data-idx="${index}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction details">${escapeHTML(row.reference_number || '')}</a><span style="color: var(--text-secondary);">${escapeHTML(descriptionTail)}</span>
                 </td>
-                <td style="text-align: right; font-weight: 600; white-space: nowrap;">${escapeHTML(formatMoney(this.erpAmount(row)))}</td>
+                <td style="text-align: right; font-weight: 600; white-space: nowrap;">${creditDisplay}</td>
                 <td style="white-space: nowrap;">
                     <span>${escapeHTML(row.bank || '')}</span>
                     ${row.is_settled ? `<span class="badge badge-success" style="font-size: 0.68rem; margin-left: 4px; padding: 0.1rem 0.45rem;">Settled</span>` : ''}
@@ -7866,31 +7957,58 @@ class App {
             btn.addEventListener('click', () => {
                 const idx = parseInt(btn.getAttribute('data-idx'), 10);
                 const tx = previewData[idx];
-                if (tx) this.openManualFixFromErp(tx);
+                if (!tx) return;
+                if (isSameDaySettlementBank(tx)) {
+                    this.openForeignFixModal(tx);
+                } else {
+                    this.openManualFixFromErp(tx);
+                }
             });
         });
 
         tbody.querySelectorAll('.erp-unlink-batch-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const id = btn.getAttribute('data-id');
+                const ref = btn.getAttribute('data-ref');
+                const source = btn.getAttribute('data-source') || 'fawry';
                 const batch = btn.getAttribute('data-batch');
-                if (!id) return;
+                if (source === 'fawry' && !id) return;
+                if (source === 'foreign' && !ref) return;
                 if (!await window.customConfirm(`Clear ERP Batch "${batch}" from this transaction so it can be re-exported?`, 'Clear Batch', 'Cancel')) {
                     return;
                 }
                 try {
-                    const prevRow = (this.erpData || []).find(r => String(r.id) === String(id));
-                    const { error } = await supabase.from('transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('id', id);
-                    if (error) throw error;
-                    await this.logAudit('ERP Batch Unlinked', String(prevRow?.reference_number || id), {
-                        transaction_id: id,
-                        cleared_batch: batch,
-                        revert_data: {
-                            table_name: 'transactions_erp',
-                            operation: 'update',
-                            previous_rows: [{ id, erp_batch_number: batch, erp_voucher: prevRow?.erp_voucher || null }]
+                    if (source === 'foreign') {
+                        (this.foreignTransactions || []).forEach(r => {
+                            if (r.reference_number === ref) {
+                                r.erp_batch_number = null;
+                                r.erp_voucher = null;
+                            }
+                        });
+                        this.persistForeignTransactionsLocal();
+                        try {
+                            await supabase.from('foreign_transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('reference_number', ref);
+                        } catch (_e) {
+                            // offline / unmigrated table fallback
                         }
-                    });
+                        await this.logAudit('ERP Batch Unlinked (Foreign)', String(ref), {
+                            reference_number: ref,
+                            cleared_batch: batch
+                        });
+                    } else {
+                        const prevRow = (this.erpData || []).find(r => String(r.id) === String(id));
+                        const { error } = await supabase.from('transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('id', id);
+                        if (error) throw error;
+                        await this.logAudit('ERP Batch Unlinked', String(prevRow?.reference_number || id), {
+                            transaction_id: id,
+                            cleared_batch: batch,
+                            revert_data: {
+                                table_name: 'transactions_erp',
+                                operation: 'update',
+                                previous_rows: [{ id, erp_batch_number: batch, erp_voucher: prevRow?.erp_voucher || null }]
+                            }
+                        });
+                    }
                     Toast.show('Cleared ERP batch reference', 'success');
                     await this.loadErpExport({ refresh: true });
                 } catch (err) {
@@ -7962,13 +8080,7 @@ class App {
     }
 
     resolveErpExportDate(row, dateMode = 'settlement', customDate = null) {
-        if (dateMode === 'custom' && customDate) {
-            return toDateOnly(customDate) || toDateOnly(row?.payment_date);
-        }
-        if (dateMode === 'payment') {
-            return toDateOnly(row?.payment_date);
-        }
-        return calculateSettlementDate(row?.payment_date) || toDateOnly(row?.payment_date);
+        return resolveErpJournalDate(row, dateMode, customDate);
     }
 
     async downloadErpExport() {
@@ -7997,25 +8109,33 @@ class App {
         if (invalidTransactions.length > 0) {
             const canFixErp = this.hasRole('accountant');
             const tbody = document.getElementById('erp-warning-table-body');
-            tbody.innerHTML = invalidTransactions.map((t, idx) => `
+            tbody.innerHTML = invalidTransactions.map((t, idx) => {
+                const rowCur = String(t.currency || 'EGP').toUpperCase();
+                return `
                 <tr>
                     <td style="font-family: monospace; font-weight: 600;">${escapeHTML(t.reference_number || '')}</td>
                     <td style="color: var(--danger); font-weight: bold; font-family: monospace;">${escapeHTML(t.student_id || 'Missing')}</td>
-                    <td style="text-align: right; font-weight: 600;">${escapeHTML(formatMoney(this.erpAmount(t)))}</td>
+                    <td style="text-align: right; font-weight: 600;">${rowCur !== 'EGP' ? escapeHTML(rowCur) + ' ' : ''}${escapeHTML(formatMoney(this.erpAmount(t)))}</td>
                     <td><span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.74rem;">${escapeHTML(t.id_status)}</span></td>
                     <td style="text-align: right;">
                         ${canFixErp ? `<button type="button" class="btn btn-outline btn-sm erp-modal-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px;">
                             <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> Fix
                         </button>` : '-'}
                     </td>
-                </tr>
-            `).join('');
+                </tr>`;
+            }).join('');
 
             tbody.querySelectorAll('.erp-modal-fix-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const idx = parseInt(btn.getAttribute('data-idx'), 10);
                     const tx = invalidTransactions[idx];
-                    if (tx) this.openManualFixFromErp(tx);
+                    if (!tx) return;
+                    if (isSameDaySettlementBank(tx)) {
+                        document.getElementById('modal-erp-warning')?.classList.add('hidden');
+                        this.openForeignFixModal(tx);
+                    } else {
+                        this.openManualFixFromErp(tx);
+                    }
                 });
             });
 
@@ -8061,33 +8181,49 @@ class App {
             subtitleEl.textContent = `${rows.length.toLocaleString()} transaction line${rows.length === 1 ? '' : 's'} ready for Dynamics 365 export`;
         }
 
-        // Build distinct payment_date -> settlement_date mapping preview
+        const hasFawry = rows.some(r => !isSameDaySettlementBank(r));
+        const hasForeign = rows.some(r => isSameDaySettlementBank(r));
+        const descEl = document.getElementById('erp-date-settlement-desc');
+        if (descEl) {
+            if (hasForeign && !hasFawry) {
+                descEl.innerHTML = `All selected lines belong to <strong>NuMisrUsd5</strong> — this bank&rsquo;s dates are same-day Value Dates (<strong>no next-day or weekend shift</strong> applied).`;
+            } else if (hasForeign && hasFawry) {
+                descEl.innerHTML = `Fawry orders shift <strong>Sun&ndash;Wed &rarr; Next Day (+1d)</strong> and <strong>Thu, Fri &amp; Sat &rarr; Sunday</strong>. <strong>NuMisrUsd5</strong> keeps its exact same Value Date.`;
+            } else {
+                descEl.innerHTML = `Automatically shifts each order to its bank transfer date: <strong>Sun&ndash;Wed &rarr; Next Day (+1d)</strong>, while <strong>Thu, Fri &amp; Sat &rarr; Sunday</strong>.`;
+            }
+        }
+
+        // Build distinct payment_date -> settlement_date mapping preview (splitting Fawry vs Same-Day NuMisrUsd5)
         const dateCounts = new Map();
         rows.forEach(r => {
-            const pDate = toDateOnly(r.payment_date) || 'Unknown';
-            dateCounts.set(pDate, (dateCounts.get(pDate) || 0) + 1);
+            const sameDay = isSameDaySettlementBank(r);
+            const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date) || 'Unknown';
+            const key = `${sameDay ? 'same' : 'fawry'}|${pDate}`;
+            const cur = dateCounts.get(key) || { sameDay, pDate, count: 0 };
+            cur.count++;
+            dateCounts.set(key, cur);
         });
 
-        const sortedPayDates = [...dateCounts.keys()].sort();
+        const sortedEntries = [...dateCounts.values()].sort((a, b) => a.pDate.localeCompare(b.pDate) || (a.sameDay ? 1 : -1));
         const previewEl = document.getElementById('erp-date-choice-preview');
         if (previewEl) {
-            if (sortedPayDates.length === 0) {
+            if (sortedEntries.length === 0) {
                 previewEl.innerHTML = `<span style="color: var(--text-muted);">No dates in selection</span>`;
             } else {
-                previewEl.innerHTML = sortedPayDates.map(pDate => {
-                    const count = dateCounts.get(pDate);
-                    const sDate = calculateSettlementDate(pDate) || pDate;
+                previewEl.innerHTML = sortedEntries.map(({ sameDay, pDate, count }) => {
+                    const sDate = sameDay ? pDate : (calculateSettlementDate(pDate) || pDate);
                     const pDay = this.erpDayShort(pDate);
                     const sDay = this.erpDayShort(sDate);
-                    const isWeekendBatch = pDay === 'Thu' || pDay === 'Fri' || pDay === 'Sat';
+                    const isWeekendBatch = !sameDay && (pDay === 'Thu' || pDay === 'Fri' || pDay === 'Sat');
                     return `
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.22rem 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.12);">
                             <span style="font-family: monospace; color: var(--text-secondary);">
-                                Paid: <strong>${escapeHTML(pDate)}</strong> ${pDay ? `<span style="color: ${isWeekendBatch ? '#f59e0b' : 'var(--text-muted)'};">(${escapeHTML(pDay)})</span>` : ''}
+                                ${sameDay ? 'NuMisrUsd5:' : 'Paid:'} <strong>${escapeHTML(pDate)}</strong> ${pDay ? `<span style="color: ${isWeekendBatch ? '#f59e0b' : 'var(--text-muted)'};">(${escapeHTML(pDay)})</span>` : ''}
                             </span>
                             <span style="color: var(--text-muted);">&rarr;</span>
-                            <span style="font-family: monospace; color: #38bdf8; font-weight: 600;">
-                                Settles: ${escapeHTML(sDate)} ${sDay ? `(${escapeHTML(sDay)})` : ''}
+                            <span style="font-family: monospace; color: ${sameDay ? '#10b981' : '#38bdf8'}; font-weight: 600;">
+                                ${sameDay ? `Same Date: ${escapeHTML(sDate)}` : `Settles: ${escapeHTML(sDate)}`} ${sDay ? `(${escapeHTML(sDay)})` : ''}
                             </span>
                             <span style="font-size: 0.72rem; color: var(--text-muted); white-space: nowrap;">${count.toLocaleString()} line${count === 1 ? '' : 's'}</span>
                         </div>
@@ -8098,8 +8234,8 @@ class App {
 
         const customDateInput = document.getElementById('erp-custom-settlement-date');
         if (customDateInput && !customDateInput.value) {
-            const firstPay = sortedPayDates[0];
-            customDateInput.value = (firstPay && calculateSettlementDate(firstPay)) || toDateOnly(new Date());
+            const firstEntry = sortedEntries[0];
+            customDateInput.value = (firstEntry && (firstEntry.sameDay ? firstEntry.pDate : calculateSettlementDate(firstEntry.pDate))) || toDateOnly(new Date());
         }
 
         const updateCardStyles = () => {
@@ -8159,7 +8295,7 @@ class App {
             'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`,
             'Debit': 0,
             'Credit': this.erpAmount(row),
-            'Currency': 'EGP',
+            'Currency': String(row.currency || 'EGP').toUpperCase(),
             'Offset account type': 'Bank',
             'Offset Non-ledger account': row.bank,
             'Offset main account': '',
@@ -8198,9 +8334,9 @@ class App {
 
         const dateStr = toDateOnly(new Date());
         XLSX.writeFile(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
-        const total = exportData.reduce((sum, r) => sum + r.Credit, 0);
-        const modeLabel = dateMode === 'payment' ? 'Payment Date' : dateMode === 'custom' ? `Custom Date ${toDateOnly(customDate)}` : 'Settlement Date';
-        Toast.show(`ERP file exported (${modeLabel}): ${exportData.length} lines, total EGP ${formatMoney(total)}`, 'success');
+        const totalSummary = this.formatErpCurrencySummary(rows);
+        const modeLabel = dateMode === 'payment' ? 'Payment / Value Date' : dateMode === 'custom' ? `Custom Date ${toDateOnly(customDate)}` : 'Settlement Date';
+        Toast.show(`ERP file exported (${modeLabel}): ${exportData.length} lines, total ${totalSummary}`, 'success');
     }
 
     async recordErpReferences() {
@@ -8243,7 +8379,9 @@ class App {
                 }
             }
 
-            const transactionIds = unexportedRows.map(r => r.id);
+            const fawryRows = unexportedRows.filter(r => !isSameDaySettlementBank(r) && r.id !== undefined && r.id !== null);
+            const foreignRows = unexportedRows.filter(r => isSameDaySettlementBank(r));
+            const transactionIds = fawryRows.map(r => r.id);
             const batchSize = 500;
             const concurrency = 4;
             const chunks = [];
@@ -8265,24 +8403,55 @@ class App {
                 if (failed) throw failed.error;
             }
 
-            await this.logAudit('ERP References Recorded', batchNum, {
-                batch_number: batchNum,
-                voucher: startVoucher,
-                count: transactionIds.length,
-                skipped_invalid: skippedInvalid,
-                revert_data: {
-                    table_name: 'transactions_erp',
-                    operation: 'update',
-                    batch_number: batchNum,
-                    previous_rows: unexportedRows.slice(0, 500).map(r => ({
-                        id: r.id,
-                        erp_batch_number: r.erp_batch_number || null,
-                        erp_voucher: r.erp_voucher || null
-                    }))
+            if (foreignRows.length > 0) {
+                const foreignRefSet = new Set(foreignRows.map(r => String(r.reference_number || '').trim()).filter(Boolean));
+                (this.foreignTransactions || []).forEach(r => {
+                    if (foreignRefSet.has(String(r.reference_number || '').trim())) {
+                        r.erp_batch_number = batchNum;
+                        r.erp_voucher = startVoucher;
+                    }
+                });
+                this.persistForeignTransactionsLocal();
+                try {
+                    const foreignRefs = [...foreignRefSet];
+                    if (foreignRefs.length > 0) {
+                        await supabase.from('foreign_transactions')
+                            .update({ erp_batch_number: batchNum, erp_voucher: startVoucher })
+                            .in('reference_number', foreignRefs);
+                    }
+                } catch (_e) {
+                    // offline / unmigrated table fallback
                 }
-            });
+            }
 
-            Toast.show(`Saved ERP batch "${batchNum}" on ${transactionIds.length.toLocaleString()} row(s)${skippedInvalid > 0 ? ` (${skippedInvalid} invalid skipped)` : ''}`, 'success');
+            const totalStamped = unexportedRows.length;
+            if (fawryRows.length > 0) {
+                await this.logAudit('ERP References Recorded', batchNum, {
+                    batch_number: batchNum,
+                    voucher: startVoucher,
+                    count: totalStamped,
+                    skipped_invalid: skippedInvalid,
+                    revert_data: {
+                        table_name: 'transactions_erp',
+                        operation: 'update',
+                        batch_number: batchNum,
+                        previous_rows: fawryRows.slice(0, 500).map(r => ({
+                            id: r.id,
+                            erp_batch_number: r.erp_batch_number || null,
+                            erp_voucher: r.erp_voucher || null
+                        }))
+                    }
+                });
+            } else {
+                await this.logAudit('ERP References Recorded (Foreign)', batchNum, {
+                    batch_number: batchNum,
+                    voucher: startVoucher,
+                    count: foreignRows.length,
+                    skipped_invalid: skippedInvalid
+                });
+            }
+
+            Toast.show(`Saved ERP batch "${batchNum}" on ${totalStamped.toLocaleString()} row(s)${skippedInvalid > 0 ? ` (${skippedInvalid} invalid skipped)` : ''}`, 'success');
             document.getElementById('erp-batch-number').value = '';
             document.getElementById('erp-voucher').value = '';
             
@@ -10388,9 +10557,6 @@ class App {
         document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
             this.runForeignAutoMatchNames();
         });
-        document.getElementById('btn-foreign-export-erp')?.addEventListener('click', () => {
-            this.exportForeignErpTemplate();
-        });
         document.getElementById('btn-foreign-copy-email')?.addEventListener('click', () => {
             this.copyForeignTransactionsForEmail();
         });
@@ -10762,6 +10928,7 @@ class App {
 
         document.getElementById('modal-foreign-import')?.classList.add('hidden');
         this.pendingForeignExtraction = null;
+        this.erpBaseKey = null;
         this.applyForeignFilters();
         Toast.show(`Saved ${incomingRows.length} student deposits to Foreign Transactions`, 'success');
     }
@@ -10881,7 +11048,7 @@ class App {
             const rowCurrency = t.currency || currency;
 
             return `
-                <tr class="foreign-tx-row" data-idx="${idx}" style="cursor: pointer;" title="Click to inspect or fix transaction details">
+                <tr class="foreign-tx-row" data-idx="${idx}" style="cursor: pointer;" title="Click to inspect full transaction details">
                     <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.value_date || t.payment_date || t.transaction_date))}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id || '')}</strong></td>
@@ -10916,11 +11083,146 @@ class App {
         tbody.querySelectorAll('.foreign-tx-row').forEach(tr => {
             tr.addEventListener('click', () => {
                 const row = pageRows[parseInt(tr.getAttribute('data-idx'), 10)];
-                if (row) this.openForeignFixModal(row);
+                if (row) this.openForeignTransactionDetailsModal(row);
             });
         });
 
         if (window.lucide) lucide.createIcons({ root: tbody });
+    }
+
+    async openForeignTransactionDetailsModal(row) {
+        const modal = document.getElementById('modal-tx-details');
+        const body = document.getElementById('modal-tx-details-body');
+        if (!modal || !body || !row) return;
+
+        let statusClass = 'valid';
+        if (!row.id_status || row.id_status.includes('Missing')) statusClass = 'missing';
+        else if (row.id_status.includes('Error')) statusClass = 'error';
+
+        const currency = String(row.currency || 'USD').toUpperCase();
+        const valueDate = toDateOnly(row.value_date || row.payment_date || row.transaction_date) || '-';
+        const matchLabel = row.match_source === 'statement_id'
+            ? 'Statement ID'
+            : row.match_source === 'name_match'
+                ? 'Name Matched'
+                : row.match_source === 'manual'
+                    ? 'Manual Fix'
+                    : 'Unmatched';
+
+        body.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="color: var(--text-muted); font-size: 0.82rem;">Reference:</span>
+                    <strong style="font-size: 1.05rem;">${escapeHTML(row.reference_number || '-')}</strong>
+                    <button type="button" class="btn btn-outline btn-sm" id="btn-tx-detail-copy-ref" style="padding: 0.12rem 0.45rem; font-size: 0.72rem;">Copy</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="badge ${statusClass}">${escapeHTML(row.id_status || 'Missing ID')}</span>
+                    <span class="badge" style="background: rgba(56, 189, 248, 0.14); color: #38bdf8;">${escapeHTML(matchLabel)}</span>
+                    ${row.erp_batch_number
+                        ? `<span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b;">ERP: ${escapeHTML(row.erp_batch_number)}</span>`
+                        : `<span class="badge" style="background: rgba(148, 163, 184, 0.18); color: var(--text-muted);">Same-Day Settlement</span>`}
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.85rem;">
+                <div class="glass-card" style="padding: 0.85rem; margin: 0;">
+                    <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Student &amp; Depositor</h4>
+                    <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div>Student ID: <strong>${escapeHTML(row.student_id || 'Missing')}</strong></div>
+                        <div id="tx-detail-student-lookup" style="color: var(--text-muted); font-size: 0.8rem;">Looking up Student Master...</div>
+                        <div>Extracted Student Name: <strong dir="auto">${escapeHTML(row.extracted_name || '-')}</strong></div>
+                        <div>Depositor / Handler: <strong dir="auto">${escapeHTML(row.handler_name || '-')}</strong></div>
+                        <div>Value Date: <strong>${escapeHTML(valueDate)}</strong></div>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="padding: 0.85rem; margin: 0;">
+                    <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Bank &amp; Amount Breakdown</h4>
+                    <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div>Amount: <strong style="color: var(--primary);">${escapeHTML(currency)} ${formatMoney(row.amount ?? row.item_price)}</strong></div>
+                        <div>Bank Code: <strong>${escapeHTML(row.bank || DEFAULT_FOREIGN_BANK)}</strong></div>
+                        <div>Account Number: <strong>${escapeHTML(row.account_number || '-')}</strong></div>
+                        <div>Deposit Method: <strong>${escapeHTML(row.deposit_method || '-')}</strong></div>
+                        <div>Transaction Ref / Code: <strong>${escapeHTML(row.transaction_ref || '-')} ${row.transaction_code ? `(${escapeHTML(row.transaction_code)})` : ''}</strong></div>
+                        <div>Statement Date/Time: <strong>${escapeHTML(row.transaction_datetime || valueDate)}</strong></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card" style="padding: 0.85rem; margin: 0;">
+                <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Description, Mapping &amp; ERP Status</h4>
+                <div style="font-size: 0.85rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem;">
+                    <div style="grid-column: 1 / -1;">Bank Statement Description:<br><strong dir="auto" style="display: inline-block; margin-top: 0.2rem; line-height: 1.45;">${escapeHTML(row.description || '-')}</strong></div>
+                    <div>Mapping: <strong>${escapeHTML(row.mapping || DEFAULT_FOREIGN_MAPPING)}</strong></div>
+                    <div>2nd Mapping: <strong>${escapeHTML(row.second_mapping || '-')}</strong></div>
+                    <div>ERP Batch: <strong>${escapeHTML(row.erp_batch_number || '-')}</strong></div>
+                    <div>ERP Voucher: <strong>${escapeHTML(row.erp_voucher || '-')}</strong></div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 0.65rem; flex-wrap: wrap;">
+                ${this.hasRole('accountant') ? `
+                <button type="button" class="btn btn-primary" id="btn-foreign-detail-fix">
+                    <i data-lucide="wrench" style="width: 14px; height: 14px;"></i> Fix Student ID
+                </button>` : ''}
+                <button type="button" class="btn btn-outline" id="btn-tx-detail-close">Close</button>
+            </div>
+        `;
+
+        modal.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons({ root: body });
+
+        document.getElementById('btn-tx-detail-close')?.addEventListener('click', () => {
+            modal.classList.add('hidden');
+        });
+
+        document.getElementById('btn-tx-detail-copy-ref')?.addEventListener('click', () => {
+            if (navigator.clipboard && row.reference_number) {
+                navigator.clipboard.writeText(String(row.reference_number));
+                Toast.show(`Copied Reference "${row.reference_number}"`, 'success');
+            }
+        });
+
+        document.getElementById('btn-foreign-detail-fix')?.addEventListener('click', () => {
+            modal.classList.add('hidden');
+            this.openForeignFixModal(row);
+        });
+
+        // Student Master Lookup (prefer cached this.allStudents or query DB)
+        const lookupEl = document.getElementById('tx-detail-student-lookup');
+        if (lookupEl) {
+            const sid = String(row.student_id || '').trim();
+            if (!sid) {
+                lookupEl.textContent = row.matched_student_name
+                    ? `Matched Name: ${row.matched_student_name}`
+                    : 'No Student ID assigned yet';
+            } else {
+                const cachedStudent = (this.allStudents || []).find(s => String(s.student_id || '').trim() === sid);
+                if (cachedStudent) {
+                    const colProg = [cachedStudent.college, cachedStudent.program].filter(Boolean).join(' • ');
+                    const displayName = cachedStudent.full_name || cachedStudent.arabic_name || 'N/A';
+                    lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong dir="auto">${escapeHTML(displayName)}</strong>${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                } else {
+                    try {
+                        const { data: st } = await supabase
+                            .from('student_master')
+                            .select('full_name, arabic_name, college, program')
+                            .eq('student_id', sid)
+                            .maybeSingle();
+                        if (st) {
+                            const colProg = [st.college, st.program].filter(Boolean).join(' • ');
+                            const displayName = st.full_name || st.arabic_name || 'N/A';
+                            lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong dir="auto">${escapeHTML(displayName)}</strong>${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                        } else {
+                            lookupEl.innerHTML = `<span style="color: var(--warning, #f59e0b);">${row.matched_student_name ? `Matched: ${escapeHTML(row.matched_student_name)}` : 'Not found in Student Master'}</span>`;
+                        }
+                    } catch (_e) {
+                        lookupEl.textContent = row.matched_student_name ? `Matched: ${row.matched_student_name}` : 'Lookup unavailable offline';
+                    }
+                }
+            }
+        }
     }
 
     async openForeignFixModal(row) {
@@ -11005,7 +11307,11 @@ class App {
         }
 
         document.getElementById('modal-foreign-fix')?.classList.add('hidden');
+        this.erpBaseKey = null;
         this.applyForeignFilters();
+        if (document.getElementById('view-erp-export')?.classList.contains('active')) {
+            await this.loadErpExport({ refresh: true });
+        }
         Toast.show(newId ? `Saved Student ID ${newId} for Ref ${ref}` : `Updated Ref ${ref}`, 'success');
     }
 
@@ -11211,50 +11517,6 @@ class App {
         this.persistForeignTransactionsLocal();
         this.applyForeignFilters();
         Toast.show(`Auto-Match complete: ${afterValid - beforeValid} additional deposit(s) matched (${afterValid}/${this.foreignTransactions.length} Valid)`, 'success');
-    }
-
-    async exportForeignErpTemplate() {
-        let rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
-        if (!rows || rows.length === 0) {
-            Toast.show('No foreign transactions to export', 'warning');
-            return;
-        }
-
-        // First try to fix any rows without a valid Student ID (via Student Directory name matching & Manual Fixes)
-        const students = await this.ensureStudentsLoadedForForeign();
-        rows = matchForeignDepositsToStudents(rows, students || []).map((r, i) => this.normalizeForeignTransactionRow(r, i));
-
-        // Do NOT exclude rows that still have no Student ID — export all rows as requested
-        const exportData = rows.map((row, idx) => ({
-            'Date': toDateOnly(row.value_date || row.payment_date || row.transaction_date),
-            'Voucher': '',
-            'Company': 'NU',
-            'Account': row.student_id ? this.erpAccount(row) : '',
-            'Name': '',
-            'Description': `${row.reference_number || ''}/${row.description || ''}/${row.mapping || DEFAULT_FOREIGN_MAPPING}/${row.second_mapping || ''}/${row.student_id || ''}`,
-            'Debit': 0,
-            'Credit': Number(row.amount ?? row.item_price) || 0,
-            'Currency': row.currency || 'USD',
-            'Offset account type': 'Bank',
-            'Offset Non-ledger account': row.bank || DEFAULT_FOREIGN_BANK,
-            'Offset main account': '',
-            'Method of payment': '',
-            'Payment reference': row.reference_number || '',
-            'Line number': idx + 1
-        }));
-
-        const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
-        rows.forEach((row, idx) => {
-            const serial = dateToExcelSerial(row.value_date || row.payment_date || row.transaction_date);
-            if (serial !== null) {
-                const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 0 });
-                ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
-            }
-        });
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Foreign_ERP_Export');
-        XLSX.writeFile(wb, `Dynamics_365_Foreign_Deposits_${toDateOnly(new Date())}.xlsx`);
-        Toast.show(`Exported ${exportData.length} Foreign Deposits to ERP Template`, 'success');
     }
 
     exportForeignTransactionsExcel() {

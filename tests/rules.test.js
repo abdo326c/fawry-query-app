@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
+import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
 
 vi.mock('../supabase.js', () => ({
@@ -376,4 +376,23 @@ test('sanitizeExcelRows normalizes Arabic presentation forms for Excel exports',
     expect(clean[0].Description).toBe('Cash Deposit سولاف انس');
     expect(clean[0].Description).not.toMatch(/[\uFB50-\uFDFF\uFE70-\uFEFF]/);
     expect(clean[0].Note).toBe("'=سولاف");
+});
+
+test('isSameDaySettlementBank and resolveErpJournalDate keep NuMisrUsd5 on exact value date while shifting Fawry', () => {
+    const fawryThu = { bank: 'NUADIB64', payment_date: '2026-11-12' }; // Thursday
+    const foreignThu = { bank: 'NuMisrUsd5', value_date: '2026-01-08', payment_date: '2026-01-08' }; // Thursday
+
+    expect(isSameDaySettlementBank(fawryThu)).toBe(false);
+    expect(isSameDaySettlementBank(foreignThu)).toBe(true);
+
+    // Settlement mode: Fawry shifts Thu -> Sun, while NuMisrUsd5 stays on exact same Value Date
+    expect(resolveErpJournalDate(fawryThu, 'settlement')).toBe('2026-11-15');
+    expect(resolveErpJournalDate(foreignThu, 'settlement')).toBe('2026-01-08');
+
+    // Payment mode: both stay on their exact payment/value date
+    expect(resolveErpJournalDate(fawryThu, 'payment')).toBe('2026-11-12');
+    expect(resolveErpJournalDate(foreignThu, 'payment')).toBe('2026-01-08');
+
+    // Custom override mode: custom date wins when explicitly chosen
+    expect(resolveErpJournalDate(foreignThu, 'custom', '2026-01-11')).toBe('2026-01-11');
 });

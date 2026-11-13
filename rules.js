@@ -617,3 +617,32 @@ export function calculateSettlementDate(val) {
     const sd = String(utcDate.getUTCDate()).padStart(2, '0');
     return `${sy}-${sm}-${sd}`;
 }
+
+/**
+ * Returns true if a transaction belongs to a bank / channel whose ERP journal date
+ * is the exact transaction/value date (no next-day or weekend settlement delay),
+ * such as Foreign Bank Statement deposits (NuMisrUsd5).
+ */
+export function isSameDaySettlementBank(row) {
+    if (!row) return false;
+    const bank = String(row.bank || '').trim().toLowerCase();
+    return row._erpSource === 'foreign' || bank === 'numisrusd5';
+}
+
+/**
+ * Resolves the Dynamics 365 ERP journal Date string ('YYYY-MM-DD') for a row:
+ * - 'custom' with customDate -> customDate
+ * - 'payment' -> exact payment/value date
+ * - 'settlement' (default) -> same value date for same-day banks (NuMisrUsd5),
+ *   or calculateSettlementDate(payment_date) for Fawry banks.
+ */
+export function resolveErpJournalDate(row, dateMode = 'settlement', customDate = null) {
+    const baseDate = toDateOnly(row?.value_date || row?.payment_date || row?.transaction_date);
+    if (dateMode === 'custom' && customDate) {
+        return toDateOnly(customDate) || baseDate;
+    }
+    if (dateMode === 'payment' || isSameDaySettlementBank(row)) {
+        return baseDate;
+    }
+    return calculateSettlementDate(baseDate) || baseDate;
+}
