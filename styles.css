@@ -551,8 +551,9 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
     width: 32px;
     height: 32px;
     border-radius: 9px;
-    background: linear-gradient(135deg, var(--primary), #0d9488);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: radial-gradient(circle at 38% 15%, rgba(20, 184, 166, 0.28), transparent 62%), linear-gradient(155deg, #112624 0%, #090b0f 100%);
+    border: 1px solid rgba(20, 184, 166, 0.38);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -560,8 +561,8 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
 }
 
 .brand-badge-lg { width: 42px; height: 42px; border-radius: 11px; }
-.brand-badge-lg .brand-icon { width: 21px; height: 21px; }
-.brand-icon { width: 17px; height: 17px; color: #ffffff; stroke-width: 2.1; display: block; }
+.brand-badge-lg .brand-icon { width: 28px; height: 28px; }
+.brand-icon { width: 22px; height: 22px; display: block; }
 
 .brand-info { display: flex; flex-direction: column; justify-content: center; min-width: 0; overflow: hidden; }
 .brand-name, .logo-text {

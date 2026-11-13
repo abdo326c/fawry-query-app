@@ -4,8 +4,8 @@
   "description": "Internal web app for NU Finance to manage student payments across Fawry and Banque Misr.",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#090a0d",
+  "theme_color": "#090a0d",
   "icons": [
     {
       "src": "favicon.svg",
