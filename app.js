@@ -4616,11 +4616,7 @@ class App {
             if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
 
             const statusText = escapeHTML(t.id_status || '');
-            const statusTitle = statusClass === 'error' ? ` title="${statusText}"` : '';
             const shortStatus = statusClass === 'error' ? 'Error' : statusText;
-            const errorDetail = statusClass === 'error'
-                ? `<div style="font-size: 0.68rem; color: var(--danger); margin-top: 0.15rem; line-height: 1.15;">${escapeHTML(String(t.id_status).replace(/^Error:\s*/i, ''))}</div>`
-                : '';
 
             const origItem = normalizeItemName(originalItemName(t)) || normalizeItemName(t.item_name) || '';
             const canEditRules = this.hasRole('accountant');
@@ -4641,14 +4637,11 @@ class App {
                     <td style="white-space: nowrap;">${escapeHTML(t.second_mapping) || '-'}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.bank)}</td>
                     <td>
-                        <div style="display: inline-flex; flex-direction: column; align-items: flex-start;">
-                            <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                                <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
-                                ${canEditRules ? `<button type="button" class="tx-quick-fix-btn ${statusClass}" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}">
-                                    <i data-lucide="wrench"></i>
-                                </button>` : ''}
-                            </div>
-                            ${errorDetail}
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span class="badge ${statusClass}">${shortStatus}</span>
+                            ${canEditRules ? `<button type="button" class="tx-quick-fix-btn ${statusClass}" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}">
+                                <i data-lucide="wrench"></i>
+                            </button>` : ''}
                         </div>
                     </td>
                     <td>${t.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;padding:0.2rem 0.4rem;font-size:0.7rem;">Yes</span>' : '<span style="color:var(--text-muted);font-size:0.8rem;">No</span>'}</td>
@@ -4771,7 +4764,7 @@ class App {
             : '';
 
         body.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: var(--bg-subtle); border: 1px solid var(--border-color);">
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                     <span style="color: var(--text-muted); font-size: 0.82rem;">Reference:</span>
                     <strong style="font-size: 1.05rem;">${escapeHTML(tx.reference_number || '-')}</strong>
@@ -11833,11 +11826,7 @@ class App {
             else if (t.id_status.includes('Error')) statusClass = 'error';
 
             const statusText = escapeHTML(t.id_status || 'Missing ID');
-            const statusTitle = statusClass === 'error' ? ` title="${statusText}"` : '';
             const shortStatus = statusClass === 'error' ? 'Error' : statusText;
-            const errorDetail = statusClass === 'error'
-                ? `<div style="font-size: 0.68rem; color: var(--danger); margin-top: 0.15rem; line-height: 1.15;">${escapeHTML(String(t.id_status).replace(/^Error:\s*/i, ''))}</div>`
-                : '';
 
             const rowCurrency = t.currency || currency;
 
@@ -11852,14 +11841,11 @@ class App {
                     <td style="white-space: nowrap;">${escapeHTML(t.second_mapping) || '-'}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.bank || DEFAULT_FOREIGN_BANK)}</td>
                     <td>
-                        <div style="display: inline-flex; flex-direction: column; align-items: flex-start;">
-                            <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                                <span class="badge ${statusClass}"${statusTitle}>${shortStatus}</span>
-                                <button type="button" class="tx-quick-fix-btn ${statusClass} foreign-fix-btn" data-idx="${idx}" title="Fix / Edit Student ID for ${escapeHTML(t.reference_number)}">
-                                    <i data-lucide="wrench"></i>
-                                </button>
-                            </div>
-                            ${errorDetail}
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span class="badge ${statusClass}">${shortStatus}</span>
+                            <button type="button" class="tx-quick-fix-btn ${statusClass} foreign-fix-btn" data-idx="${idx}" title="Fix / Edit Student ID for ${escapeHTML(t.reference_number)}">
+                                <i data-lucide="wrench"></i>
+                            </button>
                         </div>
                     </td>
                 </tr>
@@ -11904,7 +11890,7 @@ class App {
                     : 'Unmatched';
 
         body.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: var(--bg-subtle); border: 1px solid var(--border-color);">
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                     <span style="color: var(--text-muted); font-size: 0.82rem;">Reference:</span>
                     <strong style="font-size: 1.05rem;">${escapeHTML(row.reference_number || '-')}</strong>

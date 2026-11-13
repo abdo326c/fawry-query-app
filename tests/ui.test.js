@@ -879,4 +879,50 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(toastContainer.querySelectorAll('script').length).toBe(0);
     expect(renderedToasts[1].classList.contains('toast-success')).toBe(true);
     expect(renderedToasts[3].classList.contains('toast-error')).toBe(true);
+
+    // 11. Tables hide error reason externally and show full error only inside #modal-tx-details on click
+    const appJsSrc = fs.readFileSync(path.join(appDir, 'app.js'), 'utf8');
+    expect(appJsSrc).not.toContain('${errorDetail}');
+
+    window.app.foreignQuickFilter = 'all';
+    window.app.foreignSearchTerm = '';
+    window.app.foreignTransactions = [{
+        reference_number: 'FX_ERR_1',
+        value_date: '2026-11-12',
+        student_id: 'Ahmed',
+        amount: 500,
+        currency: 'USD',
+        description: 'Tuition deposit',
+        id_status: 'Error: Text/Name detected'
+    }];
+    window.app.applyForeignFilters();
+
+    const fxTbodyText = document.getElementById('foreign-transactions-body')?.textContent || '';
+    expect(fxTbodyText).toContain('Error');
+    expect(fxTbodyText).not.toContain('Text/Name detected');
+
+    // Clicking the transaction row reveals the full error reason inside #modal-tx-details
+    document.querySelector('#foreign-transactions-body tr.foreign-tx-row')?.click();
+    const detailsModal = document.getElementById('modal-tx-details');
+    expect(detailsModal.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('modal-tx-details-body').textContent).toContain('Error: Text/Name detected');
+    document.getElementById('btn-tx-detail-close')?.click();
+    expect(detailsModal.classList.contains('hidden')).toBe(true);
+
+    // Fawry details modal also displays full error reason when inspected
+    await window.app.openTransactionDetailsModal({
+        reference_number: 'REF_ERR_1',
+        payment_date: '2026-11-12',
+        student_id: 'Ahmed',
+        item_price: 500,
+        item_name: 'Tuition',
+        mapping: 'Tuition',
+        bank: 'NUADCB136',
+        id_status: 'Error: Text/Name detected',
+        is_settled: false
+    });
+    expect(detailsModal.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('modal-tx-details-body').textContent).toContain('Error: Text/Name detected');
+    document.getElementById('btn-tx-detail-close')?.click();
+    expect(detailsModal.classList.contains('hidden')).toBe(true);
 });

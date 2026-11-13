@@ -246,7 +246,7 @@
                 <div class="header">
                     <div>
                         <h1>Pivot Dashboard</h1>
-                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;" id="dashboard-period-subtitle">Collection analytics, bank split, settlement &amp; ERP posting overview</p>
+                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;" id="dashboard-period-subtitle"></p>
                     </div>
                     <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
                         <button class="btn btn-outline hidden" id="btn-dashboard-toggle-months" title="Expand or Collapse all monthly rows">
@@ -518,7 +518,6 @@
                         </div>
                         <div>
                             <h1>Fawry Transactions</h1>
-                            <p class="page-subtitle">Order payments ledger, Student ID validation &amp; bank settlement tracking</p>
                         </div>
                     </div>
                     <div class="header-actions">
@@ -719,7 +718,6 @@
                         </div>
                         <div>
                             <h1>Foreign Transactions</h1>
-                            <p class="page-subtitle">Banque Misr NuMisrUsd5 USD student deposit extractor &amp; Arabic/English name matching</p>
                         </div>
                     </div>
                     <div class="header-actions">
@@ -1521,7 +1519,6 @@
                                 <button class="btn btn-primary" id="btn-run-automatcher"><i data-lucide="zap"></i> Run Auto-Match</button>
                             </div>
                         </div>
-                        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Select the Invalid ID transactions you want the system to try and fix using the Students Details list and Links data.</p>
                         
                         <div class="callout-banner callout-warning">
                             <input type="checkbox" id="automatch-enable-name" style="width: 1.1rem; height: 1.1rem; cursor: pointer;">
@@ -1788,7 +1785,6 @@
                 <div class="header">
                     <div>
                         <h1>ERP Export (Dynamics 365)</h1>
-                        <p class="page-subtitle">Prepare General Journal templates and stamp Dynamics 365 Batch &amp; Voucher references</p>
                     </div>
                     <div class="header-actions">
                         <button class="btn btn-primary" id="btn-export-erp-file">
@@ -2106,7 +2102,6 @@
                 <div class="header">
                     <div>
                         <h1>Users, Roles &amp; Audit Log</h1>
-                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Manage 4-tier access permissions (Viewer, Operator, Accountant, Admin) and review system audit history</p>
                     </div>
                     <div class="header-actions">
                         <button class="btn btn-outline" id="btn-view-hygiene-report" title="View latest automated deduplication and hygiene health report">
@@ -2356,7 +2351,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.5.0"></script>
+    <script type="module" src="app.js?v=2.5.1"></script>
     <script defer src="ui-chrome.js?v=1.0.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">
