@@ -58,9 +58,20 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_settled BOOLEAN DEFAULT FAL
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS settlement_batch VARCHAR(100);
 
 -- Ensure payment_date is strictly DATE (strips any time portion without shifting the calendar date)
-ALTER TABLE transactions
-  ALTER COLUMN payment_date TYPE DATE
-  USING (NULLIF(SPLIT_PART(SPLIT_PART(TRIM(payment_date::TEXT), ' ', 1), 'T', 1), ''))::DATE;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'transactions'
+      AND column_name = 'payment_date'
+      AND data_type <> 'date'
+  ) THEN
+    ALTER TABLE transactions
+      ALTER COLUMN payment_date TYPE DATE
+      USING (NULLIF(SPLIT_PART(SPLIT_PART(TRIM(payment_date::TEXT), ' ', 1), 'T', 1), ''))::DATE;
+  END IF;
+END $$;
 
 -- Indexes for fast querying
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -200,6 +211,7 @@ BEGIN
 END $$;
 
 -- 10. Server-Side RPC Functions for Performance
+DROP FUNCTION IF EXISTS public.get_dashboard_pivot(DATE, DATE);
 CREATE OR REPLACE FUNCTION get_dashboard_pivot(start_date DATE, end_date DATE)
 RETURNS TABLE (
   payment_date DATE,
@@ -220,6 +232,7 @@ AS $$
   ORDER BY t.payment_date, t.bank;
 $$;
 
+DROP FUNCTION IF EXISTS public.get_distinct_transaction_values(TEXT);
 CREATE OR REPLACE FUNCTION get_distinct_transaction_values(col_name TEXT)
 RETURNS TABLE (val TEXT)
 LANGUAGE plpgsql
@@ -237,6 +250,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.get_dashboard_pivot_by(DATE, DATE, TEXT);
 CREATE OR REPLACE FUNCTION get_dashboard_pivot_by(start_date DATE, end_date DATE, group_col TEXT)
 RETURNS TABLE (
   group_key TEXT,
@@ -605,6 +619,32 @@ CREATE POLICY "rbac_delete" ON public.settlement_batches
   FOR DELETE TO authenticated
   USING ((SELECT public.has_min_role('admin')));
 
+-- Helper: checks admin role or trusted Supabase service/automation context
+CREATE OR REPLACE FUNCTION public.is_admin_or_automation()
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $function$
+DECLARE
+  v_jwt_role TEXT;
+BEGIN
+  IF public.has_min_role('admin') THEN
+    RETURN true;
+  END IF;
+  IF current_user IN ('postgres', 'service_role', 'supabase_admin') THEN
+    RETURN true;
+  END IF;
+  BEGIN
+    v_jwt_role := COALESCE(auth.jwt() ->> 'role', '');
+  EXCEPTION WHEN OTHERS THEN
+    v_jwt_role := '';
+  END;
+  RETURN v_jwt_role = 'service_role';
+END;
+$function$;
+
 -- 17. Database Hygiene Audit RPC
 CREATE OR REPLACE FUNCTION public.run_database_hygiene_audit(p_clean boolean DEFAULT false)
 RETURNS jsonb
@@ -847,6 +887,7 @@ REVOKE EXECUTE ON FUNCTION public.rollback_database_hygiene_audit(bigint) FROM p
 GRANT EXECUTE ON FUNCTION public.rollback_database_hygiene_audit(bigint) TO authenticated, service_role;
 
 -- 19. Double-Payment & Anomaly Detector RPC
+DROP FUNCTION IF EXISTS public.detect_double_payments(integer);
 CREATE OR REPLACE FUNCTION public.detect_double_payments(p_days_window integer DEFAULT 3)
 RETURNS TABLE(
   student_id text,
