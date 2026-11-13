@@ -293,7 +293,7 @@ test('App brand icon and responsive header components are properly structured', 
     const sidebarBrand = sidebar.querySelector('.app-brand');
     expect(sidebarBrand).not.toBeNull();
     expect(sidebarBrand.querySelector('.brand-badge')).not.toBeNull();
-    expect(sidebarBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
+    expect(sidebarBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
     expect(sidebarBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
     // Mobile Header Brand
@@ -302,7 +302,7 @@ test('App brand icon and responsive header components are properly structured', 
     const mobileBrand = mobileHeader.querySelector('.app-brand');
     expect(mobileBrand).not.toBeNull();
     expect(mobileBrand.querySelector('.brand-badge')).not.toBeNull();
-    expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
+    expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
     expect(mobileBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
     // Auth Overlay Brand
@@ -311,7 +311,7 @@ test('App brand icon and responsive header components are properly structured', 
     const authBrand = authOverlay.querySelector('.app-brand');
     expect(authBrand).not.toBeNull();
     expect(authBrand.querySelector('.brand-badge-lg')).not.toBeNull();
-    expect(authBrand.querySelector('.brand-name').textContent).toBe('Fawry Payments');
+    expect(authBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
 });
 
 test('Transactions table renders compact .tx-quick-fix-btn with proper classes', () => {
@@ -660,6 +660,10 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(fawryLightLogo).not.toBeNull();
     expect(fawryDarkLogo.getAttribute('src')).toBe('fawry-logo-dark.png');
     expect(fawryLightLogo.getAttribute('src')).toBe('fawry-logo-light.png');
+
+    // Verify site title & sidebar brand reflect Students Payments Database
+    expect(document.title).toBe('Students Payments Database');
+    expect(document.querySelector('.sidebar .brand-name')?.textContent?.trim()).toBe('Students Payments');
 
     // Verify Foreign Transactions page Banque Misr light & dark logos exist
     const foreignDarkLogo = document.querySelector('#view-foreign-transactions .fawry-theme-logo-dark');

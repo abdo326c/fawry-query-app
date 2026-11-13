@@ -1,7 +1,7 @@
 {
-  "name": "Fawry Payments Database",
-  "short_name": "Payments DB",
-  "description": "Internal web app for NU Finance to manage Fawry payments.",
+  "name": "Students Payments Database",
+  "short_name": "Students Payments",
+  "description": "Internal web app for NU Finance to manage student payments across Fawry and Banque Misr.",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#0f172a",
