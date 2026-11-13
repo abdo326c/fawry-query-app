@@ -7986,9 +7986,9 @@ class App {
                         <span class="amount" style="font-weight: 600;">${link.amount ? escapeHTML(formatMoney(link.amount)) + ' EGP' : '-'}</span>
                     </td>
                     <td style="white-space: nowrap;">
-                        <div style="display: flex; gap: 0.45rem; align-items: center;">
+                        <div style="display: inline-flex; gap: 0.35rem; align-items: center;">
                             <span class="badge badge-gray" style="font-family: monospace;">${escapeHTML(link.invoice_number || '-')}</span>
-                            ${link.invoice_number ? `<button class="btn-icon copy-invoice-btn" data-invoice="${escapeHTML(link.invoice_number)}" title="Copy Invoice Number" style="padding: 0; width: 24px; height: 24px;"><i data-lucide="copy" style="width: 13px; height: 13px;"></i></button>` : ''}
+                            ${link.invoice_number ? `<button type="button" class="action-icon-btn copy-invoice-btn" data-invoice="${escapeHTML(link.invoice_number)}" title="Copy Invoice Number" aria-label="Copy Invoice Number"><i data-lucide="copy"></i></button>` : ''}
                         </div>
                     </td>
                     <td style="white-space: nowrap;">${link.creation_date ? escapeHTML(toDateOnly(link.creation_date)) : '-'}</td>
@@ -8000,22 +8000,16 @@ class App {
                     </td>
                     <td style="text-align: right; white-space: nowrap;">
                         <div style="display: inline-flex; gap: 0.35rem; align-items: center;">
-                            <button class="btn btn-outline btn-sm copy-link-btn" data-url="${escapeHTML(link.invoice_link || '')}" ${st.isExpired ? 'disabled title="Link Expired"' : 'title="Copy Payment Link URL"'} style="padding: 0.25rem 0.55rem; font-size: 0.76rem;">
+                            <button type="button" class="btn btn-outline btn-sm copy-link-btn" data-url="${escapeHTML(link.invoice_link || '')}" ${st.isExpired ? 'disabled title="Link Expired"' : 'title="Copy Payment Link URL"'} style="padding: 0.25rem 0.6rem; font-size: 0.76rem;">
                                 <i data-lucide="copy" style="width: 13px; height: 13px;"></i> Copy Link
-                            </button>
-                            <button class="btn btn-outline btn-sm copy-details-btn" data-id="${escapeHTML(link.id)}" title="Copy Formatted Payment Details (Name, Amount, Invoice #, Link)" style="padding: 0.25rem 0.45rem; font-size: 0.76rem;">
-                                <i data-lucide="share-2" style="width: 13px; height: 13px;"></i>
                             </button>
                             ${link.invoice_link ? `<a href="${escapeHTML(link.invoice_link)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" title="Open Payment Link in New Tab" style="padding: 0.25rem 0.45rem; font-size: 0.76rem; text-decoration: none;"><i data-lucide="external-link" style="width: 13px; height: 13px;"></i></a>` : ''}
                             ${this.hasRole('operator') ? `
-                            <button class="btn btn-outline btn-sm duplicate-link-btn" data-id="${escapeHTML(link.id)}" title="Duplicate / Renew Link" style="padding: 0.25rem 0.45rem; font-size: 0.76rem;">
-                                <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
-                            </button>
-                            <button class="btn btn-outline btn-sm edit-link-btn" data-id="${escapeHTML(link.id)}" title="Edit Link" style="padding: 0.25rem 0.45rem; font-size: 0.76rem;">
+                            <button type="button" class="btn btn-outline btn-sm edit-link-btn" data-id="${escapeHTML(link.id)}" title="Edit Link" style="padding: 0.25rem 0.45rem; font-size: 0.76rem;">
                                 <i data-lucide="edit-2" style="width: 13px; height: 13px;"></i>
                             </button>` : ''}
                             ${this.hasRole('admin') ? `
-                            <button class="btn btn-outline btn-sm delete-link-btn" style="color: var(--danger); padding: 0.25rem 0.45rem; font-size: 0.76rem;" data-id="${escapeHTML(link.id)}" title="Delete Link">
+                            <button type="button" class="btn btn-outline btn-sm delete-link-btn" style="color: var(--danger); padding: 0.25rem 0.45rem; font-size: 0.76rem;" data-id="${escapeHTML(link.id)}" title="Delete Link">
                                 <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i>
                             </button>` : ''}
                         </div>
@@ -8034,38 +8028,12 @@ class App {
             });
         });
 
-        tbody.querySelectorAll('.copy-details-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const id = e.currentTarget.getAttribute('data-id');
-                const link = data.find(l => String(l.id) === String(id));
-                if (!link) return;
-                const lines = [
-                    `Item: ${link.name || '-'}`,
-                    link.amount ? `Amount: ${formatMoney(link.amount)} EGP` : null,
-                    link.invoice_number ? `Invoice Number: ${link.invoice_number}` : null,
-                    link.expiry_date ? `Expiry Date: ${toDateOnly(link.expiry_date)}` : null,
-                    `Payment Link: ${link.invoice_link || '-'}`
-                ].filter(Boolean).join('\n');
-                navigator.clipboard.writeText(lines).then(() => {
-                    Toast.show("Formatted payment details copied!", "success");
-                });
-            });
-        });
-
         tbody.querySelectorAll('.copy-invoice-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const invoice = e.currentTarget.dataset.invoice;
                 navigator.clipboard.writeText(invoice).then(() => {
                     Toast.show("Invoice number copied!", "success");
                 });
-            });
-        });
-
-        tbody.querySelectorAll('.duplicate-link-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const id = e.currentTarget.getAttribute('data-id');
-                const link = data.find(l => String(l.id) === String(id));
-                if (link) this.openPaymentLinkModal(link, true);
             });
         });
 

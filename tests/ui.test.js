@@ -732,11 +732,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(html).not.toContain('preview.css');
     expect(html).not.toContain('preview-ui.js');
     expect(html).not.toContain('Studio Preview');
-    expect(html).toContain('styles.css?v=3.0.1');
+    expect(html).toContain('styles.css?v=3.0.2');
     expect(html).toContain('ui-chrome.js?v=1.0.0');
 
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
-    expect(swSrc).toContain('styles.css?v=3.0.1');
+    expect(swSrc).toContain('styles.css?v=3.0.2');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {
@@ -1005,4 +1005,25 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(document.getElementById('erp-stat-total').textContent).toBe('2');
     expect(document.getElementById('erp-stat-ready').textContent).toBe('1');
     expect(document.getElementById('erp-stat-recorded').textContent).toBe('1');
+
+    // 14. Payment Links: base .btn-icon styled in CSS, copy-invoice uses .action-icon-btn, unused share/duplicate buttons removed
+    expect(cssSrc).toContain('.btn-icon {');
+    window.app.filteredPaymentLinks = [{
+        id: 'pl-1',
+        name: 'Parking Subscription',
+        amount: 1500,
+        invoice_number: '6309BUFbBYW4',
+        creation_date: '2026-08-18',
+        expiry_date: '2099-05-31',
+        invoice_link: 'https://fawry.com/pay/6309BUFbBYW4'
+    }];
+    window.app.paymentLinksPage = 1;
+    window.app.renderPaymentLinksPage();
+    const linksTbody = document.getElementById('links-table-body');
+    const copyInvoiceBtn = linksTbody.querySelector('.copy-invoice-btn');
+    expect(copyInvoiceBtn).not.toBeNull();
+    expect(copyInvoiceBtn.classList.contains('action-icon-btn')).toBe(true);
+    expect(linksTbody.querySelector('.copy-link-btn')).not.toBeNull();
+    expect(linksTbody.querySelector('.copy-details-btn')).toBeNull();
+    expect(linksTbody.querySelector('.duplicate-link-btn')).toBeNull();
 });
