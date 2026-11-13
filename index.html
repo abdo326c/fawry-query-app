@@ -131,7 +131,9 @@
                     </span> Fawry Transactions
                 </a>
                 <a href="#foreign-transactions" class="nav-link" data-tab="foreign-transactions">
-                    <i data-lucide="landmark"></i> Foreign Transactions
+                    <span class="nav-logo-wrap" aria-hidden="true">
+                        <img src="banque-misr-emblem.png" alt="" class="fawry-theme-logo">
+                    </span> Foreign Transactions
                 </a>
                 <a href="#settlement" class="nav-link" data-tab="settlement">
                     <i data-lucide="check-circle"></i> Fawry Settlements
@@ -647,7 +649,13 @@
             <!-- Foreign Transactions (Bank Statement Student Deposit Extractor) View -->
             <section id="view-foreign-transactions" class="view">
                 <div class="header">
-                    <h1>Foreign Transactions</h1>
+                    <div class="page-brand-header">
+                        <div class="foreign-page-logo-badge" aria-hidden="true">
+                            <img src="banque-misr-logo-dark.png" alt="Banque Misr - Foreign Transactions" class="fawry-theme-logo fawry-theme-logo-dark">
+                            <img src="banque-misr-logo-light.png" alt="Banque Misr - Foreign Transactions" class="fawry-theme-logo fawry-theme-logo-light">
+                        </div>
+                        <h1>Foreign Transactions</h1>
+                    </div>
                     <div class="header-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
                         <button class="btn btn-primary" id="btn-show-foreign-import" title="Upload PDF, Excel, or CSV Bank Statement to extract Student Deposits">
                             <i data-lucide="upload"></i> Import Bank Statement (PDF / Excel)

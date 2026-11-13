@@ -660,4 +660,12 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(fawryLightLogo).not.toBeNull();
     expect(fawryDarkLogo.getAttribute('src')).toBe('fawry-logo-dark.png');
     expect(fawryLightLogo.getAttribute('src')).toBe('fawry-logo-light.png');
+
+    // Verify Foreign Transactions page Banque Misr light & dark logos exist
+    const foreignDarkLogo = document.querySelector('#view-foreign-transactions .fawry-theme-logo-dark');
+    const foreignLightLogo = document.querySelector('#view-foreign-transactions .fawry-theme-logo-light');
+    expect(foreignDarkLogo).not.toBeNull();
+    expect(foreignLightLogo).not.toBeNull();
+    expect(foreignDarkLogo.getAttribute('src')).toBe('banque-misr-logo-dark.png');
+    expect(foreignLightLogo.getAttribute('src')).toBe('banque-misr-logo-light.png');
 });

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fawry-app-cache-v18';
+const CACHE_NAME = 'fawry-app-cache-v19';
 const urlsToCache = [
   './',
   './index.html',
@@ -11,6 +11,9 @@ const urlsToCache = [
   './nu-logo.png',
   './fawry-logo-dark.png',
   './fawry-logo-light.png',
+  './banque-misr-logo-dark.png',
+  './banque-misr-logo-light.png',
+  './banque-misr-emblem.png',
   './favicon.svg',
   './favicon.png',
   './favicon.ico',
