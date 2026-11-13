@@ -305,13 +305,12 @@ test('App brand icon and responsive header components are properly structured', 
     expect(mobileBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
     expect(mobileBrand.querySelector('.brand-tag').textContent).toBe('DATABASE');
 
-    // Auth Overlay Brand
+    // Auth Overlay keeps clean sign-in form (no redundant left-pane .app-brand or Nile University tag)
     const authOverlay = document.getElementById('auth-overlay');
     expect(authOverlay).not.toBeNull();
-    const authBrand = authOverlay.querySelector('.app-brand');
-    expect(authBrand).not.toBeNull();
-    expect(authBrand.querySelector('.brand-badge-lg')).not.toBeNull();
-    expect(authBrand.querySelector('.brand-name').textContent).toBe('Students Payments');
+    expect(authOverlay.querySelector('.app-brand')).toBeNull();
+    expect(authOverlay.querySelector('.showcase-org-tag')).toBeNull();
+    expect(authOverlay.querySelector('.showcase-title')?.textContent?.trim()).toBe('Students Payments Database');
 });
 
 test('Transactions table renders compact .tx-quick-fix-btn with proper classes', () => {
@@ -751,12 +750,14 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(cssSrc).toContain('.app-layout.sidebar-collapsed .view');
     expect((cssSrc.match(/\{/g) || []).length).toBe((cssSrc.match(/\}/g) || []).length);
 
-    // 4. Auth Overlay: NU Finance Team + Abdelrahman Mohamed attribution, zero Treasury, working password eye toggle
+    // 4. Auth Overlay: NU Finance Team + Abdelrahman Mohamed attribution, zero Treasury/Nile University/left-pane brand icon, working password eye toggle
     const authOverlay = document.getElementById('auth-overlay');
     const authText = authOverlay.textContent || '';
     expect(authText).toContain('NU Finance Team');
     expect(authText).toContain('Abdelrahman Mohamed');
     expect(authText).not.toMatch(/treasury/i);
+    expect(authText).not.toMatch(/Nile University/i);
+    expect(authOverlay.querySelector('.auth-left-pane .app-brand')).toBeNull();
 
     const authPw = document.getElementById('auth-password');
     const btnEye = document.getElementById('btn-toggle-auth-password');
