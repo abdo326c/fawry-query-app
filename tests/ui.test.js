@@ -1034,4 +1034,84 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(bmNavLink?.querySelector('.nav-label-text')?.textContent?.trim()).toBe('BM Transactions');
     expect(bmNavLink?.getAttribute('title')).toBe('BM Transactions');
     expect(document.querySelector('#view-foreign-transactions h1')?.textContent?.trim()).toBe('BM Transactions');
+
+    // 16. Admin user deactivation, reactivation, and deletion + sign-in enforcement
+    {
+        const mig260 = fs.readFileSync(path.join(appDir, 'migrations/2.6.0_user_deactivation_and_delete.sql'), 'utf8');
+        expect(mig260).toContain('CREATE OR REPLACE FUNCTION public.admin_set_user_active');
+        expect(mig260).toContain('CREATE OR REPLACE FUNCTION public.admin_delete_user');
+
+        const { supabase } = await import('../supabase.js');
+        const origRpc = supabase.rpc;
+        const origConfirm = window.customConfirm;
+        const origLoadUsers = window.app.loadUsersAndRoles;
+        const origFrom = supabase.from;
+        const origSignOut = supabase.auth.signOut;
+        const origUserRole = window.app.userRole;
+        const origCurrentUser = window.app.currentUser;
+
+        const rpcCalls = [];
+        try {
+            window.app.userRole = 'admin';
+            window.app.currentUser = { email: 'ammahmoud@nu.edu.eg' };
+            window.customConfirm = vi.fn().mockResolvedValue(true);
+            window.app.loadUsersAndRoles = vi.fn().mockResolvedValue();
+            supabase.rpc = vi.fn(async (fnName, params) => {
+                rpcCalls.push({ fnName, params });
+                return { data: { ok: true }, error: null };
+            });
+
+            window.app.allUserRoles = [
+                { email: 'ammahmoud@nu.edu.eg', role: 'admin', is_active: true, updated_by: 'System', updated_at: '2026-11-14T00:00:00Z' },
+                { email: 'user1@nu.edu.eg', role: 'operator', is_active: true, updated_by: 'Admin', updated_at: '2026-11-14T00:00:00Z' },
+                { email: 'user2@nu.edu.eg', role: 'viewer', is_active: false, updated_by: 'Admin', updated_at: '2026-11-14T00:00:00Z' }
+            ];
+            window.app.renderUserRolesTable();
+
+            const rolesTbody = document.getElementById('user-roles-table-body');
+            expect(rolesTbody.querySelector('[data-toggle-user-active="ammahmoud@nu.edu.eg"]')).toBeNull();
+            expect(rolesTbody.querySelector('[data-delete-user="ammahmoud@nu.edu.eg"]')).toBeNull();
+
+            const deactBtn = rolesTbody.querySelector('[data-toggle-user-active="user1@nu.edu.eg"]');
+            const reactBtn = rolesTbody.querySelector('[data-toggle-user-active="user2@nu.edu.eg"]');
+            const delBtn = rolesTbody.querySelector('[data-delete-user="user1@nu.edu.eg"]');
+            expect(deactBtn?.textContent?.trim()).toBe('Deactivate');
+            expect(reactBtn?.textContent?.trim()).toBe('Reactivate');
+            expect(delBtn).not.toBeNull();
+
+            deactBtn.click();
+            await new Promise(r => setTimeout(r, 15));
+            expect(rpcCalls.some(c => c.fnName === 'admin_set_user_active' && c.params.target_email === 'user1@nu.edu.eg' && c.params.active === false)).toBe(true);
+
+            reactBtn.click();
+            await new Promise(r => setTimeout(r, 15));
+            expect(rpcCalls.some(c => c.fnName === 'admin_set_user_active' && c.params.target_email === 'user2@nu.edu.eg' && c.params.active === true)).toBe(true);
+
+            delBtn.click();
+            await new Promise(r => setTimeout(r, 15));
+            expect(rpcCalls.some(c => c.fnName === 'admin_delete_user' && c.params.target_email === 'user1@nu.edu.eg')).toBe(true);
+
+            // Deactivated user cannot enter workspace via setupUser
+            const signOutSpy = vi.fn().mockResolvedValue({});
+            supabase.auth.signOut = signOutSpy;
+            supabase.from = vi.fn(() => ({
+                select: vi.fn().mockReturnThis(),
+                ilike: vi.fn().mockReturnThis(),
+                maybeSingle: vi.fn().mockResolvedValue({ data: { role: 'viewer', is_active: false }, error: null })
+            }));
+            document.getElementById('auth-overlay').classList.add('hidden');
+            await window.app.setupUser({ email: 'user2@nu.edu.eg' });
+            expect(signOutSpy).toHaveBeenCalledTimes(1);
+            expect(document.getElementById('auth-overlay').classList.contains('hidden')).toBe(false);
+            expect(document.getElementById('auth-error').textContent).toContain('deactivated');
+        } finally {
+            supabase.rpc = origRpc;
+            supabase.from = origFrom;
+            supabase.auth.signOut = origSignOut;
+            window.customConfirm = origConfirm;
+            window.app.loadUsersAndRoles = origLoadUsers;
+            window.app.userRole = origUserRole;
+            window.app.currentUser = origCurrentUser;
+        }
+    }
 });

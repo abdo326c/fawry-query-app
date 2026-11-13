@@ -397,7 +397,7 @@ class App {
 
     getRoleLevel(role) {
         const levels = { viewer: 1, operator: 2, accountant: 3, admin: 4 };
-        return levels[String(role || 'viewer').trim().toLowerCase()] || 1;
+        return levels[String(role || 'viewer').trim().toLowerCase()] || 0;
     }
 
     hasRole(minRole) {
@@ -413,11 +413,13 @@ class App {
 
     async fetchUserRole(user) {
         if (!user || !user.email) {
+            this.userIsActive = false;
             this.userRole = 'viewer';
             return 'viewer';
         }
         const email = String(user.email).trim().toLowerCase();
         if (email === 'ammahmoud@nu.edu.eg') {
+            this.userIsActive = true;
             this.userRole = 'admin';
             try {
                 await supabase.from('user_roles').upsert({
@@ -431,19 +433,39 @@ class App {
             }
             return 'admin';
         }
+        this.userIsActive = true;
         try {
-            const { data, error } = await supabase
+            let { data, error } = await supabase
                 .from('user_roles')
-                .select('role')
+                .select('role, is_active')
                 .ilike('email', email)
                 .maybeSingle();
-            if (!error && data && data.role) {
-                const r = String(data.role).trim().toLowerCase();
-                if (['viewer', 'operator', 'accountant', 'admin'].includes(r)) {
-                    this.userRole = r;
-                    return r;
+
+            // Backwards compatibility if migration 2.6.0 (is_active) has not been run yet
+            if (error && /is_active/i.test(error.message || '')) {
+                const fallback = await supabase
+                    .from('user_roles')
+                    .select('role')
+                    .ilike('email', email)
+                    .maybeSingle();
+                data = fallback.data;
+                error = fallback.error;
+            }
+
+            if (!error && data) {
+                if (data.is_active === false) {
+                    this.userIsActive = false;
+                    this.userRole = 'deactivated';
+                    return 'deactivated';
                 }
-            } else if (!data) {
+                if (data.role) {
+                    const r = String(data.role).trim().toLowerCase();
+                    if (['viewer', 'operator', 'accountant', 'admin'].includes(r)) {
+                        this.userRole = r;
+                        return r;
+                    }
+                }
+            } else if (!error && !data) {
                 // User signed in but has no user_roles entry yet: add as viewer so Admin sees them
                 try {
                     await supabase.from('user_roles').insert({
@@ -547,11 +569,25 @@ class App {
     }
 
     async setupUser(user) {
+        const resolvedRole = await this.fetchUserRole(user);
+        if (resolvedRole === 'deactivated' || this.userIsActive === false) {
+            this.currentUser = null;
+            const deactivatedMsg = 'Your account has been deactivated. Contact the Finance System Admin.';
+            const authErr = document.getElementById('auth-error');
+            if (authErr) {
+                authErr.textContent = deactivatedMsg;
+                authErr.style.display = 'block';
+            }
+            document.getElementById('auth-overlay')?.classList.remove('hidden');
+            Toast.show(deactivatedMsg, 'error');
+            try { await supabase.auth.signOut(); } catch (e) { /* ignore */ }
+            return;
+        }
+
         this.currentUser = user;
         document.getElementById('auth-overlay').classList.add('hidden');
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
-        await this.fetchUserRole(user);
         this.applyRolePermissionsToUI();
         this.fetchUniqueFilters();
         this.loadTransactions();
@@ -10347,11 +10383,11 @@ class App {
         const rolesTbody = document.getElementById('user-roles-table-body');
         const auditTbody = document.getElementById('audit-logs-table-body');
         if (rolesTbody) {
-            rolesTbody.innerHTML = '<tr><td colspan="4" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading user roles...</td></tr>';
+            rolesTbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading user roles...</td></tr>';
             renderIcons(rolesTbody);
         }
         if (auditTbody) {
-            auditTbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading audit log...</td></tr>';
+            auditTbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding: 1.5rem;"><i data-lucide="loader" class="spin"></i> Loading audit log...</td></tr>';
             renderIcons(auditTbody);
         }
 
@@ -10362,7 +10398,7 @@ class App {
 
         if (rolesRes.error) {
             if (rolesTbody) {
-                rolesTbody.innerHTML = `<tr><td colspan="4" style="color: var(--danger); text-align: center; padding: 1.25rem;">Could not load user_roles table (${escapeHTML(rolesRes.error.message)}). Run migration <code>2.3.0_user_roles_rbac.sql</code> in Supabase SQL Editor.</td></tr>`;
+                rolesTbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center; padding: 1.25rem;">Could not load user_roles table (${escapeHTML(rolesRes.error.message)}). Run migration <code>2.3.0_user_roles_rbac.sql</code> in Supabase SQL Editor.</td></tr>`;
             }
         } else {
             const rows = Array.isArray(rolesRes.data) ? [...rolesRes.data] : [];
@@ -10370,6 +10406,7 @@ class App {
                 rows.unshift({
                     email: 'ammahmoud@nu.edu.eg',
                     role: 'admin',
+                    is_active: true,
                     updated_by: 'System Seed',
                     updated_at: new Date().toISOString()
                 });
@@ -10380,7 +10417,7 @@ class App {
 
         if (logsRes.error) {
             if (auditTbody) {
-                auditTbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center; padding: 1.25rem;">Error loading audit logs: ${escapeHTML(logsRes.error.message)}</td></tr>`;
+                auditTbody.innerHTML = `<tr><td colspan="6" style="color: var(--danger); text-align: center; padding: 1.25rem;">Error loading audit logs: ${escapeHTML(logsRes.error.message)}</td></tr>`;
             }
         } else {
             this.allAuditLogs = logsRes.data || [];
@@ -10396,7 +10433,7 @@ class App {
         const countLabel = document.getElementById('user-roles-count-label');
         if (countLabel) countLabel.textContent = `${rows.length} user${rows.length === 1 ? '' : 's'}`;
         if (rows.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No custom roles configured.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No users found.</td></tr>';
             return;
         }
 
@@ -10408,31 +10445,47 @@ class App {
             return '<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted); border: 1px solid rgba(148, 163, 184, 0.3);">Viewer (L1)</span>';
         };
 
+        const currentAdminEmail = String(this.currentUser?.email || '').trim().toLowerCase();
+
         tbody.innerHTML = rows.map(r => {
             const email = String(r.email || '').toLowerCase();
             const isPrimaryAdmin = email === 'ammahmoud@nu.edu.eg';
+            const isSelf = currentAdminEmail && email === currentAdminEmail;
+            const isActive = isPrimaryAdmin || r.is_active !== false;
             const updatedStr = r.updated_at ? new Date(r.updated_at).toLocaleString() : '-';
+            const statusBadge = isActive
+                ? '<span class="badge badge-valid">Active</span>'
+                : '<span class="badge badge-error">Deactivated</span>';
+
             return `
-                <tr>
+                <tr style="${isActive ? '' : 'opacity: 0.72;'}">
                     <td>
                         <strong>${escapeHTML(r.email)}</strong>
                         ${isPrimaryAdmin ? '<span class="badge" style="margin-left: 0.4rem; font-size: 0.68rem; background: rgba(168,85,247,0.12); color: #a855f7;">Primary Admin</span>' : ''}
                     </td>
                     <td>${roleBadge(r.role)}</td>
+                    <td>${statusBadge}</td>
                     <td style="font-size: 0.82rem; color: var(--text-muted);">
                         ${escapeHTML(r.updated_by || 'System')} &bull; ${escapeHTML(updatedStr)}
                     </td>
                     <td style="text-align: right; white-space: nowrap;">
-                        <button type="button" class="btn btn-outline btn-sm" data-edit-user-role="${escapeHTML(email)}" data-role="${escapeHTML(r.role)}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem;">
-                            Edit
-                        </button>
-                        ${!isPrimaryAdmin ? `<button type="button" class="btn btn-outline btn-sm" data-delete-user-role="${escapeHTML(email)}" style="color: var(--danger); padding: 0.2rem 0.55rem; font-size: 0.76rem; margin-left: 0.3rem;">
-                            Reset to Viewer
-                        </button>` : ''}
+                        <div style="display: inline-flex; gap: 0.35rem; align-items: center;">
+                            <button type="button" class="btn btn-outline btn-sm" data-edit-user-role="${escapeHTML(email)}" data-role="${escapeHTML(r.role)}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem;">
+                                Edit Role
+                            </button>
+                            ${(!isPrimaryAdmin && !isSelf) ? `
+                            <button type="button" class="btn btn-outline btn-sm" data-toggle-user-active="${escapeHTML(email)}" data-active="${isActive ? '1' : '0'}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem; ${isActive ? 'color: var(--warning);' : 'color: var(--success);'}">
+                                ${isActive ? 'Deactivate' : 'Reactivate'}
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm" data-delete-user="${escapeHTML(email)}" title="Permanently Delete User" style="color: var(--danger); padding: 0.2rem 0.45rem; font-size: 0.76rem;">
+                                <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i>
+                            </button>` : ''}
+                        </div>
                     </td>
                 </tr>
             `;
         }).join('');
+        renderIcons(tbody);
 
         tbody.querySelectorAll('[data-edit-user-role]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -10448,19 +10501,91 @@ class App {
             });
         });
 
-        tbody.querySelectorAll('[data-delete-user-role]').forEach(btn => {
+        tbody.querySelectorAll('[data-toggle-user-active]').forEach(btn => {
             btn.addEventListener('click', async () => {
-                const email = btn.getAttribute('data-delete-user-role');
+                if (!this.requireRole('admin', 'deactivate or reactivate users')) return;
+                const email = btn.getAttribute('data-toggle-user-active');
+                const currentlyActive = btn.getAttribute('data-active') === '1';
+                const nextActive = !currentlyActive;
                 if (!email || email === 'ammahmoud@nu.edu.eg') return;
-                if (!await window.customConfirm(`Reset "${email}" back to default Viewer (read-only) role?`, 'Reset Role', 'Cancel')) return;
+
+                const confirmMsg = nextActive
+                    ? `Reactivate "${email}" so they can sign in and access the workspace again?`
+                    : `Deactivate "${email}"? Their active session will be revoked and they will be blocked from signing in.`;
+                if (!await window.customConfirm(confirmMsg, nextActive ? 'Reactivate' : 'Deactivate', 'Cancel')) return;
+
+                btn.disabled = true;
                 try {
-                    const { error } = await supabase.from('user_roles').delete().ilike('email', email);
-                    if (error) throw error;
-                    await this.logAudit('User Role Removed', email, { target_email: email, new_default_role: 'viewer' });
-                    Toast.show(`Reset ${email} to Viewer role`, 'info');
-                    await this.loadUsersAndRoles();
+                    const { error } = await supabase.rpc('admin_set_user_active', {
+                        target_email: email,
+                        active: nextActive
+                    });
+                    if (error) {
+                        const missingRpc = /admin_set_user_active|could not find the function|does not exist/i.test(error.message || '');
+                        if (!missingRpc) throw error;
+
+                        // App-level fallback if migration 2.6.0 hasn't been executed yet (blocks workspace entry if is_active column exists)
+                        const upd = await supabase
+                            .from('user_roles')
+                            .update({
+                                is_active: nextActive,
+                                updated_by: this.currentUser?.email || 'Admin',
+                                updated_at: new Date().toISOString()
+                            })
+                            .ilike('email', email);
+                        if (upd.error) {
+                            throw new Error('Run migration migrations/2.6.0_user_deactivation_and_delete.sql in Supabase SQL Editor first (' + upd.error.message + ').');
+                        }
+                    }
+
+                    await this.logAudit(
+                        nextActive ? 'User Reactivated' : 'User Deactivated',
+                        email,
+                        { target_email: email, is_active: nextActive }
+                    );
+                    Toast.show(`${email} has been ${nextActive ? 'reactivated' : 'deactivated'}.`, nextActive ? 'success' : 'warning');
+                    await this.loadUsersAndRoles({ skipSync: true });
                 } catch (err) {
-                    Toast.show('Error removing role: ' + err.message, 'error');
+                    Toast.show('Error updating user status: ' + err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        });
+
+        tbody.querySelectorAll('[data-delete-user]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (!this.requireRole('admin', 'delete users')) return;
+                const email = btn.getAttribute('data-delete-user');
+                if (!email || email === 'ammahmoud@nu.edu.eg') return;
+
+                const confirmed = await window.customConfirm(
+                    `Permanently delete user "${email}"? This deletes their account from Supabase Auth and removes all access.`,
+                    'Delete User',
+                    'Cancel'
+                );
+                if (!confirmed) return;
+
+                btn.disabled = true;
+                try {
+                    const { error } = await supabase.rpc('admin_delete_user', { target_email: email });
+                    if (error) {
+                        const missingRpc = /admin_delete_user|could not find the function|does not exist/i.test(error.message || '');
+                        if (missingRpc) {
+                            throw new Error('Run migration migrations/2.6.0_user_deactivation_and_delete.sql in Supabase SQL Editor to enable full user deletion.');
+                        }
+                        throw error;
+                    }
+
+                    await this.logAudit('User Deleted', email, { target_email: email });
+                    Toast.show(`Permanently deleted user ${email}.`, 'success');
+                    this.allUserRoles = (this.allUserRoles || []).filter(r => String(r.email || '').toLowerCase() !== email);
+                    this.renderUserRolesTable();
+                    await this.loadUsersAndRoles({ skipSync: true });
+                } catch (err) {
+                    Toast.show('Error deleting user: ' + err.message, 'error');
+                } finally {
+                    btn.disabled = false;
                 }
             });
         });
