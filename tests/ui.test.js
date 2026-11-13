@@ -732,11 +732,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(html).not.toContain('preview.css');
     expect(html).not.toContain('preview-ui.js');
     expect(html).not.toContain('Studio Preview');
-    expect(html).toContain('styles.css?v=3.0.0');
+    expect(html).toContain('styles.css?v=3.0.1');
     expect(html).toContain('ui-chrome.js?v=1.0.0');
 
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
-    expect(swSrc).toContain('styles.css?v=3.0.0');
+    expect(swSrc).toContain('styles.css?v=3.0.1');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {
@@ -925,4 +925,84 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(document.getElementById('modal-tx-details-body').textContent).toContain('Error: Text/Name detected');
     document.getElementById('btn-tx-detail-close')?.click();
     expect(detailsModal.classList.contains('hidden')).toBe(true);
+
+    // 12. Re-apply & Match IDs and Re-apply Rules show visible progress on Tools trigger + persistent Toast
+    {
+        toastContainer.innerHTML = '';
+        const loadingHandle = window.Toast.showLoading('Working on it...');
+        const loadingToastEl = toastContainer.querySelector('.toast-loading');
+        expect(loadingToastEl).not.toBeNull();
+        expect(loadingToastEl.querySelector('.spin')).not.toBeNull();
+        expect(loadingToastEl.textContent).toContain('Working on it...');
+        loadingHandle.update('Step 2...');
+        expect(loadingToastEl.textContent).toContain('Step 2...');
+        loadingHandle.dismiss();
+        expect(loadingToastEl.classList.contains('toast-hiding')).toBe(true);
+
+        // Foreign Re-apply & Match IDs shows progress while async work is pending and restores on finish
+        toastContainer.innerHTML = '';
+        const fxBtn = document.getElementById('btn-foreign-automatch');
+        const fxToolsBtn = fxBtn.closest('.action-dropdown-wrap').querySelector('[data-dropdown-toggle]');
+        const fxToolsOrigText = fxToolsBtn.textContent.trim();
+        let resolveStudents;
+        const origEnsureStudents = window.app.ensureStudentsLoadedForForeign.bind(window.app);
+        const origSyncForeign = window.app.syncForeignTransactionsToSupabase.bind(window.app);
+        window.app.ensureStudentsLoadedForForeign = vi.fn(() => new Promise(res => { resolveStudents = res; }));
+        window.app.syncForeignTransactionsToSupabase = vi.fn().mockResolvedValue();
+        window.app.foreignTransactions = [{
+            reference_number: 'FX_MATCH_1',
+            value_date: '2026-11-12',
+            student_id: '',
+            amount: 500,
+            currency: 'USD',
+            description: 'Deposit for Sara Ali',
+            id_status: 'Missing ID'
+        }];
+
+        const matchPromise = window.app.runForeignAutoMatchNames();
+        await new Promise(r => setTimeout(r, 15));
+        expect(fxToolsBtn.disabled).toBe(true);
+        expect(fxToolsBtn.textContent).toContain('Matching...');
+        expect(fxToolsBtn.querySelector('.spin')).not.toBeNull();
+        expect(toastContainer.querySelector('.toast-loading')?.textContent).toContain('Re-applying rules');
+
+        resolveStudents([{ student_id: '241009999', student_name: 'Sara Ali' }]);
+        await matchPromise;
+        expect(fxToolsBtn.disabled).toBe(false);
+        expect(fxToolsBtn.textContent.trim()).toBe(fxToolsOrigText);
+        expect(toastContainer.querySelector('.toast-success')?.textContent).toContain('Auto-Match complete');
+
+        // Error during auto-match still restores button state and shows an error toast
+        toastContainer.innerHTML = '';
+        window.app.ensureStudentsLoadedForForeign = vi.fn().mockRejectedValue(new Error('DB offline'));
+        await window.app.runForeignAutoMatchNames();
+        expect(fxToolsBtn.disabled).toBe(false);
+        expect(toastContainer.querySelector('.toast-error')?.textContent).toContain('Auto-Match failed: DB offline');
+        window.app.ensureStudentsLoadedForForeign = origEnsureStudents;
+        window.app.syncForeignTransactionsToSupabase = origSyncForeign;
+
+        // Fawry Re-apply Rules displays progress on parent Tools trigger and completes cleanly
+        toastContainer.innerHTML = '';
+        const txReapplyBtn = document.getElementById('btn-reapply-rules');
+        const txToolsBtn = txReapplyBtn.closest('.action-dropdown-wrap').querySelector('[data-dropdown-toggle]');
+        const txToolsOrigText = txToolsBtn.textContent.trim();
+        txReapplyBtn.click();
+        await new Promise(r => setTimeout(r, 15));
+        await new Promise(r => setTimeout(r, 60));
+        expect(txToolsBtn.disabled).toBe(false);
+        expect(txToolsBtn.textContent.trim()).toBe(txToolsOrigText);
+    }
+
+    // 13. ERP Posting Ticket summary card preserves CSS 2-column grid (never forced to inline flex)
+    window.app.erpData = [
+        { reference_number: 'ERP1', payment_date: '2026-11-12', student_id: '241001111', item_price: 4729387.15, item_name: 'Tuition', mapping: 'Tuition', id_status: 'Valid', bank: 'NUADIB64' },
+        { reference_number: 'ERP2', payment_date: '2026-11-12', student_id: 'Bad', item_price: 0, item_name: 'Tuition', mapping: 'Tuition', id_status: 'Error', erp_batch_number: 'B1', bank: 'NUADIB64' }
+    ];
+    window.app.renderErpPreview();
+    const erpSummaryCard = document.getElementById('erp-summary-card');
+    expect(erpSummaryCard.style.display).not.toBe('flex');
+    expect(erpSummaryCard.classList.contains('voucher-mini-grid')).toBe(true);
+    expect(document.getElementById('erp-stat-total').textContent).toBe('2');
+    expect(document.getElementById('erp-stat-ready').textContent).toBe('1');
+    expect(document.getElementById('erp-stat-recorded').textContent).toBe('1');
 });

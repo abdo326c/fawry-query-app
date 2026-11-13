@@ -1247,7 +1247,7 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
 /* ERP 2-Column Posting Workbench */
 .erp-workbench-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 330px;
+    grid-template-columns: minmax(0, 1fr) 360px;
     gap: 1.15rem;
     align-items: start;
 }
@@ -1287,11 +1287,12 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
 
 .voucher-mini-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.55rem;
 }
 
 .voucher-stat-cell {
+    min-width: 0;
     background: var(--bg-subtle);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -1304,13 +1305,18 @@ h1, h2, h3, h4, .brand-name { font-family: var(--font-display); }
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .voucher-stat-cell strong {
     display: block;
-    font-size: 0.98rem;
-    margin-top: 2px;
+    font-size: 0.94rem;
+    line-height: 1.25;
+    margin-top: 3px;
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
 }
 
 /* ==========================================================================

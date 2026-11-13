@@ -168,10 +168,90 @@ class Toast {
             setTimeout(() => toast.remove(), 300);
         }, 3000);
     }
+
+    static showLoading(msg) {
+        const container = document.getElementById('toast-container');
+        if (!container) {
+            return { update() {}, dismiss() {} };
+        }
+
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-info toast-loading';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        toast.innerHTML = `
+            <i data-lucide="loader-2" class="toast-icon spin"></i>
+            <div class="toast-content">${escapeHTML(msg)}</div>
+        `;
+
+        container.appendChild(toast);
+        if (window.lucide) lucide.createIcons({ root: toast });
+
+        let dismissed = false;
+        return {
+            update(nextMsg) {
+                if (dismissed) return;
+                const contentEl = toast.querySelector('.toast-content');
+                if (contentEl) contentEl.textContent = String(nextMsg ?? '');
+            },
+            dismiss() {
+                if (dismissed) return;
+                dismissed = true;
+                toast.classList.add('toast-hiding');
+                setTimeout(() => toast.remove(), 300);
+            }
+        };
+    }
+}
+
+/** Runs an async dropdown action with a visible trigger-button spinner and persistent progress toast. */
+async function withDropdownTaskProgress(btnOrId, busyLabel, initialToastMsg, asyncTask) {
+    const btn = typeof btnOrId === 'string' ? document.getElementById(btnOrId) : btnOrId;
+    const triggerBtn = btn?.closest?.('.action-dropdown-wrap')?.querySelector('[data-dropdown-toggle]') || null;
+    if (btn?.disabled || triggerBtn?.dataset.busy === '1') return;
+
+    const originalBtnHtml = btn ? btn.innerHTML : null;
+    const originalBtnDisabled = btn ? btn.disabled : false;
+    const originalTriggerHtml = triggerBtn ? triggerBtn.innerHTML : null;
+    const originalTriggerDisabled = triggerBtn ? triggerBtn.disabled : false;
+    const busyMarkup = `<i data-lucide="loader-2" class="spin"></i> ${escapeHTML(busyLabel)}`;
+
+    if (btn) {
+        btn.innerHTML = busyMarkup;
+        btn.disabled = true;
+        if (window.lucide) lucide.createIcons({ root: btn });
+    }
+    if (triggerBtn) {
+        triggerBtn.dataset.busy = '1';
+        triggerBtn.innerHTML = busyMarkup;
+        triggerBtn.disabled = true;
+        if (window.lucide) lucide.createIcons({ root: triggerBtn });
+    }
+
+    const progressToast = Toast.showLoading(initialToastMsg);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    try {
+        return await asyncTask(progressToast);
+    } finally {
+        progressToast.dismiss();
+        if (btn) {
+            btn.innerHTML = originalBtnHtml;
+            btn.disabled = originalBtnDisabled;
+            if (window.lucide) lucide.createIcons({ root: btn });
+        }
+        if (triggerBtn) {
+            delete triggerBtn.dataset.busy;
+            triggerBtn.innerHTML = originalTriggerHtml;
+            triggerBtn.disabled = originalTriggerDisabled;
+            if (window.lucide) lucide.createIcons({ root: triggerBtn });
+        }
+    }
 }
 
 // Export it so csv-processor can use it if needed, or attach to window
 window.Toast = Toast;
+window.withDropdownTaskProgress = withDropdownTaskProgress;
 
 class App {
     constructor() {
@@ -3745,64 +3825,69 @@ class App {
         const fmt = v => (v === null || v === undefined || v === '') ? 'Empty' : String(v);
 
         // Main "Re-apply Rules" button: compute a preview of every change
-        document.getElementById('btn-reapply-rules').addEventListener('click', async () => {
-            const btn = document.getElementById('btn-reapply-rules');
-            const originalText = btn.innerHTML;
-            btn.innerHTML = '<i data-lucide="loader"></i> Computing...';
-            btn.disabled = true;
+        document.getElementById('btn-reapply-rules').addEventListener('click', () => {
+            withDropdownTaskProgress(
+                'btn-reapply-rules',
+                'Computing...',
+                'Computing rules & fetching transactions...',
+                async (progressToast) => {
+                    try {
+                        if (this.hasRole('admin') && !this._mappingsDedupedOnce) {
+                            await this.deduplicateItemMappings({ silent: true });
+                        }
+                        const ruleCols = 'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+                        const [mappings, fixes, links, txs] = await Promise.all([
+                            fetchAll('item_mappings', '*', null, 'item_name'),
+                            fetchAll('manual_fixes', '*', null, 'reference_number'),
+                            fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number'),
+                            fetchAll('transactions', ruleCols, null, 'id')
+                        ]);
 
-            try {
-                if (this.hasRole('admin') && !this._mappingsDedupedOnce) {
-                    await this.deduplicateItemMappings({ silent: true });
-                }
-                const ruleCols = 'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
-                const [mappings, fixes, links, txs] = await Promise.all([
-                    fetchAll('item_mappings', '*', null, 'item_name'),
-                    fetchAll('manual_fixes', '*', null, 'reference_number'),
-                    fetchAll('links', 'payment_reference_number, custom_input_value', null, 'payment_reference_number'),
-                    fetchAll('transactions', ruleCols, null, 'id')
-                ]);
+                        progressToast.update(`Evaluating ${txs.length.toLocaleString()} transaction(s) against rules...`);
+                        await new Promise(resolve => setTimeout(resolve, 0));
 
-                const fixesMap = new Map(fixes.map(f => [String(f.reference_number), f]));
-                const linksMap = new Map(links.map(l => [String(l.payment_reference_number), l]));
-                const lookupMapping = buildMappingLookup(mappings);
+                        const fixesMap = new Map(fixes.map(f => [String(f.reference_number), f]));
+                        const linksMap = new Map(links.map(l => [String(l.payment_reference_number), l]));
+                        const lookupMapping = buildMappingLookup(mappings);
 
-                // Same pure function as import / fix save / mapping save: starts from the ORIGINAL
-                // imported ID and item name, so removed links, fixes and rules are undone too.
-                const proposals = [];
-                for (const tx of txs) {
-                    const ref = String(tx.reference_number);
-                    const diff = diffTransaction(tx, { link: linksMap.get(ref), fix: fixesMap.get(ref), lookupMapping });
-                    if (diff.changed) proposals.push({ tx, diff });
-                }
-                window.reapplyProposals = proposals;
+                        // Same pure function as import / fix save / mapping save: starts from the ORIGINAL
+                        // imported ID and item name, so removed links, fixes and rules are undone too.
+                        const proposals = [];
+                        for (const tx of txs) {
+                            const ref = String(tx.reference_number);
+                            const diff = diffTransaction(tx, { link: linksMap.get(ref), fix: fixesMap.get(ref), lookupMapping });
+                            if (diff.changed) proposals.push({ tx, diff });
+                        }
+                        window.reapplyProposals = proposals;
 
-                // Also apply manual fixes to Foreign Transactions when Re-apply Rules is clicked
-                this.allFixesData = fixes;
-                const foreignReapplied = await this.applyManualFixesToForeignTransactions(fixes);
+                        // Also apply manual fixes to Foreign Transactions when Re-apply Rules is clicked
+                        this.allFixesData = fixes;
+                        progressToast.update('Checking manual fixes for foreign transactions...');
+                        const foreignReapplied = await this.applyManualFixesToForeignTransactions(fixes);
 
-                if (proposals.length === 0) {
-                    Toast.show(
-                        foreignReapplied > 0
-                            ? `Applied manual fixes to ${foreignReapplied} foreign transaction(s)!`
-                            : 'No rules need to be applied. Everything is up to date!',
-                        foreignReapplied > 0 ? 'success' : 'info'
-                    );
-                    return;
-                }
+                        if (proposals.length === 0) {
+                            progressToast.dismiss();
+                            Toast.show(
+                                foreignReapplied > 0
+                                    ? `Applied manual fixes to ${foreignReapplied} foreign transaction(s)!`
+                                    : 'No rules need to be applied. Everything is up to date!',
+                                foreignReapplied > 0 ? 'success' : 'info'
+                            );
+                            return;
+                        }
 
-                const lockedCount = proposals.filter(p => p.diff.locked).length;
-                if (summaryEl) {
-                    summaryEl.textContent = `${proposals.length} transaction(s) would change.` +
-                        (lockedCount > 0 ? ` ${lockedCount} of them are settled or already recorded in ERP and are not selected by default – changing them does not change what was already posted to ERP.` : '');
-                }
+                        const lockedCount = proposals.filter(p => p.diff.locked).length;
+                        if (summaryEl) {
+                            summaryEl.textContent = `${proposals.length} transaction(s) would change.` +
+                                (lockedCount > 0 ? ` ${lockedCount} of them are settled or already recorded in ERP and are not selected by default – changing them does not change what was already posted to ERP.` : '');
+                        }
 
-                tbody.innerHTML = proposals.map((p, idx) => {
-                    const { tx, diff } = p;
-                    const lockBadge = diff.locked
-                        ? ` <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: var(--warning, #f59e0b);">${tx.erp_batch_number ? 'In ERP' : 'Settled'}</span>`
-                        : '';
-                    return `
+                        tbody.innerHTML = proposals.map((p, idx) => {
+                            const { tx, diff } = p;
+                            const lockBadge = diff.locked
+                                ? ` <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: var(--warning, #f59e0b);">${tx.erp_batch_number ? 'In ERP' : 'Settled'}</span>`
+                                : '';
+                            return `
                         <tr>
                             <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" ${diff.locked ? '' : 'checked'}></td>
                             <td>${escapeHTML(tx.reference_number || '')}${lockBadge}</td>
@@ -3812,23 +3897,22 @@ class App {
                             <td style="font-size: 0.85rem; color: var(--text-muted);">${escapeHTML(diff.reasons.join(' + '))}</td>
                         </tr>
                     `;
-                }).join('');
+                        }).join('');
 
-                // "Select all" reflects the rows as rendered (locked rows start unticked)
-                if (selectAll) {
-                    selectAll.checked = lockedCount === 0;
-                    selectAll.indeterminate = lockedCount > 0 && lockedCount < proposals.length;
+                        // "Select all" reflects the rows as rendered (locked rows start unticked)
+                        if (selectAll) {
+                            selectAll.checked = lockedCount === 0;
+                            selectAll.indeterminate = lockedCount > 0 && lockedCount < proposals.length;
+                        }
+
+                        progressToast.dismiss();
+                        modal.classList.remove('hidden');
+                    } catch (err) {
+                        progressToast.dismiss();
+                        Toast.show('Error computing rules: ' + err.message, 'error');
+                    }
                 }
-
-                modal.classList.remove('hidden');
-
-            } catch (err) {
-                Toast.show('Error computing rules: ' + err.message, 'error');
-            } finally {
-                btn.innerHTML = originalText;
-                btn.disabled = false;
-                if (window.lucide) lucide.createIcons({ root: btn });
-            }
+            );
         });
 
         // "Select All" checkbox
@@ -8435,7 +8519,7 @@ class App {
         const rows = this.erpData || [];
         const summaryCard = document.getElementById('erp-summary-card');
         if (summaryCard) {
-            summaryCard.style.display = 'flex';
+            summaryCard.style.display = '';
             const validCnt = rows.filter(r => !r.id_status || r.id_status === 'Valid').length;
             const invalidCnt = rows.length - validCnt;
             const recordedCnt = rows.filter(r => r.erp_batch_number).length;
@@ -12316,15 +12400,45 @@ class App {
             Toast.show('No foreign transactions loaded to match', 'warning');
             return;
         }
-        const students = await this.ensureStudentsLoadedForForeign();
-        const beforeValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
-        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students || [])
-            .map((r, i) => this.normalizeForeignTransactionRow(r, i));
-        const afterValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
-        this.persistForeignTransactionsLocal();
-        await this.syncForeignTransactionsToSupabase({ silent: true });
-        this.applyForeignFilters();
-        Toast.show(`Auto-Match complete: ${afterValid - beforeValid} additional deposit(s) matched (${afterValid}/${this.foreignTransactions.length} Valid)`, 'success');
+        if (this._foreignAutoMatching) return;
+        this._foreignAutoMatching = true;
+
+        try {
+            await withDropdownTaskProgress(
+                'btn-foreign-automatch',
+                'Matching...',
+                'Re-applying rules & loading student directory...',
+                async (progressToast) => {
+                    try {
+                        const students = await this.ensureStudentsLoadedForForeign();
+                        const totalCount = this.foreignTransactions.length;
+                        progressToast.update(`Matching ${totalCount.toLocaleString()} foreign deposit(s)...`);
+                        await new Promise(resolve => setTimeout(resolve, 0));
+
+                        const beforeValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
+                        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students || [])
+                            .map((r, i) => this.normalizeForeignTransactionRow(r, i));
+                        const afterValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
+                        this.persistForeignTransactionsLocal();
+
+                        progressToast.update('Syncing matched deposits to database...');
+                        await this.syncForeignTransactionsToSupabase({ silent: true });
+                        this.applyForeignFilters();
+
+                        progressToast.dismiss();
+                        Toast.show(
+                            `Auto-Match complete: ${afterValid - beforeValid} additional deposit(s) matched (${afterValid}/${this.foreignTransactions.length} Valid)`,
+                            'success'
+                        );
+                    } catch (err) {
+                        progressToast.dismiss();
+                        Toast.show('Auto-Match failed: ' + (err?.message || String(err)), 'error');
+                    }
+                }
+            );
+        } finally {
+            this._foreignAutoMatching = false;
+        }
     }
 
     exportForeignTransactionsExcel() {
