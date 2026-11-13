@@ -29,6 +29,14 @@ import {
     DEFAULT_FOREIGN_BANK,
     DEFAULT_FOREIGN_MAPPING
 } from './foreign-transactions.js';
+import {
+    loadFxStore,
+    saveFxStore,
+    resolveUsdToEgpRate,
+    convertUsdToEgp,
+    syncMissingFxRates,
+    setManualFxRate
+} from './fx-rates.js';
 
 // Helper to run async task functions with bounded concurrency
 async function runConcurrent(tasks, concurrency = 4) {
@@ -896,6 +904,87 @@ class App {
 
         document.getElementById('btn-refresh-dashboard')?.addEventListener('click', () => this.loadDashboard());
 
+        // USD -> EGP Daily Exchange Rate Controls
+        this.fxStore = loadFxStore();
+        this.fxDbLoaded = false;
+
+        const fxModeEl = document.getElementById('dashboard-fx-mode');
+        const fxRateInput = document.getElementById('dashboard-fx-rate-input');
+        const btnSyncFx = document.getElementById('btn-dash-sync-fx');
+        const btnApplyFx = document.getElementById('btn-dash-apply-fx');
+
+        if (fxModeEl) {
+            fxModeEl.value = this.fxStore.mode || 'historical';
+            fxModeEl.addEventListener('change', () => {
+                this.fxStore.mode = fxModeEl.value || 'historical';
+                saveFxStore(this.fxStore);
+                this.updateDashboardFxUI();
+                this.loadDashboard();
+            });
+        }
+
+        if (btnSyncFx) {
+            btnSyncFx.addEventListener('click', async () => {
+                const origHtml = btnSyncFx.innerHTML;
+                btnSyncFx.disabled = true;
+                btnSyncFx.innerHTML = '<i data-lucide="loader" class="spin" style="width:12px;height:12px;"></i> Syncing';
+                try {
+                    const foreignDates = (this.foreignTransactions || [])
+                        .map(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date))
+                        .filter(Boolean);
+                    const res = await this.syncDashboardFxRates({ dates: foreignDates, forceLatest: true });
+                    this.updateDashboardFxUI();
+                    await this.loadDashboard();
+                    const active = resolveUsdToEgpRate(toDateOnly(new Date()), this.fxStore);
+                    if (active.rate > 0) {
+                        Toast.show(`FX synced (${res.updatedCount} rate(s) updated) · 1 USD = ${active.rate.toFixed(4)} EGP`, 'success');
+                    } else {
+                        Toast.show('Could not fetch online FX rate right now — enter a Manual Rate Override instead.', 'warning');
+                    }
+                } finally {
+                    btnSyncFx.disabled = false;
+                    btnSyncFx.innerHTML = origHtml;
+                    if (window.lucide) lucide.createIcons({ root: document.getElementById('dashboard-fx-card') });
+                }
+            });
+        }
+
+        if (btnApplyFx && fxRateInput) {
+            btnApplyFx.addEventListener('click', async () => {
+                const val = parseFloat(fxRateInput.value);
+                if (!val || val <= 0) {
+                    Toast.show('Enter a valid positive USD → EGP rate (e.g. 49.50)', 'warning');
+                    fxRateInput.focus();
+                    return;
+                }
+                const todayStr = toDateOnly(new Date());
+                this.fxStore = setManualFxRate(this.fxStore, {
+                    dateStr: todayStr,
+                    rate: val,
+                    applyAsLatest: true,
+                    customMode: true
+                });
+                saveFxStore(this.fxStore);
+                if (fxModeEl) fxModeEl.value = 'custom';
+                try {
+                    await supabase.from('exchange_rates').upsert([{
+                        rate_date: todayStr,
+                        currency_pair: 'USD_EGP',
+                        rate: val,
+                        source: 'manual',
+                        updated_by: this.currentUser?.email || 'manual'
+                    }], { onConflict: 'rate_date,currency_pair' });
+                } catch (_e) {
+                    // localStorage already persisted
+                }
+                this.updateDashboardFxUI();
+                await this.loadDashboard();
+                Toast.show(`Applied custom USD → EGP rate: ${val.toFixed(4)} EGP`, 'success');
+            });
+        }
+
+        this.updateDashboardFxUI();
+
         // Expand / Collapse All Months button
         document.getElementById('btn-dashboard-toggle-months')?.addEventListener('click', () => {
             const pivotBody = document.getElementById('dashboard-pivot-body');
@@ -1225,6 +1314,115 @@ class App {
         Toast.show('Pivot exported to Excel!', 'success');
     }
 
+    updateDashboardFxUI() {
+        if (!this.fxStore) this.fxStore = loadFxStore();
+        const modeEl = document.getElementById('dashboard-fx-mode');
+        const inputEl = document.getElementById('dashboard-fx-rate-input');
+        const badgeEl = document.getElementById('dashboard-fx-badge');
+        const statusEl = document.getElementById('dashboard-fx-status');
+
+        const mode = this.fxStore.mode || 'historical';
+        if (modeEl && modeEl.value !== mode) modeEl.value = mode;
+
+        const todayStr = toDateOnly(new Date());
+        const resolved = resolveUsdToEgpRate(todayStr, this.fxStore);
+
+        if (badgeEl) {
+            badgeEl.textContent = resolved.rate > 0
+                ? `1 USD = ${resolved.rate.toFixed(4)} EGP`
+                : 'Not synced';
+            badgeEl.style.color = resolved.rate > 0 ? '#10b981' : 'var(--text-muted)';
+        }
+
+        if (inputEl && document.activeElement !== inputEl) {
+            if (mode === 'custom' && this.fxStore.customRate > 0) {
+                inputEl.value = String(this.fxStore.customRate);
+            } else if (!inputEl.value && resolved.rate > 0) {
+                inputEl.placeholder = resolved.rate.toFixed(4);
+            }
+        }
+
+        if (statusEl) {
+            const count = Object.keys(this.fxStore.ratesByDate || {}).length;
+            if (mode === 'custom' && this.fxStore.customRate > 0) {
+                statusEl.textContent = `Custom manual override active (${this.fxStore.customRate.toFixed(4)} EGP/USD across all foreign deposits).`;
+            } else if (mode === 'latest') {
+                statusEl.textContent = resolved.rate > 0
+                    ? `Latest daily rate (${resolved.rateDate || todayStr}, ${resolved.source}) applied to all USD deposits.`
+                    : `Click Sync or enter a Manual Rate Override to convert USD → EGP.`;
+            } else {
+                statusEl.textContent = count > 0
+                    ? `Per-Tx Value Date active (${count} cached daily rate${count === 1 ? '' : 's'}) · converts each deposit using its Value Date.`
+                    : `Per-Tx Value Date active · syncs daily FX rates automatically when USD deposits are loaded.`;
+            }
+        }
+    }
+
+    async syncDashboardFxRates({ dates = [], forceLatest = false } = {}) {
+        if (!this.fxStore) this.fxStore = loadFxStore();
+
+        if (!this.fxDbLoaded) {
+            this.fxDbLoaded = true;
+            try {
+                const { data, error } = await supabase
+                    .from('exchange_rates')
+                    .select('rate_date, rate, source, updated_at')
+                    .eq('currency_pair', 'USD_EGP')
+                    .order('rate_date', { ascending: false });
+                if (!error && Array.isArray(data)) {
+                    for (const row of data) {
+                        const d = toDateOnly(row.rate_date);
+                        const r = Number(row.rate);
+                        if (!d || !(r > 0)) continue;
+                        const existing = this.fxStore.ratesByDate[d];
+                        // Prefer manual override or keep existing fresher entry
+                        if (!existing || (row.source === 'manual' && existing.source !== 'manual')) {
+                            this.fxStore.ratesByDate[d] = {
+                                rate: r,
+                                source: row.source || 'auto',
+                                provider: 'supabase',
+                                updatedAt: row.updated_at || ''
+                            };
+                        }
+                    }
+                    const sortedDates = Object.keys(this.fxStore.ratesByDate).sort();
+                    const newest = sortedDates[sortedDates.length - 1];
+                    if (newest && (!this.fxStore.latest || this.fxStore.latest.date <= newest)) {
+                        this.fxStore.latest = {
+                            date: newest,
+                            rate: this.fxStore.ratesByDate[newest].rate,
+                            source: this.fxStore.ratesByDate[newest].source,
+                            updatedAt: this.fxStore.ratesByDate[newest].updatedAt
+                        };
+                    }
+                    saveFxStore(this.fxStore);
+                }
+            } catch (_e) {
+                // Table may not exist yet; continue smoothly with localStorage cache + live API
+            }
+        }
+
+        const res = await syncMissingFxRates(dates, this.fxStore, { forceLatest });
+        if (res.updatedRecords.length > 0 || res.latestUpdated) {
+            saveFxStore(this.fxStore);
+            try {
+                if (res.updatedRecords.length > 0) {
+                    const dbPayload = res.updatedRecords.map(rec => ({
+                        rate_date: rec.rate_date,
+                        currency_pair: 'USD_EGP',
+                        rate: rec.rate,
+                        source: rec.source || 'auto'
+                    }));
+                    await supabase.from('exchange_rates').upsert(dbPayload, { onConflict: 'rate_date,currency_pair' });
+                }
+            } catch (_e) {
+                // Ignore if DB table not migrated yet
+            }
+        }
+        this.updateDashboardFxUI();
+        return res;
+    }
+
     async loadDashboard() {
         const dateFrom = document.getElementById('dashboard-date-from')?.value;
         const dateTo = document.getElementById('dashboard-date-to')?.value;
@@ -1282,6 +1480,7 @@ class App {
             setTxt('dashboard-split-cb136-val', 'EGP 0.00');
             setTxt('dashboard-split-ib64-val', 'EGP 0.00');
             setTxt('dashboard-split-misrusd5-val', 'USD 0.00');
+            setTxt('dashboard-split-misrusd5-egp', '(≈ EGP 0.00)');
             setTxt('dashboard-bank-split-label', 'NUADCB136: 0% • NUADIB64: 0% • NuMisrUsd5: 0%');
             const topCat = document.getElementById('dashboard-top-categories');
             if (topCat) topCat.innerHTML = '<span style="color: var(--text-muted);">No bank selected</span>';
@@ -1349,7 +1548,7 @@ class App {
             }
 
             // Include Foreign Transactions (NuMisrUsd5) matching the selected period and subset filter
-            const matchingForeignRows = (this.foreignTransactions || [])
+            const filteredForeignRaw = (this.foreignTransactions || [])
                 .map((r, i) => this.normalizeForeignTransactionRow(r, i))
                 .filter(r => {
                     const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
@@ -1361,18 +1560,37 @@ class App {
                     if (statusFilter === 'erp_recorded') return Boolean(r.erp_batch_number);
                     if (statusFilter === 'erp_unposted') return !r.erp_batch_number;
                     return true;
-                })
-                .map(r => ({
-                    payment_date: toDateOnly(r.value_date || r.payment_date || r.transaction_date),
+                });
+
+            if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && filteredForeignRaw.length > 0) {
+                const neededDates = filteredForeignRaw
+                    .map(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date))
+                    .filter(Boolean);
+                await this.syncDashboardFxRates({ dates: neededDates });
+            } else {
+                this.updateDashboardFxUI();
+            }
+
+            const matchingForeignRows = filteredForeignRaw.map(r => {
+                const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
+                const usdAmt = Number(r.amount ?? r.item_price) || 0;
+                const fx = convertUsdToEgp(usdAmt, pDate, this.fxStore);
+                return {
+                    payment_date: pDate,
                     bank: DEFAULT_FOREIGN_BANK,
-                    item_price: Number(r.amount ?? r.item_price) || 0,
+                    raw_usd: usdAmt,
+                    fx_rate: fx.rate,
+                    fx_date: fx.rateDate,
+                    fx_source: fx.source,
+                    item_price: fx.rate > 0 ? fx.egpAmount : usdAmt,
                     mapping: r.mapping || DEFAULT_FOREIGN_MAPPING,
                     second_mapping: r.second_mapping || '',
                     item_name: r.description || r.item_name || '',
                     id_status: r.id_status,
                     is_settled: Boolean(r.is_settled),
                     erp_batch_number: r.erp_batch_number || null
-                }));
+                };
+            });
 
             if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && matchingForeignRows.length > 0) {
                 allData = [...allData, ...matchingForeignRows];
@@ -1381,6 +1599,7 @@ class App {
             const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
             let bankTotals = { Total: 0 };
+            let misrUsd5UsdTotal = 0;
             ['NUADCB136', 'NUADIB64', DEFAULT_FOREIGN_BANK, ...selectedBanks].forEach(b => { if (bankTotals[b] === undefined) bankTotals[b] = 0; });
 
             const activeDaysSet = new Set();
@@ -1389,11 +1608,14 @@ class App {
                 const price = parseFloat(tx.item_price) || 0;
                 bankTotals[tx.bank] = (bankTotals[tx.bank] || 0) + price;
                 bankTotals.Total += price;
+                if (tx.bank === DEFAULT_FOREIGN_BANK) {
+                    misrUsd5UsdTotal += parseFloat(tx.raw_usd) || 0;
+                }
                 const pDate = toDateOnly(tx.payment_date);
                 if (pDate) activeDaysSet.add(pDate);
             });
 
-            // Update Bank Filter live badges & Bank Split progress bar
+            // Update Bank Filter live badges & Bank Split progress bar (all amounts compared in EGP)
             ['NUADCB136', 'NUADIB64', DEFAULT_FOREIGN_BANK].forEach(b => {
                 const badgeEl = document.getElementById(`dash-bank-badge-${b}`);
                 if (badgeEl) badgeEl.textContent = formatMoney(bankTotals[b] || 0);
@@ -1401,11 +1623,11 @@ class App {
 
             const cb136Val = bankTotals['NUADCB136'] || 0;
             const ib64Val = bankTotals['NUADIB64'] || 0;
-            const misrUsd5Val = bankTotals[DEFAULT_FOREIGN_BANK] || 0;
-            const combinedBankTotal = cb136Val + ib64Val + misrUsd5Val;
+            const misrUsd5EgpVal = bankTotals[DEFAULT_FOREIGN_BANK] || 0;
+            const combinedBankTotal = cb136Val + ib64Val + misrUsd5EgpVal;
             const cb136Pct = combinedBankTotal > 0 ? ((cb136Val / combinedBankTotal) * 100) : 0;
             const ib64Pct = combinedBankTotal > 0 ? ((ib64Val / combinedBankTotal) * 100) : 0;
-            const misrUsd5Pct = combinedBankTotal > 0 ? ((misrUsd5Val / combinedBankTotal) * 100) : 0;
+            const misrUsd5Pct = combinedBankTotal > 0 ? ((misrUsd5EgpVal / combinedBankTotal) * 100) : 0;
 
             const splitLabelEl = document.getElementById('dashboard-bank-split-label');
             if (splitLabelEl) splitLabelEl.textContent = `NUADCB136: ${cb136Pct.toFixed(1)}% • NUADIB64: ${ib64Pct.toFixed(1)}% • ${DEFAULT_FOREIGN_BANK}: ${misrUsd5Pct.toFixed(1)}%`;
@@ -1420,9 +1642,36 @@ class App {
             const split136El = document.getElementById('dashboard-split-cb136-val');
             const split64El = document.getElementById('dashboard-split-ib64-val');
             const splitMisrEl = document.getElementById('dashboard-split-misrusd5-val');
+            const splitMisrEgpEl = document.getElementById('dashboard-split-misrusd5-egp');
             if (split136El) split136El.textContent = `EGP ${formatMoney(cb136Val)}`;
             if (split64El) split64El.textContent = `EGP ${formatMoney(ib64Val)}`;
-            if (splitMisrEl) splitMisrEl.textContent = `USD ${formatMoney(misrUsd5Val)}`;
+            if (splitMisrEl) splitMisrEl.textContent = `USD ${formatMoney(misrUsd5UsdTotal)}`;
+            if (splitMisrEgpEl) {
+                const hasFxRate = resolveUsdToEgpRate(dateTo, this.fxStore).rate > 0 || misrUsd5EgpVal > misrUsd5UsdTotal;
+                splitMisrEgpEl.textContent = hasFxRate
+                    ? `(≈ EGP ${formatMoney(misrUsd5EgpVal)})`
+                    : `(No FX rate synced)`;
+            }
+
+            const renderBankTd = (rowObj, bankCode) => {
+                const egpVal = rowObj[bankCode] || 0;
+                const highlight = bankCode === 'NUADIB64' ? 'highlight-cell' : '';
+                if (bankCode === DEFAULT_FOREIGN_BANK && (rowObj._misrUsd || 0) > 0) {
+                    return `<td class="${highlight}">${formatMoney(egpVal)}<div style="font-size: 0.68rem; color: #10b981; line-height: 1.1;">USD ${formatMoney(rowObj._misrUsd)}</div></td>`;
+                }
+                return `<td class="${highlight}">${formatMoney(egpVal)}</td>`;
+            };
+
+            const appendBankExportCols = (exportObj, rowObj) => {
+                selectedBanks.forEach(b => {
+                    if (b === DEFAULT_FOREIGN_BANK) {
+                        exportObj['NuMisrUsd5 (USD)'] = Number((rowObj._misrUsd || 0).toFixed(2));
+                        exportObj['NuMisrUsd5 (EGP Eq.)'] = Number((rowObj[b] || 0).toFixed(2));
+                    } else {
+                        exportObj[b] = Number((rowObj[b] || 0).toFixed(2));
+                    }
+                });
+            };
 
             const renderShareCell = (amount) => {
                 if (!showShare) return '';
@@ -1442,6 +1691,8 @@ class App {
             this.lastDashboardExportRows = [];
             const btnToggleMonths = document.getElementById('btn-dashboard-toggle-months');
 
+            bankTotals._misrUsd = misrUsd5UsdTotal;
+
             if (groupBy === 'date') {
                 const monthlyPivot = {};
                 allData.forEach(tx => {
@@ -1451,19 +1702,22 @@ class App {
                     const monthKey = pDate.substring(0, 7); // YYYY-MM
                     
                     if (!monthlyPivot[monthKey]) {
-                        monthlyPivot[monthKey] = { Total: 0, days: {} };
+                        monthlyPivot[monthKey] = { Total: 0, _misrUsd: 0, days: {} };
                         selectedBanks.forEach(b => monthlyPivot[monthKey][b] = 0);
                     }
                     if (!monthlyPivot[monthKey].days[pDate]) {
-                        monthlyPivot[monthKey].days[pDate] = { Total: 0 };
+                        monthlyPivot[monthKey].days[pDate] = { Total: 0, _misrUsd: 0 };
                         selectedBanks.forEach(b => monthlyPivot[monthKey].days[pDate][b] = 0);
                     }
                     
                     const price = parseFloat(tx.item_price) || 0;
+                    const rawUsd = tx.bank === DEFAULT_FOREIGN_BANK ? (parseFloat(tx.raw_usd) || 0) : 0;
                     monthlyPivot[monthKey].days[pDate][tx.bank] += price;
                     monthlyPivot[monthKey].days[pDate].Total += price;
+                    monthlyPivot[monthKey].days[pDate]._misrUsd += rawUsd;
                     monthlyPivot[monthKey][tx.bank] += price;
                     monthlyPivot[monthKey].Total += price;
+                    monthlyPivot[monthKey]._misrUsd += rawUsd;
                 });
 
                 const months = Object.keys(monthlyPivot).sort();
@@ -1492,9 +1746,9 @@ class App {
                             <td>${dateLabel}</td>`;
                         const exportRow = { "Date": dateLabel };
                         selectedBanks.forEach(b => {
-                            htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
-                            exportRow[b] = Number((row[b] || 0).toFixed(2));
+                            htmlOutput += renderBankTd(row, b);
                         });
+                        appendBankExportCols(exportRow, row);
                         htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
                         htmlOutput += renderShareCell(row.Total);
                         htmlOutput += `</tr>`;
@@ -1513,7 +1767,7 @@ class App {
                             htmlOutput += `<tr class="month-row" data-month="${m}">
                                 <td><div class="month-toggle"><i data-lucide="chevron-right"></i><span>${monthLabel}</span></div></td>`;
                             selectedBanks.forEach(b => {
-                                htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(monthData[b])}</td>`;
+                                htmlOutput += renderBankTd(monthData, b);
                             });
                             htmlOutput += `<td>${formatMoney(monthData.Total)}</td>`;
                             htmlOutput += renderShareCell(monthData.Total);
@@ -1528,9 +1782,9 @@ class App {
                                 <td>${dateLabel}</td>`;
                             const exportRow = { "Date": dateLabel };
                             selectedBanks.forEach(b => {
-                                htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
-                                exportRow[b] = Number((row[b] || 0).toFixed(2));
+                                htmlOutput += renderBankTd(row, b);
                             });
+                            appendBankExportCols(exportRow, row);
                             htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
                             htmlOutput += renderShareCell(row.Total);
                             htmlOutput += `</tr>`;
@@ -1563,13 +1817,15 @@ class App {
                     }
                     
                     if (!groupedData[key]) {
-                        groupedData[key] = { Total: 0 };
+                        groupedData[key] = { Total: 0, _misrUsd: 0 };
                         selectedBanks.forEach(b => groupedData[key][b] = 0);
                     }
                     
                     const price = parseFloat(tx.item_price) || 0;
+                    const rawUsd = tx.bank === DEFAULT_FOREIGN_BANK ? (parseFloat(tx.raw_usd) || 0) : 0;
                     groupedData[key][tx.bank] += price;
                     groupedData[key].Total += price;
+                    groupedData[key]._misrUsd += rawUsd;
                 });
 
                 const keys = Object.keys(groupedData);
@@ -1589,9 +1845,9 @@ class App {
                         <td>${escapeHTML(k)}</td>`;
                     const exportRow = { [groupLabel]: k };
                     selectedBanks.forEach(b => {
-                        htmlOutput += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(row[b])}</td>`;
-                        exportRow[b] = Number((row[b] || 0).toFixed(2));
+                        htmlOutput += renderBankTd(row, b);
                     });
+                    appendBankExportCols(exportRow, row);
                     htmlOutput += `<td>${formatMoney(row.Total)}</td>`;
                     htmlOutput += renderShareCell(row.Total);
                     htmlOutput += `</tr>`;
@@ -1608,7 +1864,7 @@ class App {
             if (this.lastDashboardExportRows.length > 0) {
                 const firstKey = Object.keys(this.lastDashboardExportRows[0])[0];
                 const totalExportRow = { [firstKey]: 'Grand Total' };
-                selectedBanks.forEach(b => { totalExportRow[b] = Number((bankTotals[b] || 0).toFixed(2)); });
+                appendBankExportCols(totalExportRow, bankTotals);
                 totalExportRow["Grand Total"] = Number((bankTotals.Total || 0).toFixed(2));
                 if (showShare) totalExportRow["% Share"] = '100.0%';
                 this.lastDashboardExportRows.push(totalExportRow);
@@ -1618,7 +1874,7 @@ class App {
 
             let footHtml = `<tr><td>Grand Total</td>`;
             selectedBanks.forEach(b => {
-                footHtml += `<td class="${b === 'NUADIB64' ? 'highlight-cell' : ''}">${formatMoney(bankTotals[b])}</td>`;
+                footHtml += renderBankTd(bankTotals, b);
             });
             footHtml += `<td>${formatMoney(bankTotals.Total)}</td>`;
             if (showShare) {
@@ -1631,11 +1887,11 @@ class App {
             if (thead) {
                 const label = groupBy === 'date' ? 'Date' : (groupBy === 'mapping' ? 'Mapping' : (groupBy === 'second_mapping' ? '2nd Mapping' : 'Item Name'));
                 thead.innerHTML = `
-                    <tr><th colspan="${totalColSpan}" class="pivot-title">Total Fawry Collection</th></tr>
+                    <tr><th colspan="${totalColSpan}" class="pivot-title">Total Collection (EGP Equivalent)</th></tr>
                     <tr>
                         <th class="pivot-row-label">${label}</th>
-                        ${selectedBanks.map(b => `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b}</th>`).join('')}
-                        <th class="pivot-col-label">Grand Total</th>
+                        ${selectedBanks.map(b => `<th class="pivot-col-label ${b === 'NUADIB64' ? 'highlight-col' : ''}">${b === DEFAULT_FOREIGN_BANK ? 'NuMisrUsd5 (EGP Eq.)' : b}</th>`).join('')}
+                        <th class="pivot-col-label">Grand Total (EGP)</th>
                         ${showShare ? '<th class="pivot-col-label pivot-share-col">% Share</th>' : ''}
                     </tr>
                 `;

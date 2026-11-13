@@ -1,6 +1,7 @@
 import { expect, test, vi } from 'vitest';
 import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
+import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates } from '../fx-rates.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -395,4 +396,46 @@ test('isSameDaySettlementBank and resolveErpJournalDate keep NuMisrUsd5 on exact
 
     // Custom override mode: custom date wins when explicitly chosen
     expect(resolveErpJournalDate(foreignThu, 'custom', '2026-01-11')).toBe('2026-01-11');
+});
+
+test('FX rates support Per-Tx Value Date, Latest Daily Rate, Custom override, and async sync', async () => {
+    expect(extractUsdEgpFromPayload({ date: '2026-01-05', usd: { egp: 50.25 } })).toBe(50.25);
+    expect(extractUsdEgpFromPayload({ rates: { EGP: 49.8 } })).toBe(49.8);
+
+    let store = createEmptyFxStore();
+    store.ratesByDate['2026-01-05'] = { rate: 50.0, source: 'auto' };
+    store.ratesByDate['2026-01-08'] = { rate: 48.0, source: 'auto' };
+    store.latest = { date: '2026-01-15', rate: 51.0, source: 'auto' };
+
+    // Historical mode (default): uses exact date or nearest prior date
+    expect(convertUsdToEgp(1000, '2026-01-05', store).egpAmount).toBe(50000);
+    expect(convertUsdToEgp(500, '2026-01-06', store).rate).toBe(50.0); // nearest prior (Jan 5)
+    expect(convertUsdToEgp(500, '2026-01-08', store).egpAmount).toBe(24000);
+
+    // Latest mode: applies store.latest.rate regardless of deposit date
+    expect(convertUsdToEgp(1000, '2026-01-05', store, { mode: 'latest' }).egpAmount).toBe(51000);
+
+    // Manual override + Custom mode: preserves manual rate and uses customRate when mode='custom'
+    store = setManualFxRate(store, { dateStr: '2026-01-10', rate: 52.5, applyAsLatest: true, customMode: true });
+    expect(resolveUsdToEgpRate('2026-01-05', store).rate).toBe(52.5);
+    expect(convertUsdToEgp(100, '2026-01-05', store).egpAmount).toBe(5250);
+
+    // Sync missing dates with mocked fetch (must skip manual entries)
+    store.mode = 'historical';
+    const fetchedUrls = [];
+    const mockFetch = async (url) => {
+        fetchedUrls.push(url);
+        return {
+            ok: true,
+            json: async () => ({ date: '2026-01-09', usd: { egp: 48.75 } })
+        };
+    };
+    const res = await syncMissingFxRates(['2026-01-05', '2026-01-09', '2026-01-10'], store, {
+        fetchImpl: mockFetch,
+        todayStr: '2026-01-10'
+    });
+    expect(res.updatedCount).toBe(1);
+    expect(store.ratesByDate['2026-01-09'].rate).toBe(48.75);
+    expect(store.ratesByDate['2026-01-10'].rate).toBe(52.5); // manual preserved
+    expect(fetchedUrls.some(u => u.includes('@2026-01-09'))).toBe(true);
 });

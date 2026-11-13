@@ -585,4 +585,42 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(erpPreviewBody.textContent).toContain('NuMisrUsd5');
     expect(erpPreviewBody.textContent).toContain('Same Date');
     expect(document.getElementById('erp-stat-amount').textContent).toContain('USD');
+
+    // Verify Dashboard USD -> EGP Daily Exchange Rate & Historical/Custom Conversion
+    expect(document.getElementById('dashboard-fx-mode')).not.toBeNull();
+    expect(document.getElementById('dashboard-fx-rate-input')).not.toBeNull();
+    expect(document.getElementById('btn-dash-sync-fx')).not.toBeNull();
+    expect(document.getElementById('btn-dash-apply-fx')).not.toBeNull();
+
+    document.getElementById('dashboard-date-from').value = '2026-01-01';
+    document.getElementById('dashboard-date-to').value = '2026-01-31';
+    window.app.fxDbLoaded = true;
+    window.app.fxStore = {
+        mode: 'historical',
+        customRate: null,
+        latest: { date: '2026-01-31', rate: 51.0, source: 'auto' },
+        ratesByDate: {
+            '2026-01-06': { rate: 50.0, source: 'auto' },
+            '2026-01-08': { rate: 48.0, source: 'auto' }
+        }
+    };
+    window.app.foreignTransactions = [
+        { reference_number: 'FX1', value_date: '2026-01-06', student_id: '241002323', amount: 1000, currency: 'USD', description: 'Dep 1', id_status: 'Valid' },
+        { reference_number: 'FX2', value_date: '2026-01-08', student_id: '241009888', amount: 500, currency: 'USD', description: 'Dep 2', id_status: 'Valid' }
+    ];
+    // Prevent network fetch inside test by matching cached todayStr rate on 2026-01-31
+    await window.app.loadDashboard();
+    // 1000*50 + 500*48 = 74,000 EGP
+    expect(document.getElementById('dashboard-split-misrusd5-val').textContent).toBe('USD 1,500.00');
+    expect(document.getElementById('dashboard-split-misrusd5-egp').textContent).toContain('EGP 74,000.00');
+    expect(document.getElementById('stat-total-collections').textContent).toBe('EGP 74,000.00');
+    const grandTotalRow = window.app.lastDashboardExportRows[window.app.lastDashboardExportRows.length - 1];
+    expect(grandTotalRow['NuMisrUsd5 (USD)']).toBe(1500);
+    expect(grandTotalRow['NuMisrUsd5 (EGP Eq.)']).toBe(74000);
+
+    // Apply Manual Custom Rate Override (52.00 EGP/USD -> 1500 * 52 = 78,000 EGP)
+    document.getElementById('dashboard-fx-rate-input').value = '52.00';
+    document.getElementById('btn-dash-apply-fx').click();
+    await new Promise(r => setTimeout(r, 20));
+    expect(document.getElementById('stat-total-collections').textContent).toBe('EGP 78,000.00');
 });

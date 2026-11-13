@@ -527,3 +527,28 @@ CREATE POLICY foreign_tx_update ON public.foreign_transactions FOR UPDATE TO aut
 
 DROP POLICY IF EXISTS foreign_tx_delete ON public.foreign_transactions;
 CREATE POLICY foreign_tx_delete ON public.foreign_transactions FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+
+-- 15. Daily USD/EGP Exchange Rates Table (for Multi-Currency Reporting)
+CREATE TABLE IF NOT EXISTS public.exchange_rates (
+  rate_date      DATE NOT NULL,
+  currency_pair  VARCHAR(16) NOT NULL DEFAULT 'USD_EGP',
+  rate           NUMERIC(12, 4) NOT NULL,
+  source         VARCHAR(24) NOT NULL DEFAULT 'auto',
+  updated_by     VARCHAR(255),
+  updated_at     TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (rate_date, currency_pair)
+);
+
+ALTER TABLE public.exchange_rates ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS exchange_rates_select ON public.exchange_rates;
+CREATE POLICY exchange_rates_select ON public.exchange_rates FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS exchange_rates_insert ON public.exchange_rates;
+CREATE POLICY exchange_rates_insert ON public.exchange_rates FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+
+DROP POLICY IF EXISTS exchange_rates_update ON public.exchange_rates;
+CREATE POLICY exchange_rates_update ON public.exchange_rates FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+
+DROP POLICY IF EXISTS exchange_rates_delete ON public.exchange_rates;
+CREATE POLICY exchange_rates_delete ON public.exchange_rates FOR DELETE TO authenticated USING (public.has_min_role('admin'));

@@ -280,7 +280,7 @@
                         <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);">
                             <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-right: 4px;"></span>NUADCB136: <strong id="dashboard-split-cb136-val" style="color: var(--text-main);">EGP 0.00</strong></span>
                             <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; margin-right: 4px;"></span>NUADIB64: <strong id="dashboard-split-ib64-val" style="color: var(--text-main);">EGP 0.00</strong></span>
-                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; margin-right: 4px;"></span>NuMisrUsd5: <strong id="dashboard-split-misrusd5-val" style="color: var(--text-main);">USD 0.00</strong></span>
+                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; margin-right: 4px;"></span>NuMisrUsd5: <strong id="dashboard-split-misrusd5-val" style="color: var(--text-main);">USD 0.00</strong> <span id="dashboard-split-misrusd5-egp" style="font-size: 0.72rem; color: #10b981;">(≈ EGP 0.00)</span></span>
                         </div>
                     </div>
                     <div style="border-left: 1px solid var(--border-color); padding-left: 1.25rem;">
@@ -411,6 +411,40 @@
                                     </span>
                                     <span id="dash-bank-badge-NuMisrUsd5" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">0.00</span>
                                 </label>
+                            </div>
+                        </div>
+
+                        <!-- USD -> EGP Exchange Rate Control -->
+                        <div class="glass-card filter-box" id="dashboard-fx-card">
+                            <div class="filter-header" style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+                                <h3 style="margin: 0; font-size: 0.92rem;">USD &rarr; EGP Rate</h3>
+                                <button type="button" class="btn btn-outline btn-sm" id="btn-dash-sync-fx" style="padding: 0.18rem 0.55rem; font-size: 0.72rem;" title="Fetch latest &amp; missing historical USD/EGP exchange rates">
+                                    <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i> Sync
+                                </button>
+                            </div>
+                            <div class="filter-body" style="display: flex; flex-direction: column; gap: 0.6rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0.6rem; border-radius: 6px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25);">
+                                    <span style="font-size: 0.75rem; color: var(--text-muted);">Current / Active</span>
+                                    <strong id="dashboard-fx-badge" style="font-size: 0.85rem; color: #10b981; font-family: monospace;">Not synced</strong>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Calculation Mode</label>
+                                    <select id="dashboard-fx-mode" class="input-select" style="width: 100%; font-size: 0.82rem; padding: 0.35rem 0.5rem;">
+                                        <option value="historical">Per-Tx Value Date Rate</option>
+                                        <option value="latest">Latest Daily Rate</option>
+                                        <option value="custom">Custom Manual Rate</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Manual Rate Override (1 USD = EGP)</label>
+                                    <div style="display: flex; gap: 0.4rem; align-items: center;">
+                                        <input type="number" step="0.0001" min="0" id="dashboard-fx-rate-input" class="input-text" placeholder="e.g. 49.50" style="padding: 0.35rem 0.55rem; font-size: 0.82rem; flex: 1;">
+                                        <button type="button" class="btn btn-primary btn-sm" id="btn-dash-apply-fx" style="padding: 0.35rem 0.75rem; font-size: 0.78rem;">Apply</button>
+                                    </div>
+                                </div>
+                                <div id="dashboard-fx-status" style="font-size: 0.72rem; color: var(--text-muted); line-height: 1.35;">
+                                    Converts NuMisrUsd5 USD deposits to EGP in Dashboard Totals &amp; % Share.
+                                </div>
                             </div>
                         </div>
                     </div>
