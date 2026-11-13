@@ -652,4 +652,12 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(dbRow.bank).toBeUndefined();
     expect(dbRow.mapping).toBeUndefined();
     expect(dbRow.extra_parser_field).toBeUndefined();
+
+    // Verify Fawry Transactions page light & dark logos exist
+    const fawryDarkLogo = document.querySelector('#view-transactions .fawry-theme-logo-dark');
+    const fawryLightLogo = document.querySelector('#view-transactions .fawry-theme-logo-light');
+    expect(fawryDarkLogo).not.toBeNull();
+    expect(fawryLightLogo).not.toBeNull();
+    expect(fawryDarkLogo.getAttribute('src')).toBe('fawry-logo-dark.png');
+    expect(fawryLightLogo.getAttribute('src')).toBe('fawry-logo-light.png');
 });

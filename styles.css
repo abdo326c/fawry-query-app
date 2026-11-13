@@ -240,6 +240,60 @@ body {
     white-space: nowrap;
 }
 
+/* Fawry Transactions Page & Nav Theme-Aware Logo */
+.page-brand-header {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+}
+
+.fawry-page-logo-badge {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    padding: 6px;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(14, 165, 233, 0.06) 100%);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    box-shadow: 0 4px 14px rgba(56, 189, 248, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.fawry-page-logo-badge:hover {
+    transform: translateY(-1px);
+    border-color: rgba(56, 189, 248, 0.55);
+    box-shadow: 0 6px 18px rgba(56, 189, 248, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.fawry-theme-logo {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.fawry-theme-logo-dark {
+    display: block;
+    filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.5));
+}
+
+.fawry-theme-logo-light {
+    display: none;
+}
+
+.nav-logo-wrap {
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
 /* Backward compatibility aliases */
 .logo-container {
     display: flex;
@@ -1831,6 +1885,27 @@ select option {
 
 :root.light .brand-tag {
     color: #0284c7;
+}
+
+:root.light .fawry-page-logo-badge {
+    background: linear-gradient(135deg, rgba(15, 118, 110, 0.14) 0%, rgba(13, 148, 136, 0.04) 100%);
+    border-color: rgba(15, 118, 110, 0.3);
+    box-shadow: 0 2px 10px rgba(15, 118, 110, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+:root.light .fawry-page-logo-badge:hover {
+    border-color: rgba(15, 118, 110, 0.5);
+    box-shadow: 0 4px 14px rgba(15, 118, 110, 0.18);
+}
+
+:root.light .fawry-theme-logo-dark {
+    display: none;
+}
+
+:root.light .fawry-theme-logo-light {
+    display: block;
+    opacity: 0.88;
+    filter: drop-shadow(0 1px 2px rgba(15, 118, 110, 0.18));
 }
 
 :root.light .input-text,

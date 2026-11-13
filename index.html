@@ -125,7 +125,10 @@
                     <i data-lucide="bar-chart-2"></i> Dashboard
                 </a>
                 <a href="#transactions" class="nav-link active" data-tab="transactions">
-                    <i data-lucide="table"></i> Fawry Transactions
+                    <span class="nav-logo-wrap" aria-hidden="true">
+                        <img src="fawry-logo-dark.png" alt="" class="fawry-theme-logo fawry-theme-logo-dark">
+                        <img src="fawry-logo-light.png" alt="" class="fawry-theme-logo fawry-theme-logo-light">
+                    </span> Fawry Transactions
                 </a>
                 <a href="#foreign-transactions" class="nav-link" data-tab="foreign-transactions">
                     <i data-lucide="landmark"></i> Foreign Transactions
@@ -455,7 +458,13 @@
             <!-- Transactions View -->
             <section id="view-transactions" class="view active">
                 <div class="header">
-                    <h1>Fawry Transactions</h1>
+                    <div class="page-brand-header">
+                        <div class="fawry-page-logo-badge" aria-hidden="true">
+                            <img src="fawry-logo-dark.png" alt="Fawry Transactions" class="fawry-theme-logo fawry-theme-logo-dark">
+                            <img src="fawry-logo-light.png" alt="Fawry Transactions" class="fawry-theme-logo fawry-theme-logo-light">
+                        </div>
+                        <h1>Fawry Transactions</h1>
+                    </div>
                     <div class="header-actions">
                         <button class="btn btn-primary" id="btn-show-import">
                             <i data-lucide="upload"></i> Import orders or Invoice exports
