@@ -521,4 +521,27 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     await window.app.cleanupForeignDuplicates();
     expect(window.app.foreignTransactions.length).toBe(1);
     expect(window.app.foreignTransactions[0].student_id).toBe('241002323');
+
+    // Verify Dashboard includes NuMisrUsd5 bank filter & split bar
+    expect(document.querySelector('#dashboard-bank-filters input[value="NuMisrUsd5"]')).not.toBeNull();
+    expect(document.getElementById('dash-bank-badge-NuMisrUsd5')).not.toBeNull();
+    expect(document.getElementById('dashboard-split-misrusd5-val')).not.toBeNull();
+
+    // Verify Bulk Manual Fixes apply directly to Foreign Transactions
+    window.app.foreignTransactions.push({
+        _uid: 'unfixed_1',
+        reference_number: 'FJB2600826955342',
+        value_date: '2026-01-08',
+        student_id: '',
+        amount: 1305.00,
+        currency: 'USD',
+        description: 'Cash Deposit فاطمة محمد',
+        id_status: 'Missing ID'
+    });
+    const fixedForeignCount = await window.app.applyManualFixesToForeignTransactions([
+        { reference_number: 'FJB2600826955342', correct_id: '241009888', item_name: null, mapping: 'Tuition', second_mapping: null }
+    ]);
+    expect(fixedForeignCount).toBe(1);
+    expect(window.app.foreignTransactions[1].student_id).toBe('241009888');
+    expect(window.app.foreignTransactions[1].id_status).toBe('Valid');
 });

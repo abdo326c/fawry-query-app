@@ -270,15 +270,17 @@
                     <div>
                         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; margin-bottom: 0.35rem;">
                             <span style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Bank Collection Split</span>
-                            <span id="dashboard-bank-split-label" style="color: var(--text-muted); font-size: 0.76rem;">NUADCB136: 0% • NUADIB64: 0%</span>
+                            <span id="dashboard-bank-split-label" style="color: var(--text-muted); font-size: 0.76rem;">NUADCB136: 0% • NUADIB64: 0% • NuMisrUsd5: 0%</span>
                         </div>
                         <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; display: flex;">
-                            <div id="dashboard-bar-cb136" style="width: 50%; height: 100%; background: var(--primary); transition: width 0.3s ease;" title="NUADCB136"></div>
-                            <div id="dashboard-bar-ib64" style="width: 50%; height: 100%; background: #f59e0b; transition: width 0.3s ease;" title="NUADIB64"></div>
+                            <div id="dashboard-bar-cb136" style="width: 34%; height: 100%; background: var(--primary); transition: width 0.3s ease;" title="NUADCB136"></div>
+                            <div id="dashboard-bar-ib64" style="width: 33%; height: 100%; background: #f59e0b; transition: width 0.3s ease;" title="NUADIB64"></div>
+                            <div id="dashboard-bar-misrusd5" style="width: 33%; height: 100%; background: #10b981; transition: width 0.3s ease;" title="NuMisrUsd5"></div>
                         </div>
-                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);">
+                        <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);">
                             <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-right: 4px;"></span>NUADCB136: <strong id="dashboard-split-cb136-val" style="color: var(--text-main);">EGP 0.00</strong></span>
                             <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; margin-right: 4px;"></span>NUADIB64: <strong id="dashboard-split-ib64-val" style="color: var(--text-main);">EGP 0.00</strong></span>
+                            <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; margin-right: 4px;"></span>NuMisrUsd5: <strong id="dashboard-split-misrusd5-val" style="color: var(--text-main);">USD 0.00</strong></span>
                         </div>
                     </div>
                     <div style="border-left: 1px solid var(--border-color); padding-left: 1.25rem;">
@@ -295,12 +297,13 @@
                         <table class="pivot-table" id="dashboard-pivot-table">
                             <thead>
                                 <tr>
-                                    <th colspan="5" class="pivot-title">Total Fawry Collection</th>
+                                    <th colspan="6" class="pivot-title">Total Collection</th>
                                 </tr>
                                 <tr>
                                     <th class="pivot-row-label">Date</th>
                                     <th class="pivot-col-label">NUADCB136</th>
                                     <th class="pivot-col-label highlight-col">NUADIB64</th>
+                                    <th class="pivot-col-label">NuMisrUsd5</th>
                                     <th class="pivot-col-label">Grand Total</th>
                                     <th class="pivot-col-label pivot-share-col">% Share</th>
                                 </tr>
@@ -400,6 +403,13 @@
                                         NUADIB64
                                     </span>
                                     <span id="dash-bank-badge-NUADIB64" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">0.00</span>
+                                </label>
+                                <label class="checkbox-label mt-2" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                                    <span style="display: inline-flex; align-items: center; gap: 0.45rem;">
+                                        <input type="checkbox" value="NuMisrUsd5" checked>
+                                        NuMisrUsd5
+                                    </span>
+                                    <span id="dash-bank-badge-NuMisrUsd5" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">0.00</span>
                                 </label>
                             </div>
                         </div>
@@ -1678,6 +1688,7 @@
                                 <option value="">All Banks</option>
                                 <option value="NUADIB64">NUADIB64</option>
                                 <option value="NUADCB136">NUADCB136</option>
+                                <option value="NuMisrUsd5">NuMisrUsd5</option>
                             </select>
                         </div>
                         <div class="form-group" style="margin: 0; min-width: 145px; flex: 1;">

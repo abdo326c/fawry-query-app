@@ -1276,9 +1276,11 @@ class App {
             setTxt('stat-erp-sub', '0 posted • 0 unposted');
             setTxt('dash-bank-badge-NUADCB136', '0.00');
             setTxt('dash-bank-badge-NUADIB64', '0.00');
+            setTxt('dash-bank-badge-NuMisrUsd5', '0.00');
             setTxt('dashboard-split-cb136-val', 'EGP 0.00');
             setTxt('dashboard-split-ib64-val', 'EGP 0.00');
-            setTxt('dashboard-bank-split-label', 'NUADCB136: 0% • NUADIB64: 0%');
+            setTxt('dashboard-split-misrusd5-val', 'USD 0.00');
+            setTxt('dashboard-bank-split-label', 'NUADCB136: 0% • NUADIB64: 0% • NuMisrUsd5: 0%');
             const topCat = document.getElementById('dashboard-top-categories');
             if (topCat) topCat.innerHTML = '<span style="color: var(--text-muted);">No bank selected</span>';
             return;
@@ -1344,10 +1346,40 @@ class App {
                 );
             }
 
+            // Include Foreign Transactions (NuMisrUsd5) matching the selected period and subset filter
+            const matchingForeignRows = (this.foreignTransactions || [])
+                .map((r, i) => this.normalizeForeignTransactionRow(r, i))
+                .filter(r => {
+                    const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
+                    if (!pDate || pDate < dateFrom || pDate > dateTo) return false;
+                    if (statusFilter === 'valid') return r.id_status === 'Valid';
+                    if (statusFilter === 'invalid') return r.id_status !== 'Valid';
+                    if (statusFilter === 'settled') return Boolean(r.is_settled);
+                    if (statusFilter === 'unsettled') return !r.is_settled;
+                    if (statusFilter === 'erp_recorded') return Boolean(r.erp_batch_number);
+                    if (statusFilter === 'erp_unposted') return !r.erp_batch_number;
+                    return true;
+                })
+                .map(r => ({
+                    payment_date: toDateOnly(r.value_date || r.payment_date || r.transaction_date),
+                    bank: DEFAULT_FOREIGN_BANK,
+                    item_price: Number(r.amount ?? r.item_price) || 0,
+                    mapping: r.mapping || DEFAULT_FOREIGN_MAPPING,
+                    second_mapping: r.second_mapping || '',
+                    item_name: r.description || r.item_name || '',
+                    id_status: r.id_status,
+                    is_settled: Boolean(r.is_settled),
+                    erp_batch_number: r.erp_batch_number || null
+                }));
+
+            if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && matchingForeignRows.length > 0) {
+                allData = [...allData, ...matchingForeignRows];
+            }
+
             const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
             let bankTotals = { Total: 0 };
-            ['NUADCB136', 'NUADIB64', ...selectedBanks].forEach(b => { if (bankTotals[b] === undefined) bankTotals[b] = 0; });
+            ['NUADCB136', 'NUADIB64', DEFAULT_FOREIGN_BANK, ...selectedBanks].forEach(b => { if (bankTotals[b] === undefined) bankTotals[b] = 0; });
 
             const activeDaysSet = new Set();
             allData.forEach(tx => {
@@ -1360,29 +1392,35 @@ class App {
             });
 
             // Update Bank Filter live badges & Bank Split progress bar
-            ['NUADCB136', 'NUADIB64'].forEach(b => {
+            ['NUADCB136', 'NUADIB64', DEFAULT_FOREIGN_BANK].forEach(b => {
                 const badgeEl = document.getElementById(`dash-bank-badge-${b}`);
                 if (badgeEl) badgeEl.textContent = formatMoney(bankTotals[b] || 0);
             });
 
             const cb136Val = bankTotals['NUADCB136'] || 0;
             const ib64Val = bankTotals['NUADIB64'] || 0;
-            const combinedBankTotal = cb136Val + ib64Val;
+            const misrUsd5Val = bankTotals[DEFAULT_FOREIGN_BANK] || 0;
+            const combinedBankTotal = cb136Val + ib64Val + misrUsd5Val;
             const cb136Pct = combinedBankTotal > 0 ? ((cb136Val / combinedBankTotal) * 100) : 0;
             const ib64Pct = combinedBankTotal > 0 ? ((ib64Val / combinedBankTotal) * 100) : 0;
+            const misrUsd5Pct = combinedBankTotal > 0 ? ((misrUsd5Val / combinedBankTotal) * 100) : 0;
 
             const splitLabelEl = document.getElementById('dashboard-bank-split-label');
-            if (splitLabelEl) splitLabelEl.textContent = `NUADCB136: ${cb136Pct.toFixed(1)}% • NUADIB64: ${ib64Pct.toFixed(1)}%`;
+            if (splitLabelEl) splitLabelEl.textContent = `NUADCB136: ${cb136Pct.toFixed(1)}% • NUADIB64: ${ib64Pct.toFixed(1)}% • ${DEFAULT_FOREIGN_BANK}: ${misrUsd5Pct.toFixed(1)}%`;
             const bar136 = document.getElementById('dashboard-bar-cb136');
             const bar64 = document.getElementById('dashboard-bar-ib64');
+            const barMisr = document.getElementById('dashboard-bar-misrusd5');
             if (bar136 && bar64) {
-                bar136.style.width = `${combinedBankTotal > 0 ? cb136Pct : 50}%`;
-                bar64.style.width = `${combinedBankTotal > 0 ? ib64Pct : 50}%`;
+                bar136.style.width = `${combinedBankTotal > 0 ? cb136Pct : 34}%`;
+                bar64.style.width = `${combinedBankTotal > 0 ? ib64Pct : 33}%`;
+                if (barMisr) barMisr.style.width = `${combinedBankTotal > 0 ? misrUsd5Pct : 33}%`;
             }
             const split136El = document.getElementById('dashboard-split-cb136-val');
             const split64El = document.getElementById('dashboard-split-ib64-val');
+            const splitMisrEl = document.getElementById('dashboard-split-misrusd5-val');
             if (split136El) split136El.textContent = `EGP ${formatMoney(cb136Val)}`;
             if (split64El) split64El.textContent = `EGP ${formatMoney(ib64Val)}`;
+            if (splitMisrEl) splitMisrEl.textContent = `USD ${formatMoney(misrUsd5Val)}`;
 
             const renderShareCell = (amount) => {
                 if (!showShare) return '';
@@ -1655,6 +1693,16 @@ class App {
                         const k = r.group_key || 'Unmapped';
                         categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(r.total_amount) || 0);
                     });
+                    if (selectedBanks.includes(DEFAULT_FOREIGN_BANK)) {
+                        matchingForeignRows.forEach(tx => {
+                            const k = tx.mapping || DEFAULT_FOREIGN_MAPPING;
+                            categoryTotals[k] = (categoryTotals[k] || 0) + (parseFloat(tx.item_price) || 0);
+                        });
+                    }
+                }
+                if (selectedBanks.includes(DEFAULT_FOREIGN_BANK) && matchingForeignRows.length > 0) {
+                    totalCountAll += matchingForeignRows.length;
+                    validCount += matchingForeignRows.filter(tx => tx.id_status === 'Valid').length;
                 }
             } else {
                 // Full rows were already fetched and filtered by selectedBanks – count in memory
@@ -2681,10 +2729,11 @@ class App {
 
                 const toApply = applyToLocked ? all : all.filter(c => !c.diff.locked);
                 const updated = toApply.length > 0 ? await updateRuleFields(toApply) : 0;
-                if (updated > 0) this.invalidateDistinctCache();
+                const foreignUpdated = await this.applyManualFixesToForeignTransactions(this.allFixesData || [mergedFix]);
+                if (updated > 0 || foreignUpdated > 0) this.invalidateDistinctCache();
 
                 const lockedSkipped = all.length - toApply.length;
-                let summaryMsg = `${updated} transaction(s) updated.`;
+                let summaryMsg = `${updated + foreignUpdated} transaction(s) updated.`;
                 if (lockedSkipped > 0) summaryMsg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged.`;
 
                 Toast.show(`Manual fix saved. ${summaryMsg}`, 'success');
@@ -2959,9 +3008,11 @@ class App {
                         fixes: this.allFixesData || fixesToProcess,
                         mappings: this.allMappingsData || undefined
                     });
+                    const foreignUpdated = await this.applyManualFixesToForeignTransactions(this.allFixesData || fixesToProcess);
 
-                    await this.logAudit('Bulk Fixes Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: result.updated, locked_skipped: result.lockedSkipped });
-                    Toast.show(`Uploaded ${inserted} manual fixes. ${this.reapplySummary(result)}`, 'success');
+                    await this.logAudit('Bulk Fixes Uploaded', `Batch of ${inserted} items`, { count: inserted, transactions_updated: result.updated + foreignUpdated, foreign_updated: foreignUpdated, locked_skipped: result.lockedSkipped });
+                    const foreignMsg = foreignUpdated > 0 ? ` (${foreignUpdated} foreign deposit(s) updated)` : '';
+                    Toast.show(`Uploaded ${inserted} manual fixes. ${this.reapplySummary(result)}${foreignMsg}`, 'success');
                     if (Array.isArray(this.allFixesData)) {
                         this.updateFixesStatsAndDropdowns(this.allFixesData);
                         this.renderFixesPage();
@@ -3163,8 +3214,17 @@ class App {
                 }
                 window.reapplyProposals = proposals;
 
+                // Also apply manual fixes to Foreign Transactions when Re-apply Rules is clicked
+                this.allFixesData = fixes;
+                const foreignReapplied = await this.applyManualFixesToForeignTransactions(fixes);
+
                 if (proposals.length === 0) {
-                    Toast.show('No rules need to be applied. Everything is up to date!', 'info');
+                    Toast.show(
+                        foreignReapplied > 0
+                            ? `Applied manual fixes to ${foreignReapplied} foreign transaction(s)!`
+                            : 'No rules need to be applied. Everything is up to date!',
+                        foreignReapplied > 0 ? 'success' : 'info'
+                    );
                     return;
                 }
 
@@ -4740,13 +4800,28 @@ class App {
                 'id'
             );
 
-            // Group by reference_number so each reference appears once
+            // Group by reference_number so each reference appears once (include both Fawry & Foreign unresolved transactions)
             const byRef = new Map();
             for (const tx of badRows) {
                 if (!tx.reference_number) continue;
                 const key = String(tx.reference_number).trim();
                 if (!byRef.has(key)) {
                     byRef.set(key, tx);
+                }
+            }
+            for (const ftx of (this.foreignTransactions || [])) {
+                const norm = this.normalizeForeignTransactionRow(ftx);
+                if (!norm.reference_number || norm.id_status === 'Valid') continue;
+                const key = String(norm.reference_number).trim();
+                if (!byRef.has(key)) {
+                    byRef.set(key, {
+                        reference_number: norm.reference_number,
+                        payment_date: norm.value_date || norm.payment_date,
+                        student_id: norm.student_id || '',
+                        id_status: norm.id_status || 'Missing ID',
+                        item_name: norm.description || '',
+                        item_price: norm.amount || 0
+                    });
                 }
             }
 
@@ -9980,18 +10055,35 @@ class App {
         const amount = Number(r.amount ?? r.item_price) || 0;
         const effectiveDate = r.value_date || r.payment_date || r.transaction_date || '';
         const ref = r.reference_number || r.external_ref || r.transaction_ref || '';
-        const desc = r.description ?? r.item_name ?? '';
+        let desc = r.description ?? r.item_name ?? '';
         let studentId = r.student_id || '';
         let matchedName = r.matched_student_name || '';
         let matchSource = r.match_source || (studentId ? 'statement_id' : 'unmatched');
+        let mapping = r.mapping || DEFAULT_FOREIGN_MAPPING;
+        let secondMapping = r.second_mapping || '';
 
-        // Also check global Manual Fixes (this.fixes) by reference_number to fix missing/invalid IDs automatically
-        if ((!studentId || validateID(studentId) !== 'Valid') && ref && this.fixes && this.fixes[ref]) {
-            const fixEntry = this.fixes[ref];
-            const fixedId = typeof fixEntry === 'object' ? fixEntry.student_id : fixEntry;
-            if (fixedId && validateID(fixedId) === 'Valid') {
-                studentId = String(fixedId).trim();
-                matchSource = 'manual';
+        // Check Manual Fixes table (this.allFixesData) by reference_number or transaction_ref
+        if (Array.isArray(this.allFixesData) && this.allFixesData.length > 0) {
+            const refLower = String(ref || '').trim().toLowerCase();
+            const txRefLower = String(r.transaction_ref || '').trim().toLowerCase();
+            const fix = this.allFixesData.find(f => {
+                const k = String(f.reference_number || '').trim().toLowerCase();
+                return k && (k === refLower || (txRefLower && k === txRefLower));
+            });
+            if (fix) {
+                if (fix.correct_id && String(fix.correct_id).trim()) {
+                    studentId = String(fix.correct_id).trim();
+                    matchSource = 'manual';
+                }
+                if (fix.item_name && String(fix.item_name).trim()) {
+                    desc = String(fix.item_name).trim();
+                }
+                if (fix.mapping && String(fix.mapping).trim()) {
+                    mapping = String(fix.mapping).trim();
+                }
+                if (fix.second_mapping && String(fix.second_mapping).trim()) {
+                    secondMapping = String(fix.second_mapping).trim();
+                }
             }
         }
 
@@ -10008,13 +10100,80 @@ class App {
             item_price: amount,
             description: desc,
             item_name: desc,
-            mapping: r.mapping || DEFAULT_FOREIGN_MAPPING,
-            second_mapping: r.second_mapping || '',
+            mapping,
+            second_mapping: secondMapping,
             bank: DEFAULT_FOREIGN_BANK,
             id_status: idStatus,
             match_source: matchSource,
             check_column: r.check_column || `${ref}-${String(desc).trim()}`
         };
+    }
+
+    async applyManualFixesToForeignTransactions(fixesList) {
+        const fixes = Array.isArray(fixesList) ? fixesList : (this.allFixesData || []);
+        if (!fixes.length || !Array.isArray(this.foreignTransactions) || this.foreignTransactions.length === 0) {
+            return 0;
+        }
+        const fixByRef = new Map();
+        for (const f of fixes) {
+            const k = String(f.reference_number || '').trim().toLowerCase();
+            if (k) fixByRef.set(k, f);
+        }
+
+        let updatedCount = 0;
+        const updatedRowsForDb = [];
+        this.foreignTransactions = this.foreignTransactions.map((row, idx) => {
+            const refKey = String(row.reference_number || '').trim().toLowerCase();
+            const txRefKey = String(row.transaction_ref || '').trim().toLowerCase();
+            const fix = fixByRef.get(refKey) || (txRefKey ? fixByRef.get(txRefKey) : null);
+            if (!fix) return row;
+
+            const next = { ...row };
+            let changed = false;
+            if (fix.correct_id && String(fix.correct_id).trim() && String(fix.correct_id).trim() !== String(row.student_id || '').trim()) {
+                next.student_id = String(fix.correct_id).trim();
+                next.id_status = validateID(next.student_id);
+                next.match_source = 'manual';
+                changed = true;
+            }
+            if (fix.item_name && String(fix.item_name).trim() && String(fix.item_name).trim() !== String(row.description || '').trim()) {
+                next.description = String(fix.item_name).trim();
+                next.item_name = next.description;
+                changed = true;
+            }
+            if (fix.mapping && String(fix.mapping).trim() && String(fix.mapping).trim() !== String(row.mapping || '').trim()) {
+                next.mapping = String(fix.mapping).trim();
+                changed = true;
+            }
+            if (fix.second_mapping && String(fix.second_mapping).trim() && String(fix.second_mapping).trim() !== String(row.second_mapping || '').trim()) {
+                next.second_mapping = String(fix.second_mapping).trim();
+                changed = true;
+            }
+
+            if (changed) {
+                updatedCount++;
+                updatedRowsForDb.push(next);
+            }
+            return this.normalizeForeignTransactionRow(next, idx);
+        });
+
+        if (updatedCount > 0) {
+            this.persistForeignTransactionsLocal();
+            this.applyForeignFilters();
+            try {
+                for (const r of updatedRowsForDb) {
+                    await supabase.from('foreign_transactions').update({
+                        student_id: r.student_id,
+                        description: r.description,
+                        id_status: r.id_status,
+                        match_source: r.match_source
+                    }).eq('reference_number', r.reference_number);
+                }
+            } catch (_e) {
+                // ignore if table not migrated yet
+            }
+        }
+        return updatedCount;
     }
 
     initForeignTransactions() {
@@ -10807,9 +10966,27 @@ class App {
             target.match_source = newId ? 'manual' : 'unmatched';
         });
 
-        // Also store in this.fixes if valid so future imports or auto-fixes remember this reference
-        if (newId && this.fixes) {
-            this.fixes[ref] = newId;
+        // Also sync with Manual Fixes (this.allFixesData + manual_fixes table) so bulk/manual fixes stay unified
+        if (newId) {
+            const fixRecord = {
+                reference_number: ref,
+                correct_id: newId,
+                item_name: null,
+                mapping: DEFAULT_FOREIGN_MAPPING,
+                second_mapping: null
+            };
+            if (Array.isArray(this.allFixesData)) {
+                const key = String(ref).trim().toLowerCase();
+                this.allFixesData = this.allFixesData.filter(f => String(f.reference_number || '').trim().toLowerCase() !== key);
+                this.allFixesData.push(fixRecord);
+                this.allFixesData.sort((a, b) => String(a.reference_number || '').localeCompare(String(b.reference_number || '')));
+                this.updateFixesStatsAndDropdowns(this.allFixesData);
+            }
+            try {
+                await supabase.from('manual_fixes').upsert([fixRecord], { onConflict: 'reference_number' });
+            } catch (_e) {
+                // ignore if offline
+            }
         }
 
         this.persistForeignTransactionsLocal();
