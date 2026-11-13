@@ -21,7 +21,11 @@ import {
     dateToExcelSerial,
     calculateSettlementDate,
     isSameDaySettlementBank,
-    resolveErpJournalDate
+    resolveErpJournalDate,
+    normalizeStudentIdValue,
+    normalizePhoneKey,
+    buildStudentLookupIndex,
+    matchTransactionToStudent
 } from './rules.js';
 import {
     parseBankStatementGrid,
@@ -6848,45 +6852,30 @@ class App {
             links.forEach(l => {
                 linksMap[l.payment_reference_number] = l;
             });
-            
-            const studentMobileMap = new Map();
-            const studentIdMap = new Map();
-            const studentEmailMap = new Map();
-            const studentNameMap = new Map();
-            const studentNationalIdMap = new Map();
-            students.forEach(s => {
-                if (s.student_id) {
-                    const rawSid = String(s.student_id).trim();
-                    studentIdMap.set(rawSid, s);
-                    const normSid = this.normalizeStudentId(rawSid);
-                    if (normSid) studentIdMap.set(normSid, s);
-                }
-                if (s.email) studentEmailMap.set(String(s.email).toLowerCase().trim(), s);
-                if (s.full_name) studentNameMap.set(String(s.full_name).toLowerCase().trim(), s);
-                if (s.national_id) studentNationalIdMap.set(String(s.national_id).trim(), s);
 
-                if (s.mobile) {
-                    const clean = String(s.mobile).replace(/[^0-9]/g, '');
-                    if (clean.length >= 10) studentMobileMap.set(clean.slice(-10), s);
-                }
-                if (s.guardian_mobile) {
-                    const clean = String(s.guardian_mobile).replace(/[^0-9]/g, '');
-                    if (clean.length >= 10 && !studentMobileMap.has(clean.slice(-10))) {
-                        studentMobileMap.set(clean.slice(-10), s);
-                    }
+            const fixesMap = new Map();
+            (this.allFixesData || []).forEach(f => {
+                if (f && f.reference_number) {
+                    fixesMap.set(String(f.reference_number).trim(), f);
                 }
             });
 
-            // Initialize AI Fuzzy Matcher for Names only when Name Matching is enabled
-            let nameFuse = null;
-            const fuzzyCache = new Map();
-            if (enableNameMatch && typeof Fuse !== 'undefined') {
-                nameFuse = new Fuse(students, {
-                    keys: ['full_name'],
-                    includeScore: true,
-                    threshold: 0.20 // Allows for typos, missing middle names, etc.
-                });
+            // Detect Fawry kiosk / shared terminal mobile numbers (phones appearing across 3+ distinct student names/IDs)
+            const mobileIdentityBuckets = new Map();
+            for (const tx of filteredTx) {
+                const pk = normalizePhoneKey(tx.customer_mobile);
+                if (!pk) continue;
+                const sig = String(tx.student_id || tx.original_student_id || tx.reference_number || '').trim().toLowerCase();
+                if (!sig) continue;
+                if (!mobileIdentityBuckets.has(pk)) mobileIdentityBuckets.set(pk, new Set());
+                mobileIdentityBuckets.get(pk).add(sig);
             }
+            const sharedMobileSet = new Set();
+            for (const [pk, sigSet] of mobileIdentityBuckets.entries()) {
+                if (sigSet.size >= 3) sharedMobileSet.add(pk);
+            }
+
+            const studentLookupIndex = buildStudentLookupIndex(students);
 
             this.automatchProposals = [];
 
@@ -6902,136 +6891,17 @@ class App {
                 }
 
                 const link = linksMap[tx.reference_number];
+                const existingFix = fixesMap.get(String(tx.reference_number || '').trim()) || null;
                 const rawTxSid = tx.student_id ? String(tx.student_id).trim() : '';
-                const cleanTxSidDigits = rawTxSid.replace(/[^0-9]/g, '');
-                let proposedStudent = null;
-                let matchReason = '';
-                let confidenceTier = 'unmatched';
 
-                // Try 1a: ID in Link Info
-                if (link && link.custom_input_value) {
-                    const rawInput = String(link.custom_input_value).trim();
-                    proposedStudent = studentIdMap.get(rawInput) || studentIdMap.get(this.normalizeStudentId(rawInput));
-                    if (proposedStudent) {
-                        matchReason = 'Found exact ID in Link Info';
-                        confidenceTier = 'high';
-                    }
-                }
+                const { proposedStudent, matchReason, confidenceTier } = matchTransactionToStudent(tx, {
+                    index: studentLookupIndex,
+                    link,
+                    existingFix,
+                    enableNameMatch: Boolean(enableNameMatch),
+                    sharedMobileSet
+                });
 
-                // Try 1b: Normalized / 0-padded Student ID directly in Transaction student_id field
-                if (!proposedStudent && rawTxSid) {
-                    proposedStudent = studentIdMap.get(rawTxSid) ||
-                        studentIdMap.get(this.normalizeStudentId(rawTxSid)) ||
-                        (cleanTxSidDigits.length >= 4 && cleanTxSidDigits.length <= 9 ? studentIdMap.get(this.normalizeStudentId(cleanTxSidDigits)) : null);
-                    if (proposedStudent) {
-                        matchReason = 'Normalized Student ID in Transaction';
-                        confidenceTier = 'high';
-                    }
-                }
-
-                // Try 2a: Email in Link Info
-                if (!proposedStudent && link && link.customer_email) {
-                    proposedStudent = studentEmailMap.get(String(link.customer_email).toLowerCase().trim());
-                    if (proposedStudent) {
-                        matchReason = 'Email matched via Link Info';
-                        confidenceTier = 'high';
-                    }
-                }
-
-                // Try 2b: Email entered directly in Transaction student_id field
-                if (!proposedStudent && rawTxSid && rawTxSid.includes('@')) {
-                    proposedStudent = studentEmailMap.get(rawTxSid.toLowerCase());
-                    if (proposedStudent) {
-                        matchReason = 'Email entered in Transaction ID field';
-                        confidenceTier = 'high';
-                    }
-                }
-
-                // Try 3a: National ID in Link Info
-                if (!proposedStudent && link && link.customer_national_id) {
-                    proposedStudent = studentNationalIdMap.get(String(link.customer_national_id).trim());
-                    if (proposedStudent) {
-                        matchReason = 'National ID matched via Link Info';
-                        confidenceTier = 'high';
-                    }
-                }
-
-                // Try 3b: National ID / Passport entered directly in Transaction student_id field
-                if (!proposedStudent && rawTxSid && rawTxSid.length >= 7) {
-                    proposedStudent = studentNationalIdMap.get(rawTxSid) ||
-                        (cleanTxSidDigits.length >= 14 ? studentNationalIdMap.get(cleanTxSidDigits) : null);
-                    if (proposedStudent) {
-                        matchReason = 'National ID entered in Transaction ID field';
-                        confidenceTier = 'high';
-                    }
-                }
-
-                // Try 4a: Phone in Link Info
-                if (!proposedStudent && link && link.customer_mobile) {
-                    const cleanMobile = String(link.customer_mobile).replace(/[^0-9]/g, '');
-                    if (cleanMobile.length >= 10) proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
-                    if (proposedStudent) {
-                        matchReason = 'Phone number matched via Link Info';
-                        confidenceTier = 'phone';
-                    }
-                }
-                // Try 4b: Phone in Transaction customer_mobile
-                if (!proposedStudent && tx.customer_mobile) {
-                    const cleanMobile = String(tx.customer_mobile).replace(/[^0-9]/g, '');
-                    if (cleanMobile.length >= 10) proposedStudent = studentMobileMap.get(cleanMobile.slice(-10));
-                    if (proposedStudent) {
-                        matchReason = 'Phone number matched via Transaction data';
-                        confidenceTier = 'phone';
-                    }
-                }
-                // Try 4c: Phone number entered directly in Transaction student_id field
-                if (!proposedStudent && cleanTxSidDigits.length >= 10 && cleanTxSidDigits.length <= 13) {
-                    proposedStudent = studentMobileMap.get(cleanTxSidDigits.slice(-10));
-                    if (proposedStudent) {
-                        matchReason = 'Phone number entered in Transaction ID field';
-                        confidenceTier = 'phone';
-                    }
-                }
-
-                // Try 5: Name (Link & Transaction)
-                if (!proposedStudent && enableNameMatch) {
-                    let searchStr = '';
-                    if (link && link.customer_name) {
-                        searchStr = String(link.customer_name).trim();
-                        proposedStudent = studentNameMap.get(searchStr.toLowerCase());
-                        if (proposedStudent) {
-                            matchReason = 'Exact Name matched via Link Info';
-                            confidenceTier = 'name';
-                        }
-                    }
-                    if (!proposedStudent && rawTxSid && /[a-zA-Z]/.test(rawTxSid) && !rawTxSid.includes('@') && rawTxSid.length > 3) {
-                        searchStr = rawTxSid;
-                        proposedStudent = studentNameMap.get(searchStr.toLowerCase());
-                        if (proposedStudent) {
-                            matchReason = 'Exact Name matched via Transaction data';
-                            confidenceTier = 'name';
-                        }
-                    }
-
-                    // --- FUZZY MATCH LOGIC (with memoization cache) ---
-                    if (!proposedStudent && searchStr && nameFuse) {
-                        const cacheKey = searchStr.toLowerCase();
-                        let bestMatch = fuzzyCache.get(cacheKey);
-                        if (bestMatch === undefined) {
-                            const results = nameFuse.search(searchStr);
-                            bestMatch = results.length > 0 ? results[0] : null;
-                            fuzzyCache.set(cacheKey, bestMatch);
-                        }
-                        // 0.0 is a perfect match; anything scoring below 0.20 is accepted
-                        if (bestMatch && bestMatch.score < 0.20) {
-                            proposedStudent = bestMatch.item;
-                            const confidence = Math.round((1 - bestMatch.score) * 100);
-                            matchReason = `Fuzzy Name Match (Confidence: ${confidence}%): "${proposedStudent.full_name}"`;
-                            confidenceTier = 'name';
-                        }
-                    }
-                }
-                
                 // Track for export & display
                 const proposalTx = {
                     tx_id: tx.id,
@@ -7052,6 +6922,23 @@ class App {
                 };
 
                 this.automatchProposals.push(proposalTx);
+            }
+
+            // Second-pass sibling propagation: if one line item of a multi-item reference matched,
+            // propagate that match to any unmatched sibling line item sharing the same reference_number
+            const matchedByRef = new Map();
+            for (const p of this.automatchProposals) {
+                if (p.proposedStudent && p.original_ref && !matchedByRef.has(p.original_ref)) {
+                    matchedByRef.set(p.original_ref, p);
+                }
+            }
+            for (const p of this.automatchProposals) {
+                if (!p.proposedStudent && p.original_ref && matchedByRef.has(p.original_ref)) {
+                    const sib = matchedByRef.get(p.original_ref);
+                    p.proposedStudent = sib.proposedStudent;
+                    p.confidenceTier = sib.confidenceTier;
+                    p.matchReason = `${sib.matchReason} (Same Order Reference)`;
+                }
             }
 
             // Sort proposals by confidence tier priority: high -> phone -> name -> unmatched
@@ -7409,21 +7296,31 @@ class App {
 
             for (const proposal of selectedProposals) {
                 const tx_id = proposal.tx_id;
-                const sid = proposal.proposedStudent.student_id;
-                if (!updateGroups[sid]) updateGroups[sid] = [];
-                updateGroups[sid].push(tx_id);
+                const sid = normalizeStudentIdValue(proposal.proposedStudent.student_id) || proposal.proposedStudent.student_id;
+                if (!updateGroups[sid]) updateGroups[sid] = new Set();
+                updateGroups[sid].add(tx_id);
+
+                // Also include any unlocked sibling rows in automatchProposals that share the same reference_number
+                for (const sib of (this.automatchProposals || [])) {
+                    if (sib.original_ref && sib.original_ref === proposal.original_ref && !sib.locked) {
+                        updateGroups[sid].add(sib.tx_id);
+                    }
+                }
                 
                 manualFixesToInsert.push({
                     reference_number: proposal.original_ref,
                     correct_id: sid
                 });
 
-                appliedRefs.push(proposal.original_ref);
+                if (!appliedRefs.includes(proposal.original_ref)) {
+                    appliedRefs.push(proposal.original_ref);
+                }
             }
 
             // Execute batched updates concurrently across student groups
             const txUpdateTasks = [];
-            for (const [sid, txIds] of Object.entries(updateGroups)) {
+            for (const [sid, txIdSet] of Object.entries(updateGroups)) {
+                const txIds = Array.from(txIdSet);
                 const statusVal = validateID(sid);
                 for (let i = 0; i < txIds.length; i += 300) {
                     const chunk = txIds.slice(i, i + 300);
@@ -12570,7 +12467,7 @@ class App {
                         await new Promise(resolve => setTimeout(resolve, 0));
 
                         const beforeValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
-                        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students || [])
+                        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students || [], this.allFixesData || [])
                             .map((r, i) => this.normalizeForeignTransactionRow(r, i));
                         const afterValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
                         this.persistForeignTransactionsLocal();

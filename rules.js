@@ -703,3 +703,867 @@ export function resolveErpJournalDate(row, dateMode = 'settlement', customDate =
     }
     return calculateSettlementDate(baseDate) || baseDate;
 }
+
+// ==========================================
+// High-Precision Auto-Matcher Engine
+// ==========================================
+
+const PHONETIC_TOKEN_MAP = {
+    mohammed: 'mohamed',
+    muhammad: 'mohamed',
+    mohamad: 'mohamed',
+    muhamed: 'mohamed',
+    mohmed: 'mohamed',
+    mahmod: 'mahmoud',
+    mahmud: 'mahmoud',
+    ahmad: 'ahmed',
+    yousef: 'youssef',
+    yusef: 'youssef',
+    mustafa: 'mostafa',
+    moustafa: 'mostafa',
+    hussien: 'hussein',
+    husain: 'hussein',
+    hasan: 'hassan',
+    aly: 'ali',
+    ayah: 'aya',
+    sarah: 'sara',
+    fatema: 'fatma',
+    fatima: 'fatma',
+    zeyad: 'ziad',
+    zyad: 'ziad',
+    khalid: 'khaled',
+    tarik: 'tarek',
+    kareem: 'karim',
+    ussama: 'osama',
+    osamah: 'osama',
+    eslam: 'islam',
+    iman: 'eman',
+    marawan: 'marwan'
+};
+
+const NAME_STOPWORDS = new Set([
+    'student', 'students', 'name', 'id', 'sid', 'nu', 'dr', 'eng', 'mr', 'mrs', 'ms', 'miss', 'prof',
+    'طالب', 'طالبه', 'الطالب', 'الطالبه', 'اسم', 'باسم', 'الاسم', 'دكتور', 'مهندس'
+]);
+
+const COLLEGE_KEYWORDS = [
+    { code: 'engr', patterns: ['engr', 'engineering', 'هندس'] },
+    { code: 'itcs', patterns: ['itcs', 'csce', 'computer', 'informatics', 'حاسبات'] },
+    { code: 'eas', patterns: ['eas', 'business', 'management', 'اداره', 'اعمال'] },
+    { code: 'biot', patterns: ['biot', 'biotech', 'تكنولوجيا حيويه'] },
+    { code: 'arch', patterns: ['arch', 'architecture', 'عماره'] },
+    { code: 'pharm', patterns: ['pharm', 'pharmacy', 'صيدل'] },
+    { code: 'med', patterns: ['med', 'medicine', 'طب'] },
+    { code: 'dent', patterns: ['dent', 'dental', 'اسنان'] }
+];
+
+/**
+ * Normalizes a Student ID by trimming whitespace, stripping leading zeros on 4+ digit numeric IDs,
+ * and standardizing DIP prefixes.
+ */
+export function normalizeStudentIdValue(val) {
+    if (val === null || val === undefined) return '';
+    const s = String(val).trim();
+    if (!s) return '';
+    const dipMatch = s.match(/^dip[\s\-]*(\d{10,16})$/i);
+    if (dipMatch) return 'DIP' + dipMatch[1];
+    if (/^0+\d{4,}$/.test(s)) {
+        return s.replace(/^0+/, '');
+    }
+    return s;
+}
+
+/**
+ * Normalizes a phone number into a canonical 10-digit lookup key.
+ * Rejects dummy/placeholder numbers (0000000000, 1111111111, 1234567890, etc.).
+ * When strictMobile=true (used for free-text student_id / custom_input fields), requires
+ * a valid Egyptian mobile prefix (010/011/012/015) so mistyped 10-digit Student IDs are never treated as phones.
+ */
+export function normalizePhoneKey(raw, { strictMobile = false } = {}) {
+    if (raw === null || raw === undefined) return '';
+    const digits = String(raw).replace(/[^0-9]/g, '');
+    if (digits.length < 10 || digits.length > 15) return '';
+
+    const egMatch = digits.match(/^(?:0020|20|0)?(1[0125]\d{8})$/);
+    if (strictMobile) {
+        if (!egMatch) return '';
+    }
+    const key = egMatch ? egMatch[1] : digits.slice(-10);
+
+    // Reject dummy/repeating/sequential placeholders
+    const uniqueDigits = new Set(key.split('')).size;
+    if (uniqueDigits < 3) return '';
+    if (key === '1234567890' || key === '0123456789' || key === '9876543210') return '';
+    return key;
+}
+
+/**
+ * Normalizes a National ID or Passport string for exact lookup, rejecting placeholders.
+ */
+export function normalizeNationalIdKey(raw) {
+    if (raw === null || raw === undefined) return '';
+    const clean = String(raw).trim().replace(/[\s\-]+/g, '').toUpperCase();
+    if (clean.length < 7 || clean.length > 20) return '';
+    const digitCount = (clean.match(/\d/g) || []).length;
+    if (digitCount < 5) return '';
+    if (new Set(clean.split('')).size < 3) return '';
+    return clean;
+}
+
+/**
+ * Normalizes Arabic & English person names for high-accuracy matching:
+ * - Normalizes Arabic presentation forms, Alef/Yaa/Taa-Marbuta, and diacritics
+ * - Removes titles/labels and punctuation
+ * - Merges compound Egyptian name prefixes/suffixes (Abdel Rahman -> abdelrahman, عبد الرحمن -> عبدالرحمن, etc.)
+ * - Normalizes common English transliteration variants (Mohammed -> mohamed, Ahmad -> ahmed, etc.)
+ */
+export function normalizeAutoMatchName(str) {
+    if (!str) return '';
+    let s = String(str);
+    if (/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(s)) {
+        s = s.normalize('NFKC');
+    }
+    s = s
+        .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+        .replace(/[أإآٱ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ي')
+        .toLowerCase()
+        .replace(/[^\u0600-\u06FFa-z\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!s) return '';
+
+    // Merge common compound Arabic & English name parts so token positions align consistently
+    s = s
+        .replace(/\b(abd)\s+(el|al)\s+([a-z]{3,})\b/g, 'abdel$3')
+        .replace(/\b(abdel|abdul)\s+([a-z]{3,})\b/g, 'abdel$2')
+        .replace(/\b(el|al)\s+([a-z]{3,})\b/g, 'el$2')
+        .replace(/\b([a-z]{3,})\s+(el|al)\s*(din|deen)\b/g, '$1eldin')
+        .replace(/\b(abu|abo)\s+([a-z]{3,})\b/g, 'abu$2')
+        .replace(/(?:^|\s)عبد\s+ال(\S+)/g, ' عبدال$1')
+        .replace(/(?:^|\s)ابو\s+(\S+)/g, ' ابو$1')
+        .replace(/(\S+)\s+الدين(?=\s|$)/g, '$1الدين')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const tokens = s
+        .split(' ')
+        .filter(t => t.length >= 2 && !NAME_STOPWORDS.has(t))
+        .map(t => PHONETIC_TOKEN_MAP[t] || t);
+
+    return tokens.join(' ');
+}
+
+/**
+ * Extracts ordered candidate Student IDs from a potentially dirty input string
+ * (e.g. "221001005 - Ahmed", "00221001005", "ID: 241001700 / Fall 2025", "DIP 12345678901234").
+ */
+export function extractCandidateStudentIds(raw) {
+    if (raw === null || raw === undefined) return [];
+    const text = String(raw).trim();
+    if (!text) return [];
+
+    const out = [];
+    const add = (v) => {
+        if (!v) return;
+        const clean = String(v).trim();
+        if (clean && !out.includes(clean)) out.push(clean);
+        const norm = normalizeStudentIdValue(clean);
+        if (norm && !out.includes(norm)) out.push(norm);
+    };
+
+    // 1. Direct value & normalized value
+    add(text);
+
+    // 2. Standalone DIP IDs (even with spaces/hyphens after DIP)
+    const dipRegex = /(?:^|[^A-Za-z0-9])(DIP[\s\-]*\d{10,16})(?:$|[^A-Za-z0-9])/gi;
+    let m;
+    while ((m = dipRegex.exec(text)) !== null) {
+        add(m[1].replace(/[\s\-]+/g, '').toUpperCase());
+    }
+
+    // 3. Standalone 9-digit NU Student IDs (2xxxxxxxx) or 0-padded IDs (00221001005)
+    const nu9Regex = /(?:^|\D)(0*2\d{8})(?:\D|$)/g;
+    while ((m = nu9Regex.exec(text)) !== null) {
+        add(m[1]);
+    }
+
+    // 4. Pure numeric with spaces/hyphens (e.g. "221-001-005" or "00 12345")
+    const hasLetters = /[A-Za-z\u0600-\u06FF@]/.test(text);
+    const allDigits = text.replace(/[^0-9]/g, '');
+    if (!hasLetters && allDigits.length >= 4 && allDigits.length <= 11 && /^0*\d{4,9}$/.test(allDigits)) {
+        add(allDigits);
+    }
+
+    // 5. Embedded 4–9 digit tokens inside mixed text (excluding 4-digit calendar years 1990-2035 when text has words)
+    const numTokenRegex = /(?:^|\D)(0*\d{4,9})(?:\D|$)/g;
+    while ((m = numTokenRegex.exec(text)) !== null) {
+        const token = m[1];
+        const norm = normalizeStudentIdValue(token);
+        if (hasLetters && norm.length === 4) {
+            const yr = parseInt(norm, 10);
+            if (yr >= 1990 && yr <= 2035) continue; // Skip cohort/calendar years like "Fall 2025"
+        }
+        add(token);
+    }
+
+    return out;
+}
+
+function tokenEditDistanceLeq1(a, b) {
+    if (a === b) return true;
+    const la = a.length, lb = b.length;
+    if (Math.abs(la - lb) > 1 || Math.min(la, lb) < 5) return false;
+    let i = 0, j = 0, edits = 0;
+    while (i < la && j < lb) {
+        if (a[i] === b[j]) {
+            i++;
+            j++;
+        } else {
+            edits++;
+            if (edits > 1) return false;
+            if (la > lb) i++;
+            else if (lb > la) j++;
+            else { i++; j++; }
+        }
+    }
+    if (i < la || j < lb) edits++;
+    return edits <= 1;
+}
+
+function tokenSimilarity(a, b) {
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (tokenEditDistanceLeq1(a, b)) return 0.88;
+    const la = a.length, lb = b.length;
+    if (Math.abs(la - lb) > 2 || Math.min(la, lb) < 4) return 0;
+    const dp = Array.from({ length: la + 1 }, (_, r) => {
+        const row = new Array(lb + 1);
+        row[0] = r;
+        return row;
+    });
+    for (let c = 0; c <= lb; c++) dp[0][c] = c;
+    for (let r = 1; r <= la; r++) {
+        for (let c = 1; c <= lb; c++) {
+            const cost = a[r - 1] === b[c - 1] ? 0 : 1;
+            dp[r][c] = Math.min(dp[r - 1][c] + 1, dp[r][c - 1] + 1, dp[r - 1][c - 1] + cost);
+        }
+    }
+    const dist = dp[la][lb];
+    return Math.max(0, 1 - dist / Math.max(la, lb));
+}
+
+function detectCollegeCode(str) {
+    if (!str) return null;
+    const s = String(str).toLowerCase();
+    for (const c of COLLEGE_KEYWORDS) {
+        if (c.patterns.some(p => s.includes(p))) return c.code;
+    }
+    return null;
+}
+
+/**
+ * Builds a collision-aware lookup index over student_master records.
+ */
+export function buildStudentLookupIndex(students = []) {
+    const idMap = new Map();
+    const emailMap = new Map();
+    const nationalIdMap = new Map();
+    const directMobileMap = new Map();
+    const guardianMobileMap = new Map();
+    const exactNameMap = new Map();
+    const exactGuardianNameMap = new Map();
+    const firstTokenIndex = new Map();
+    const preparedStudents = [];
+
+    const pushUnique = (map, key, student) => {
+        if (!key) return;
+        let arr = map.get(key);
+        if (!arr) {
+            arr = [];
+            map.set(key, arr);
+        }
+        const normSid = normalizeStudentIdValue(student.student_id);
+        if (!arr.some(x => normalizeStudentIdValue(x.student_id) === normSid)) {
+            arr.push(student);
+        }
+    };
+
+    for (const s of (students || [])) {
+        if (!s || !s.student_id) continue;
+        const rawSid = String(s.student_id).trim();
+        const normSid = normalizeStudentIdValue(rawSid);
+        idMap.set(rawSid, s);
+        idMap.set(rawSid.toUpperCase(), s);
+        if (normSid) {
+            idMap.set(normSid, s);
+            idMap.set(normSid.toUpperCase(), s);
+        }
+
+        if (s.email) {
+            const em = String(s.email).toLowerCase().trim();
+            if (em.includes('@') && em.length >= 6) {
+                pushUnique(emailMap, em, s);
+            }
+        }
+
+        if (s.national_id) {
+            const nid = normalizeNationalIdKey(s.national_id);
+            if (nid) pushUnique(nationalIdMap, nid, s);
+        }
+
+        const directPhone = normalizePhoneKey(s.mobile);
+        if (directPhone) pushUnique(directMobileMap, directPhone, s);
+
+        const guardianPhone = normalizePhoneKey(s.guardian_mobile);
+        if (guardianPhone) pushUnique(guardianMobileMap, guardianPhone, s);
+
+        const normEn = normalizeAutoMatchName(s.full_name || '');
+        const normAr = normalizeAutoMatchName(s.arabic_name || '');
+        const normGuardian = normalizeAutoMatchName(s.guardian_name || '');
+        const enTokens = normEn ? normEn.split(' ') : [];
+        const arTokens = normAr ? normAr.split(' ') : [];
+        const guardianTokens = normGuardian ? normGuardian.split(' ') : [];
+
+        if (normEn && enTokens.length >= 2) pushUnique(exactNameMap, normEn, s);
+        if (normAr && arTokens.length >= 2) pushUnique(exactNameMap, normAr, s);
+        if (normGuardian && guardianTokens.length >= 3) pushUnique(exactGuardianNameMap, normGuardian, s);
+
+        const prep = {
+            student: s,
+            sid: normSid || rawSid,
+            normEn,
+            normAr,
+            normGuardian,
+            enTokens,
+            arTokens,
+            guardianTokens,
+            directPhone,
+            guardianPhone,
+            collegeCode: detectCollegeCode(`${s.college || ''} ${s.program || ''}`)
+        };
+        preparedStudents.push(prep);
+
+        if (enTokens[0]) {
+            let list = firstTokenIndex.get(enTokens[0]);
+            if (!list) { list = []; firstTokenIndex.set(enTokens[0], list); }
+            list.push(prep);
+        }
+        if (arTokens[0]) {
+            let list = firstTokenIndex.get(arTokens[0]);
+            if (!list) { list = []; firstTokenIndex.set(arTokens[0], list); }
+            list.push(prep);
+        }
+    }
+
+    return {
+        idMap,
+        emailMap,
+        nationalIdMap,
+        directMobileMap,
+        guardianMobileMap,
+        exactNameMap,
+        exactGuardianNameMap,
+        firstTokenIndex,
+        preparedStudents
+    };
+}
+
+/**
+ * Resolves a candidate list (1 or more students sharing a phone/email/name)
+ * using secondary contextual signals from the transaction and payment link.
+ */
+function resolveCandidateGroup(candidates, context) {
+    if (!candidates || candidates.length === 0) {
+        return { student: null, disambiguatedBy: null, ambiguous: false };
+    }
+    if (candidates.length === 1) {
+        return { student: candidates[0], disambiguatedBy: null, ambiguous: false };
+    }
+
+    const { nameTokensSet, txPhonesSet, txEmailsSet, txCollegeCode } = context;
+    const scored = candidates.map(student => {
+        let score = 0;
+        const reasons = [];
+
+        const sNameNorm = `${normalizeAutoMatchName(student.full_name || '')} ${normalizeAutoMatchName(student.arabic_name || '')}`.trim();
+        const sTokens = sNameNorm ? sNameNorm.split(/\s+/) : [];
+        if (sTokens.length > 0 && nameTokensSet.size > 0) {
+            if (nameTokensSet.has(sTokens[0])) {
+                score += 50;
+                reasons.push('First Name');
+            }
+            let extra = 0;
+            for (let i = 1; i < sTokens.length; i++) {
+                if (nameTokensSet.has(sTokens[i])) extra++;
+            }
+            if (extra > 0) {
+                score += extra * 25;
+                reasons.push('Family Name');
+            }
+        }
+
+        const em = student.email ? String(student.email).toLowerCase().trim() : '';
+        if (em && txEmailsSet.has(em)) {
+            score += 60;
+            reasons.push('Email');
+        }
+
+        const p1 = normalizePhoneKey(student.mobile);
+        const p2 = normalizePhoneKey(student.guardian_mobile);
+        if ((p1 && txPhonesSet.has(p1)) || (p2 && txPhonesSet.has(p2))) {
+            score += 30;
+            reasons.push('Phone');
+        }
+
+        const sCol = detectCollegeCode(`${student.college || ''} ${student.program || ''}`);
+        if (txCollegeCode && sCol && txCollegeCode === sCol) {
+            score += 25;
+            reasons.push('College/Program');
+        }
+
+        return { student, score, reason: [...new Set(reasons)].join(' + ') };
+    }).sort((a, b) => b.score - a.score);
+
+    if (scored[0].score > 0 && (scored[0].score - (scored[1]?.score || 0)) >= 20) {
+        return {
+            student: scored[0].student,
+            disambiguatedBy: scored[0].reason,
+            ambiguous: false
+        };
+    }
+
+    return { student: null, disambiguatedBy: null, ambiguous: true };
+}
+
+/**
+ * Matches an ordered 3+ token query name against a student's 3+ token full name
+ * (e.g. "Aya Ramadan Rashed" -> "Aya Ramadan Mohamed Rashed"), requiring:
+ * - First name token (pos 0) and Father's name token (pos 1) to match in order
+ * - All remaining query tokens to match in strictly increasing order.
+ */
+function scoreOrderedNameTokens(qTokens, tTokens) {
+    if (!qTokens || !tTokens || qTokens.length < 3 || tTokens.length < 3) return 0;
+    if (qTokens.length > tTokens.length) return 0;
+
+    // Position 0 (Given name) and Position 1 (Father's name) must match
+    const sim0 = tokenSimilarity(qTokens[0], tTokens[0]);
+    if (sim0 < 0.85) return 0;
+    const sim1 = tokenSimilarity(qTokens[1], tTokens[1]);
+    if (sim1 < 0.85) return 0;
+
+    let tIdx = 2;
+    let simSum = sim0 + sim1;
+    for (let qIdx = 2; qIdx < qTokens.length; qIdx++) {
+        const qt = qTokens[qIdx];
+        let foundSim = 0;
+        while (tIdx < tTokens.length) {
+            const s = tokenSimilarity(qt, tTokens[tIdx]);
+            tIdx++;
+            if (s >= 0.84) {
+                foundSim = s;
+                break;
+            }
+        }
+        if (!foundSim) return 0;
+        simSum += foundSim;
+    }
+
+    const avgSim = simSum / qTokens.length;
+    const coverageBonus = (qTokens.length / Math.max(qTokens.length, tTokens.length)) * 0.08;
+    // Slight bonus when the last token of query matches the last token (family surname) of target
+    const lastMatches = tokenSimilarity(qTokens[qTokens.length - 1], tTokens[tTokens.length - 1]) >= 0.85 ? 0.04 : 0;
+    return Math.min(0.99, avgSim * 0.88 + coverageBonus + lastMatches);
+}
+
+/**
+ * High-precision single-transaction matcher used by Auto Matcher.
+ */
+export function matchTransactionToStudent(tx, {
+    index,
+    link = null,
+    existingFix = null,
+    enableNameMatch = false,
+    sharedMobileSet = null
+} = {}) {
+    if (!tx || !index) {
+        return { proposedStudent: null, matchReason: '', confidenceTier: 'unmatched' };
+    }
+
+    const rawTxSid = tx.student_id ? String(tx.student_id).trim() : '';
+    const origTxSid = tx.original_student_id ? String(tx.original_student_id).trim() : '';
+    const customInput = link?.custom_input_value ? String(link.custom_input_value).trim() : '';
+
+    // Gather contextual signals for sibling/collision disambiguation
+    const nameCandidateStrings = [];
+    if (link?.customer_name) nameCandidateStrings.push({ text: String(link.customer_name).trim(), source: 'Link Info' });
+    if (rawTxSid && /[A-Za-z\u0600-\u06FF]/.test(rawTxSid) && !rawTxSid.includes('@')) {
+        nameCandidateStrings.push({ text: rawTxSid, source: 'Transaction data' });
+    }
+    if (origTxSid && origTxSid !== rawTxSid && /[A-Za-z\u0600-\u06FF]/.test(origTxSid) && !origTxSid.includes('@')) {
+        nameCandidateStrings.push({ text: origTxSid, source: 'Original Transaction ID' });
+    }
+    if (customInput && /[A-Za-z\u0600-\u06FF]/.test(customInput) && !customInput.includes('@')) {
+        nameCandidateStrings.push({ text: customInput, source: 'Link Info' });
+    }
+
+    const nameTokensSet = new Set();
+    for (const nc of nameCandidateStrings) {
+        const norm = normalizeAutoMatchName(nc.text);
+        if (norm) norm.split(' ').forEach(t => nameTokensSet.add(t));
+    }
+
+    const txEmailsSet = new Set();
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    for (const src of [link?.customer_email, customInput, rawTxSid, origTxSid]) {
+        if (!src) continue;
+        const matches = String(src).toLowerCase().match(emailRegex);
+        if (matches) matches.forEach(e => txEmailsSet.add(e.trim()));
+    }
+
+    const txPhonesSet = new Set();
+    for (const p of [
+        normalizePhoneKey(link?.customer_mobile),
+        normalizePhoneKey(customInput, { strictMobile: true }),
+        normalizePhoneKey(rawTxSid, { strictMobile: true }),
+        normalizePhoneKey(origTxSid, { strictMobile: true }),
+        normalizePhoneKey(tx.customer_mobile)
+    ]) {
+        if (p) txPhonesSet.add(p);
+    }
+
+    const txCollegeCode = detectCollegeCode(`${tx.item_name || ''} ${tx.mapping || ''} ${tx.second_mapping || ''}`);
+    const context = { nameTokensSet, txPhonesSet, txEmailsSet, txCollegeCode };
+
+    // Priority 0: Existing Manual Fix for Reference
+    if (existingFix && existingFix.correct_id) {
+        for (const candId of extractCandidateStudentIds(existingFix.correct_id)) {
+            const st = index.idMap.get(candId) || index.idMap.get(candId.toUpperCase());
+            if (st) {
+                return {
+                    proposedStudent: st,
+                    matchReason: 'Existing Manual Fix for Reference',
+                    confidenceTier: 'high'
+                };
+            }
+        }
+    }
+
+    // Priority 1a: Student ID in Link Info (exact or embedded token)
+    if (customInput) {
+        for (const candId of extractCandidateStudentIds(customInput)) {
+            const st = index.idMap.get(candId) || index.idMap.get(candId.toUpperCase());
+            if (st) {
+                return {
+                    proposedStudent: st,
+                    matchReason: 'Found exact ID in Link Info',
+                    confidenceTier: 'high'
+                };
+            }
+        }
+    }
+
+    // Priority 1b: Student ID in Transaction student_id or original_student_id (normalized / 0-padded / embedded)
+    for (const sidField of [rawTxSid, origTxSid]) {
+        if (!sidField) continue;
+        for (const candId of extractCandidateStudentIds(sidField)) {
+            const st = index.idMap.get(candId) || index.idMap.get(candId.toUpperCase());
+            if (st) {
+                return {
+                    proposedStudent: st,
+                    matchReason: 'Normalized Student ID in Transaction',
+                    confidenceTier: 'high'
+                };
+            }
+        }
+    }
+
+    // Priority 2a & 2b: Email in Link Info or Transaction ID field
+    const tryEmailMatch = (rawStr, reasonLabel) => {
+        if (!rawStr) return null;
+        const foundEmails = String(rawStr).toLowerCase().match(emailRegex) || [];
+        for (const em of foundEmails) {
+            const cands = index.emailMap.get(em.trim());
+            const resolved = resolveCandidateGroup(cands, context);
+            if (resolved.student) {
+                return {
+                    proposedStudent: resolved.student,
+                    matchReason: resolved.disambiguatedBy ? `${reasonLabel} (${resolved.disambiguatedBy})` : reasonLabel,
+                    confidenceTier: 'high'
+                };
+            }
+            // Also check if university email local-part contains a 9-digit NU student ID
+            if (em.endsWith('@nu.edu.eg')) {
+                const localPart = em.split('@')[0];
+                for (const candId of extractCandidateStudentIds(localPart)) {
+                    const st = index.idMap.get(candId);
+                    if (st) {
+                        return {
+                            proposedStudent: st,
+                            matchReason: `${reasonLabel} (ID in NU Email)`,
+                            confidenceTier: 'high'
+                        };
+                    }
+                }
+            }
+        }
+        return null;
+    };
+
+    const emailLinkHit = tryEmailMatch(link?.customer_email, 'Email matched via Link Info') ||
+        tryEmailMatch(customInput, 'Email matched via Link Info');
+    if (emailLinkHit) return emailLinkHit;
+
+    const emailTxHit = tryEmailMatch(rawTxSid, 'Email entered in Transaction ID field') ||
+        tryEmailMatch(origTxSid, 'Email entered in Transaction ID field');
+    if (emailTxHit) return emailTxHit;
+
+    // Priority 3a & 3b: National ID in Link Info or Transaction ID field
+    const extractNationalIdCandidates = (rawStr) => {
+        if (!rawStr) return [];
+        const list = [];
+        const direct = normalizeNationalIdKey(rawStr);
+        if (direct) list.push(direct);
+        const digitsOnly = String(rawStr).replace(/[^0-9]/g, '');
+        if (digitsOnly.length === 14) list.push(digitsOnly);
+        const egNidRegex = /(?:^|\D)([23]\d{13})(?:\D|$)/g;
+        let m;
+        while ((m = egNidRegex.exec(String(rawStr))) !== null) {
+            if (!list.includes(m[1])) list.push(m[1]);
+        }
+        return list;
+    };
+
+    const tryNationalIdMatch = (rawStr, reasonLabel) => {
+        for (const nid of extractNationalIdCandidates(rawStr)) {
+            const cands = index.nationalIdMap.get(nid);
+            const resolved = resolveCandidateGroup(cands, context);
+            if (resolved.student) {
+                return {
+                    proposedStudent: resolved.student,
+                    matchReason: resolved.disambiguatedBy ? `${reasonLabel} (${resolved.disambiguatedBy})` : reasonLabel,
+                    confidenceTier: 'high'
+                };
+            }
+        }
+        return null;
+    };
+
+    const nidLinkHit = tryNationalIdMatch(link?.customer_national_id, 'National ID matched via Link Info') ||
+        tryNationalIdMatch(customInput, 'National ID matched via Link Info');
+    if (nidLinkHit) return nidLinkHit;
+
+    const nidTxHit = tryNationalIdMatch(rawTxSid, 'National ID entered in Transaction ID field') ||
+        tryNationalIdMatch(origTxSid, 'National ID entered in Transaction ID field');
+    if (nidTxHit) return nidTxHit;
+
+    // Helper: evaluate name candidates (used both for Priority 5 and to guard Priority 4 against kiosk-phone conflicts)
+    const findBestNameMatch = () => {
+        for (const { text, source } of nameCandidateStrings) {
+            const normQuery = normalizeAutoMatchName(text);
+            if (!normQuery) continue;
+            const qTokens = normQuery.split(' ').filter(t => t.length >= 2);
+            if (qTokens.length < 2) continue;
+
+            // 5a: Exact normalized full name (English or Arabic)
+            const exactCands = index.exactNameMap.get(normQuery);
+            if (exactCands && exactCands.length > 0) {
+                const resolved = resolveCandidateGroup(exactCands, context);
+                if (resolved.student) {
+                    return {
+                        student: resolved.student,
+                        matchReason: `Exact Name matched via ${source}`,
+                        score: 1.0,
+                        isExact: true
+                    };
+                }
+            }
+
+            // 5b: Ordered 3+ token subsequence match (e.g. 3-part name vs 4-part official name)
+            if (qTokens.length >= 3) {
+                const pool = index.firstTokenIndex.get(qTokens[0]) || index.preparedStudents;
+                let bestCand = null;
+                let bestScore = 0;
+                let secondBestScore = 0;
+
+                for (const cand of pool) {
+                    const sEn = scoreOrderedNameTokens(qTokens, cand.enTokens);
+                    const sAr = scoreOrderedNameTokens(qTokens, cand.arTokens);
+                    let sc = Math.max(sEn, sAr);
+                    if (sc > 0 && txCollegeCode && cand.collegeCode && txCollegeCode === cand.collegeCode) {
+                        sc = Math.min(0.99, sc + 0.03);
+                    }
+                    if (sc > bestScore) {
+                        secondBestScore = bestScore;
+                        bestScore = sc;
+                        bestCand = cand;
+                    } else if (sc > secondBestScore && cand.sid !== bestCand?.sid) {
+                        secondBestScore = sc;
+                    }
+                }
+
+                if (bestCand && bestScore >= 0.85 && (bestScore - secondBestScore) >= 0.06) {
+                    const confidence = Math.round(bestScore * 100);
+                    return {
+                        student: bestCand.student,
+                        matchReason: `Full Name matched via ${source} (${confidence}%): "${bestCand.student.full_name || bestCand.student.arabic_name}"`,
+                        score: bestScore,
+                        isExact: false
+                    };
+                }
+            }
+
+            // 5c: Exact 3+ token Guardian Name match
+            if (qTokens.length >= 3) {
+                const guardCands = index.exactGuardianNameMap.get(normQuery);
+                if (guardCands && guardCands.length > 0) {
+                    const resolved = resolveCandidateGroup(guardCands, context);
+                    if (resolved.student) {
+                        return {
+                            student: resolved.student,
+                            matchReason: `Guardian Name matched via ${source}`,
+                            score: 0.92,
+                            isExact: true
+                        };
+                    }
+                }
+            }
+
+            // 5d: Guarded Fuzzy Match on 3+ token names (catches 1-2 character spelling typos while blocking 2-word false positives)
+            if (qTokens.length >= 3 && index.preparedStudents.length > 0) {
+                let bestCand = null;
+                let bestSim = 0;
+                let secondSim = 0;
+
+                for (const cand of index.preparedStudents) {
+                    for (const tTokens of [cand.enTokens, cand.arTokens]) {
+                        if (!tTokens || tTokens.length < 3) continue;
+                        const s0 = tokenSimilarity(qTokens[0], tTokens[0]);
+                        if (s0 < 0.80) continue;
+                        const s1 = tokenSimilarity(qTokens[1], tTokens[1]);
+                        if (s1 < 0.80) continue;
+
+                        const compareLen = Math.min(qTokens.length, tTokens.length);
+                        let sum = s0 + s1;
+                        let ok = true;
+                        for (let i = 2; i < compareLen; i++) {
+                            const si = tokenSimilarity(qTokens[i], tTokens[i]);
+                            const siLast = (i === qTokens.length - 1) ? tokenSimilarity(qTokens[i], tTokens[tTokens.length - 1]) : 0;
+                            const bestTokenSim = Math.max(si, siLast);
+                            if (bestTokenSim < 0.78) {
+                                ok = false;
+                                break;
+                            }
+                            sum += bestTokenSim;
+                        }
+                        if (!ok) continue;
+                        const avg = sum / compareLen;
+                        if (avg > bestSim) {
+                            if (cand.sid !== bestCand?.sid) secondSim = bestSim;
+                            bestSim = avg;
+                            bestCand = cand;
+                        } else if (avg > secondSim && cand.sid !== bestCand?.sid) {
+                            secondSim = avg;
+                        }
+                    }
+                }
+
+                if (bestCand && bestSim >= 0.86 && (bestSim - secondSim) >= 0.04) {
+                    const confidence = Math.round(bestSim * 100);
+                    return {
+                        student: bestCand.student,
+                        matchReason: `Fuzzy Name Match (Confidence: ${confidence}%): "${bestCand.student.full_name || bestCand.student.arabic_name}"`,
+                        score: bestSim,
+                        isExact: false
+                    };
+                }
+            }
+        }
+        return null;
+    };
+
+    // Priority 4a, 4b, 4c: Phone number matching (Direct Student Mobile prioritized over Guardian Mobile)
+    const phoneSources = [
+        { key: normalizePhoneKey(link?.customer_mobile), label: 'Phone number matched via Link Info', isTerminalMobile: false },
+        { key: normalizePhoneKey(customInput, { strictMobile: true }), label: 'Phone number matched via Link Info', isTerminalMobile: false },
+        { key: normalizePhoneKey(rawTxSid, { strictMobile: true }), label: 'Phone number entered in Transaction ID field', isTerminalMobile: false },
+        { key: normalizePhoneKey(origTxSid, { strictMobile: true }), label: 'Phone number entered in Transaction ID field', isTerminalMobile: false },
+        { key: normalizePhoneKey(tx.customer_mobile), label: 'Phone number matched via Transaction data', isTerminalMobile: true }
+    ];
+
+    for (const src of phoneSources) {
+        if (!src.key) continue;
+
+        // Try direct student mobile first, then guardian mobile
+        const directCands = index.directMobileMap.get(src.key);
+        const guardianCands = index.guardianMobileMap.get(src.key);
+        let resolved = resolveCandidateGroup(directCands, context);
+        let isGuardian = false;
+        if (!resolved.student && !resolved.ambiguous && guardianCands && guardianCands.length > 0) {
+            resolved = resolveCandidateGroup(guardianCands, context);
+            isGuardian = true;
+        }
+
+        if (resolved.student) {
+            const matchedStudent = resolved.student;
+            const sNorm = `${normalizeAutoMatchName(matchedStudent.full_name || '')} ${normalizeAutoMatchName(matchedStudent.arabic_name || '')} ${normalizeAutoMatchName(matchedStudent.guardian_name || '')}`.trim();
+            const sTokenSet = new Set(sNorm ? sNorm.split(/\s+/) : []);
+            const hasNameOverlap = nameTokensSet.size > 0 && [...nameTokensSet].some(t => sTokenSet.has(t));
+
+            // Guard against Fawry Kiosk / Third-Party Terminal Mobile conflicts:
+            // If the match came from tx.customer_mobile AND rawTxSid contains a 3+ word student name
+            // that has ZERO overlap with the phone owner, check if that name belongs to another student!
+            if (src.isTerminalMobile && !hasNameOverlap && nameTokensSet.size >= 3) {
+                const nameHit = findBestNameMatch();
+                if (nameHit && normalizeStudentIdValue(nameHit.student.student_id) !== normalizeStudentIdValue(matchedStudent.student_id)) {
+                    if (enableNameMatch) {
+                        return {
+                            proposedStudent: nameHit.student,
+                            matchReason: nameHit.matchReason,
+                            confidenceTier: 'name'
+                        };
+                    }
+                    // Do not assign Student B's named transaction to Student A's terminal phone
+                    continue;
+                }
+                if (sharedMobileSet && sharedMobileSet.has(src.key)) {
+                    continue;
+                }
+            }
+
+            let reason = src.label;
+            if (isGuardian && !reason.includes('Guardian')) {
+                reason = `${reason} (Guardian Mobile)`;
+            }
+            if (resolved.disambiguatedBy) {
+                reason = `${reason} — Disambiguated by ${resolved.disambiguatedBy}`;
+            } else if (hasNameOverlap && nameTokensSet.size >= 2) {
+                reason = `${reason} (Verified by Student Name)`;
+            }
+
+            return {
+                proposedStudent: matchedStudent,
+                matchReason: reason,
+                confidenceTier: 'phone'
+            };
+        }
+    }
+
+    // Priority 5: Name Matching (when enabled)
+    if (enableNameMatch) {
+        const nameHit = findBestNameMatch();
+        if (nameHit) {
+            return {
+                proposedStudent: nameHit.student,
+                matchReason: nameHit.matchReason,
+                confidenceTier: 'name'
+            };
+        }
+    }
+
+    return { proposedStudent: null, matchReason: '', confidenceTier: 'unmatched' };
+}

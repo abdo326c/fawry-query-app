@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
+import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows, normalizeStudentIdValue, normalizePhoneKey, normalizeAutoMatchName, extractCandidateStudentIds, buildStudentLookupIndex, matchTransactionToStudent } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
 import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates } from '../fx-rates.js';
 
@@ -501,4 +501,133 @@ test('Dip & Workshop transactions are exempt from standard Student ID validation
         { lookupMapping }
     );
     expect(resTuitionBad.idStatus).toBe('Error: ID Too Long (11 digits)');
+});
+
+test('High-precision Auto-Matcher engine handles embedded IDs, sibling phones, kiosk phones, and 3-part vs 4-part names', () => {
+    const students = [
+        {
+            student_id: '221001005',
+            full_name: 'Aya Ramadan Mohamed Rashed',
+            arabic_name: 'آية رمضان محمد راشد',
+            email: 'a.rashed@nu.edu.eg',
+            mobile: '01011112222',
+            guardian_name: 'Ramadan Mohamed Rashed',
+            guardian_mobile: '01099990000',
+            national_id: '30401011234567',
+            college: 'Engineering',
+            program: 'ENGR'
+        },
+        {
+            student_id: '241001700',
+            full_name: 'Omar Ramadan Mohamed Rashed',
+            arabic_name: 'عمر رمضان محمد راشد',
+            email: 'o.rashed@nu.edu.eg',
+            mobile: '01033334444',
+            guardian_name: 'Ramadan Mohamed Rashed',
+            guardian_mobile: '01099990000', // Shared guardian mobile with sibling Aya!
+            national_id: '30605051234567',
+            college: 'Computer Science',
+            program: 'ITCS'
+        },
+        {
+            student_id: '231000500',
+            full_name: 'Abdelrahman Mahmoud El Sayed',
+            arabic_name: 'عبد الرحمن محمود السيد',
+            email: 'abdelrahman@nu.edu.eg',
+            mobile: '01122334455',
+            guardian_mobile: '01288776655',
+            national_id: '30502021234567',
+            college: 'Business',
+            program: 'EAS'
+        },
+        {
+            student_id: '231000888',
+            full_name: 'Ahmed Mahmoud Hassan',
+            mobile: '01555667788',
+            college: 'Biotechnology',
+            program: 'BIOT'
+        },
+        {
+            student_id: '2025',
+            full_name: 'Legacy Four Digit Student',
+            mobile: '01077778888'
+        }
+    ];
+
+    const index = buildStudentLookupIndex(students);
+
+    // 1. Embedded Student ID inside dirty string ("ID: 00221001005 - Fall 2025") without matching year "2025"
+    const mEmbedded = matchTransactionToStudent(
+        { student_id: 'Cohort 2025 - ID: 00221001005', item_name: 'Tuition' },
+        { index }
+    );
+    expect(mEmbedded.proposedStudent?.student_id).toBe('221001005');
+    expect(mEmbedded.confidenceTier).toBe('high');
+
+    // Pure text with year "Fall 2025" must NOT match legacy student ID "2025"
+    const mYearOnly = matchTransactionToStudent(
+        { student_id: 'Fall 2025 Tuition', item_name: 'Tuition' },
+        { index }
+    );
+    expect(mYearOnly.proposedStudent).toBeNull();
+
+    // 2. Sibling disambiguation on shared guardian mobile (01099990000):
+    // 2a: Ambiguous when no secondary signal exists -> refuses to guess a random sibling
+    const mSiblingAmbiguous = matchTransactionToStudent(
+        { student_id: '', customer_mobile: '01099990000', item_name: 'Tuition Fees' },
+        { index }
+    );
+    expect(mSiblingAmbiguous.proposedStudent).toBeNull();
+
+    // 2b: Disambiguated by First Name in student_id ("Omar")
+    const mSiblingByName = matchTransactionToStudent(
+        { student_id: 'Omar', customer_mobile: '01099990000', item_name: 'Tuition Fees' },
+        { index }
+    );
+    expect(mSiblingByName.proposedStudent?.student_id).toBe('241001700');
+    expect(mSiblingByName.confidenceTier).toBe('phone');
+    expect(mSiblingByName.matchReason).toContain('Disambiguated');
+
+    // 2c: Disambiguated by College/Program in item_name ("ENGR EGP Cohort 2025")
+    const mSiblingByCollege = matchTransactionToStudent(
+        { student_id: '', customer_mobile: '01099990000', item_name: 'ENGR EGP Cohort 2025' },
+        { index }
+    );
+    expect(mSiblingByCollege.proposedStudent?.student_id).toBe('221001005');
+
+    // 3. Fawry Kiosk / Third-Party Terminal Mobile Conflict Guard:
+    // Terminal mobile belongs to Ahmed (01555667788), but student_id explicitly says "Aya Ramadan Rashed"
+    const mKioskOff = matchTransactionToStudent(
+        { student_id: 'Aya Ramadan Rashed', customer_mobile: '01555667788', item_name: 'Tuition' },
+        { index, enableNameMatch: false }
+    );
+    expect(mKioskOff.proposedStudent).toBeNull(); // Must NOT falsely credit Ahmed!
+
+    const mKioskOn = matchTransactionToStudent(
+        { student_id: 'Aya Ramadan Rashed', customer_mobile: '01555667788', item_name: 'Tuition' },
+        { index, enableNameMatch: true }
+    );
+    expect(mKioskOn.proposedStudent?.student_id).toBe('221001005');
+    expect(mKioskOn.confidenceTier).toBe('name');
+
+    // 4. Compound Arabic & English name normalization ("Abdel Rahman Mahmoud Elsayed")
+    const mCompoundName = matchTransactionToStudent(
+        { student_id: 'Abdel Rahman Mahmoud Elsayed', item_name: 'Tuition' },
+        { index, enableNameMatch: true }
+    );
+    expect(mCompoundName.proposedStudent?.student_id).toBe('231000500');
+    expect(mCompoundName.confidenceTier).toBe('name');
+
+    // 5. 2-word fuzzy false-positive guard ("Ahmed Mohamed" must NOT match "Ahmed Mahmoud Hassan")
+    const mTwoWordFalsePos = matchTransactionToStudent(
+        { student_id: 'Ahmed Mohamed', item_name: 'Tuition' },
+        { index, enableNameMatch: true }
+    );
+    expect(mTwoWordFalsePos.proposedStudent).toBeNull();
+
+    // 6. Dummy phone numbers (0000000000, 1234567890) and mistyped 10-digit Student IDs are rejected as phones
+    expect(normalizePhoneKey('00000000000')).toBe('');
+    expect(normalizePhoneKey('01234567890')).toBe('');
+    expect(normalizePhoneKey('2023123455', { strictMobile: true })).toBe('');
+    expect(normalizePhoneKey('01012345678', { strictMobile: true })).toBe('1012345678');
 });

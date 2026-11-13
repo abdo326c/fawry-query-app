@@ -1,4 +1,4 @@
-import { validateID, toDateOnly } from './rules.js';
+import { validateID, toDateOnly, normalizeStudentIdValue } from './rules.js';
 
 export const DEFAULT_FOREIGN_BANK = 'NuMisrUsd5';
 export const DEFAULT_FOREIGN_MAPPING = 'Tuition';
@@ -747,13 +747,15 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
     const byId = new Map();
     const preparedStudents = students.map(s => {
         const sid = String(s.student_id || '').trim();
+        const normSid = normalizeStudentIdValue(sid);
         if (sid) byId.set(sid, s);
+        if (normSid) byId.set(normSid, s);
         const normEn = normalizePersonName(s.full_name || '');
         const normAr = normalizePersonName(s.arabic_name || '');
         const normGuardian = normalizePersonName(s.guardian_name || '');
         return {
             student: s,
-            sid,
+            sid: normSid || sid,
             normEn,
             normAr,
             normGuardian,
@@ -786,20 +788,22 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
         const refKey = String(dep.reference_number || '').trim();
         const fix = fixesByRef.get(refKey);
         let currentId = String((fix && fix.correct_id) ? fix.correct_id : (dep.student_id || '')).trim();
+        const normCurrentId = normalizeStudentIdValue(currentId);
         const mappingVal = (fix && fix.mapping) ? fix.mapping : (dep.mapping || DEFAULT_FOREIGN_MAPPING);
         const secondMappingVal = (fix && fix.second_mapping) ? fix.second_mapping : (dep.second_mapping || '');
         const bankVal = dep.bank || DEFAULT_FOREIGN_BANK;
 
-        if (currentId && byId.has(currentId)) {
-            const st = byId.get(currentId);
+        if (currentId && (byId.has(currentId) || (normCurrentId && byId.has(normCurrentId)))) {
+            const st = byId.get(currentId) || byId.get(normCurrentId);
+            const resolvedSid = normCurrentId && byId.has(normCurrentId) ? normCurrentId : currentId;
             return {
                 ...dep,
-                student_id: currentId,
+                student_id: resolvedSid,
                 mapping: mappingVal,
                 second_mapping: secondMappingVal,
                 bank: bankVal,
                 matched_student_name: st.full_name || st.arabic_name || dep.matched_student_name || '',
-                id_status: validateID(currentId),
+                id_status: validateID(resolvedSid),
                 match_source: fix ? 'manual' : (dep.match_source === 'manual' ? 'manual' : 'statement_id')
             };
         }
@@ -825,6 +829,7 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
         if (queryTokens.length >= 2 && preparedStudents.length > 0) {
             let bestCandidate = null;
             let bestScore = 0;
+            let secondBestScore = 0;
 
             for (const cand of preparedStudents) {
                 if (!cand.sid) continue;
@@ -841,12 +846,15 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
                 }
 
                 if (score > bestScore) {
+                    if (cand.sid !== bestCandidate?.sid) secondBestScore = bestScore;
                     bestScore = score;
                     bestCandidate = cand;
+                } else if (score > secondBestScore && cand.sid !== bestCandidate?.sid) {
+                    secondBestScore = score;
                 }
             }
 
-            if (bestCandidate && bestScore >= 0.72) {
+            if (bestCandidate && bestScore >= 0.72 && (bestScore === 1.0 || (bestScore - secondBestScore) >= 0.05)) {
                 return {
                     ...dep,
                     student_id: bestCandidate.sid,
