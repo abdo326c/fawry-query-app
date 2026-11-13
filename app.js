@@ -3862,7 +3862,7 @@ class App {
 
                         // Also apply manual fixes to Foreign Transactions when Re-apply Rules is clicked
                         this.allFixesData = fixes;
-                        progressToast.update('Checking manual fixes for foreign transactions...');
+                        progressToast.update('Checking manual fixes for BM transactions...');
                         const foreignReapplied = await this.applyManualFixesToForeignTransactions(fixes);
 
                         if (proposals.length === 0) {
@@ -11077,7 +11077,7 @@ class App {
     async syncForeignTransactionsToSupabase({ silent = false, rows = null } = {}) {
         const sourceRows = Array.isArray(rows) ? rows : (this.foreignTransactions || []);
         if (sourceRows.length === 0) {
-            if (!silent) Toast.show('No foreign transactions available to sync.', 'warning');
+            if (!silent) Toast.show('No BM transactions available to sync.', 'warning');
             return { synced: 0, error: null };
         }
 
@@ -11770,7 +11770,7 @@ class App {
         if (syncRes.error) {
             Toast.show(`Saved ${incomingRows.length} locally, but Supabase sync failed: ${syncRes.error.message}`, 'warning');
         } else {
-            Toast.show(`Saved ${incomingRows.length} student deposits to Foreign Transactions`, 'success');
+            Toast.show(`Saved ${incomingRows.length} student deposits to BM Transactions`, 'success');
         }
     }
 
@@ -11853,7 +11853,7 @@ class App {
             tbody.innerHTML = `
                 <tr>
                     <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
-                        No foreign transactions match the current filters. Click <strong>Import Bank Statement (PDF / Excel)</strong> to load statement deposits.
+                        No BM transactions match the current filters. Click <strong>Import Bank Statement (PDF / Excel)</strong> to load statement deposits.
                     </td>
                 </tr>
             `;
@@ -12234,7 +12234,7 @@ class App {
                             <td><pre style="margin:0; font-size:0.8rem; white-space: pre-wrap;">'${escapeHTML(d.untrimmedCheck)}'</pre></td>
                         </tr>
                     `).join('')
-                    : `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No duplicate foreign transactions found.</td></tr>`;
+                    : `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No duplicate BM transactions found.</td></tr>`;
             }
 
             const btnCleanup = document.getElementById('btn-cleanup-duplicates');
@@ -12365,7 +12365,7 @@ class App {
 
     async runForeignAutoMatchNames() {
         if (!this.foreignTransactions || this.foreignTransactions.length === 0) {
-            Toast.show('No foreign transactions loaded to match', 'warning');
+            Toast.show('No BM transactions loaded to match', 'warning');
             return;
         }
         if (this._foreignAutoMatching) return;
@@ -12412,7 +12412,7 @@ class App {
     exportForeignTransactionsExcel() {
         const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
         if (!rows || rows.length === 0) {
-            Toast.show('No foreign transactions to export', 'warning');
+            Toast.show('No BM transactions to export', 'warning');
             return;
         }
         const exportData = rows.map(r => ({
@@ -12429,15 +12429,15 @@ class App {
         }));
         const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Foreign_Transactions');
-        XLSX.writeFile(wb, `Foreign_Transactions_${toDateOnly(new Date())}.xlsx`);
-        Toast.show(`Exported ${exportData.length} foreign transactions to Excel`, 'success');
+        XLSX.utils.book_append_sheet(wb, ws, 'BM_Transactions');
+        XLSX.writeFile(wb, `BM_Transactions_${toDateOnly(new Date())}.xlsx`);
+        Toast.show(`Exported ${exportData.length} BM transactions to Excel`, 'success');
     }
 
     async copyForeignTransactionsForEmail() {
         const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
         if (!rows || rows.length === 0) {
-            Toast.show('No foreign transactions to copy', 'warning');
+            Toast.show('No BM transactions to copy', 'warning');
             return;
         }
         const tsv = [
@@ -12457,7 +12457,7 @@ class App {
 
         if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(tsv);
-            Toast.show(`Copied ${rows.length} foreign transactions to clipboard`, 'success');
+            Toast.show(`Copied ${rows.length} BM transactions to clipboard`, 'success');
         }
     }
 

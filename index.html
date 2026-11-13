@@ -164,10 +164,10 @@
                         <img src="fawry-logo-light.png" alt="" class="fawry-theme-logo fawry-theme-logo-light">
                     </span> <span class="nav-label-text">Fawry Transactions</span>
                 </a>
-                <a href="#foreign-transactions" class="nav-link" data-tab="foreign-transactions" title="Foreign Transactions">
+                <a href="#foreign-transactions" class="nav-link" data-tab="foreign-transactions" title="BM Transactions">
                     <span class="nav-logo-wrap" aria-hidden="true">
                         <img src="banque-misr-emblem.png" alt="" class="fawry-theme-logo">
-                    </span> <span class="nav-label-text">Foreign Transactions</span>
+                    </span> <span class="nav-label-text">BM Transactions</span>
                 </a>
                 <a href="#settlement" class="nav-link" data-tab="settlement" title="Fawry Settlements">
                     <i data-lucide="check-circle"></i> <span class="nav-label-text">Fawry Settlements</span>
@@ -708,23 +708,23 @@
                 </div>
             </section>
 
-            <!-- Foreign Transactions (Bank Statement Student Deposit Extractor) View -->
+            <!-- BM Transactions (Bank Statement Student Deposit Extractor) View -->
             <section id="view-foreign-transactions" class="view">
                 <div class="header">
                     <div class="page-brand-header">
                         <div class="foreign-page-logo-badge" aria-hidden="true">
-                            <img src="banque-misr-logo-dark.png" alt="Banque Misr - Foreign Transactions" class="fawry-theme-logo fawry-theme-logo-dark">
-                            <img src="banque-misr-logo-light.png" alt="Banque Misr - Foreign Transactions" class="fawry-theme-logo fawry-theme-logo-light">
+                            <img src="banque-misr-logo-dark.png" alt="Banque Misr - BM Transactions" class="fawry-theme-logo fawry-theme-logo-dark">
+                            <img src="banque-misr-logo-light.png" alt="Banque Misr - BM Transactions" class="fawry-theme-logo fawry-theme-logo-light">
                         </div>
                         <div>
-                            <h1>Foreign Transactions</h1>
+                            <h1>BM Transactions</h1>
                         </div>
                     </div>
                     <div class="header-actions">
                         <button class="btn btn-primary" id="btn-show-foreign-import" title="Upload PDF, Excel, or CSV Bank Statement to extract Student Deposits">
                             <i data-lucide="upload"></i> Import Bank Statement
                         </button>
-                        <button class="btn btn-outline" id="btn-foreign-export-excel" title="Export Foreign Transactions to Excel">
+                        <button class="btn btn-outline" id="btn-foreign-export-excel" title="Export BM Transactions to Excel">
                             <i data-lucide="download"></i> Export Excel
                         </button>
                         <div class="action-dropdown-wrap">
@@ -738,7 +738,7 @@
                                 <button class="btn" id="btn-foreign-double-payments" title="Scan for potential duplicate / double payments by the same student">
                                     <i data-lucide="copy-check"></i> Double Payments
                                 </button>
-                                <button class="btn" id="btn-foreign-detect-duplicates" style="color: var(--danger);" title="Scan and remove duplicate foreign transactions">
+                                <button class="btn" id="btn-foreign-detect-duplicates" style="color: var(--danger);" title="Scan and remove duplicate BM transactions">
                                     <i data-lucide="search"></i> Detect Duplicates
                                 </button>
                             </div>
@@ -838,7 +838,7 @@
                         <tbody id="foreign-transactions-body">
                             <tr>
                                 <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
-                                    No foreign transactions loaded yet. Click <strong>Import Bank Statement (PDF / Excel)</strong> to extract student deposits from a bank statement.
+                                    No BM transactions loaded yet. Click <strong>Import Bank Statement (PDF / Excel)</strong> to extract student deposits from a bank statement.
                                 </td>
                             </tr>
                         </tbody>
@@ -2351,7 +2351,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.5.4"></script>
+    <script type="module" src="app.js?v=2.5.5"></script>
     <script defer src="ui-chrome.js?v=1.0.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">

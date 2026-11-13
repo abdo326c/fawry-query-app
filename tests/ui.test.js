@@ -1026,4 +1026,10 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(linksTbody.querySelector('.copy-link-btn')).not.toBeNull();
     expect(linksTbody.querySelector('.copy-details-btn')).toBeNull();
     expect(linksTbody.querySelector('.duplicate-link-btn')).toBeNull();
+
+    // 15. BM Transactions rename in sidebar nav & page header
+    const bmNavLink = document.querySelector('.nav-link[data-tab="foreign-transactions"]');
+    expect(bmNavLink?.querySelector('.nav-label-text')?.textContent?.trim()).toBe('BM Transactions');
+    expect(bmNavLink?.getAttribute('title')).toBe('BM Transactions');
+    expect(document.querySelector('#view-foreign-transactions h1')?.textContent?.trim()).toBe('BM Transactions');
 });
