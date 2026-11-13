@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
+import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
 import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates } from '../fx-rates.js';
 
@@ -441,4 +441,51 @@ test('FX rates support Per-Tx Value Date, Latest Daily Rate, Custom override, an
     expect(store.ratesByDate['2026-01-09'].rate).toBe(48.75);
     expect(store.ratesByDate['2026-01-10'].rate).toBe(52.5); // manual preserved
     expect(fetchedUrls.some(u => u.includes('@2026-01-09'))).toBe(true);
+});
+
+test('Dip & Workshop transactions are exempt from standard Student ID validation rules', () => {
+    expect(isIdValidationExempt('Dip & Workshop')).toBe(true);
+    expect(isIdValidationExempt({ mapping: '  dip  &  workshop ' })).toBe(true);
+    expect(isIdValidationExempt({ mapping: 'Tuition', second_mapping: 'Dip & Workshop' })).toBe(true);
+    expect(isIdValidationExempt({ mapping: 'Tuition' })).toBe(false);
+
+    // Effective status helpers treat legacy Dip & Workshop rows as Exempt & non-invalid
+    expect(getEffectiveIdStatus({ student_id: '', id_status: 'Missing ID', mapping: 'Dip & Workshop' })).toBe('Exempt');
+    expect(getEffectiveIdStatus({ student_id: 'ABC', id_status: 'Error: Text/Name detected', mapping: 'Dip & Workshop' })).toBe('Exempt');
+    expect(getEffectiveIdStatus({ student_id: '202312345', id_status: 'Valid', mapping: 'Dip & Workshop' })).toBe('Valid');
+    expect(isNonInvalidTransaction({ student_id: '', id_status: 'Missing ID', mapping: 'Dip & Workshop' })).toBe(true);
+    expect(isNonInvalidTransaction({ student_id: '', id_status: 'Missing ID', mapping: 'Tuition' })).toBe(false);
+
+    // applyBusinessRules marks Dip & Workshop without a Valid ID as 'Exempt', never Missing/Error
+    const lookupMapping = buildMappingLookup([
+        { item_name: 'AI Workshop Fee', mapping: 'Dip & Workshop', second_mapping: 'Executive Ed' },
+        { item_name: 'Tuition Fall', mapping: 'Tuition', second_mapping: 'UG' }
+    ]);
+
+    const resDipMissing = applyBusinessRules(
+        { studentId: '', itemName: 'AI Workshop Fee' },
+        { lookupMapping }
+    );
+    expect(resDipMissing.mapping).toBe('Dip & Workshop');
+    expect(resDipMissing.idStatus).toBe('Exempt');
+
+    const resDipText = applyBusinessRules(
+        { studentId: '01001234567', itemName: 'AI Workshop Fee' },
+        { lookupMapping }
+    );
+    expect(resDipText.idStatus).toBe('Exempt');
+
+    // Dip & Workshop with a valid Student ID preserves 'Valid'
+    const resDipValid = applyBusinessRules(
+        { studentId: '202312345', itemName: 'AI Workshop Fee' },
+        { lookupMapping }
+    );
+    expect(resDipValid.idStatus).toBe('Valid');
+
+    // Non-exempt Tuition transaction still validates strictly
+    const resTuitionBad = applyBusinessRules(
+        { studentId: '01001234567', itemName: 'Tuition Fall' },
+        { lookupMapping }
+    );
+    expect(resTuitionBad.idStatus).toBe('Error: ID Too Long (11 digits)');
 });

@@ -732,11 +732,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(html).not.toContain('preview.css');
     expect(html).not.toContain('preview-ui.js');
     expect(html).not.toContain('Studio Preview');
-    expect(html).toContain('styles.css?v=3.0.5');
+    expect(html).toContain('styles.css?v=3.0.6');
     expect(html).toContain('ui-chrome.js?v=1.0.0');
 
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
-    expect(swSrc).toContain('styles.css?v=3.0.5');
+    expect(swSrc).toContain('styles.css?v=3.0.6');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {
@@ -1112,6 +1112,94 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             window.app.loadUsersAndRoles = origLoadUsers;
             window.app.userRole = origUserRole;
             window.app.currentUser = origCurrentUser;
+        }
+    }
+
+    // Dip & Workshop transactions are ignored in Auto Matcher and never shown as invalid in ERP / Tx Details
+    {
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const origInvalidTx = window.app.invalidTx;
+        const origStudents = window.app.allStudentsData;
+        const origErpData = window.app.erpData;
+        const origRole = window.app.userRole;
+        try {
+            window.app.userRole = 'admin';
+            window.app.allStudentsData = [{ student_id: '202300001', full_name: 'Test Student', mobile: '01012345678', email: 's@nu.edu.eg', national_id: '29901011234567' }];
+            document.getElementById('automatcher-date-from').value = '';
+            document.getElementById('automatcher-date-to').value = '';
+
+            const dbRows = [
+                {
+                    id: 1, reference_number: 'DIP-1', payment_date: '2026-03-01',
+                    student_id: '', original_student_id: '', customer_mobile: '01099999999',
+                    item_name: 'Python Workshop', item_price: 1500, mapping: 'Dip & Workshop',
+                    second_mapping: 'Workshop', bank: 'NUADCB136', id_status: 'Missing ID'
+                },
+                {
+                    id: 2, reference_number: 'DIP-2', payment_date: '2026-03-01',
+                    student_id: '123', original_student_id: '123', customer_mobile: '01088888888',
+                    item_name: 'Diploma Registration', item_price: 2500, mapping: 'Other',
+                    second_mapping: 'Dip & Workshop', bank: 'NUADCB136', id_status: 'Error: ID Too Short (3 digits)'
+                },
+                {
+                    id: 3, reference_number: 'TUI-1', payment_date: '2026-03-01',
+                    student_id: '', original_student_id: '', customer_mobile: '01012345678',
+                    item_name: 'Tuition Fees', item_price: 15000, mapping: 'Tuition',
+                    second_mapping: 'UG', bank: 'NUADCB136', id_status: 'Missing ID'
+                }
+            ];
+
+            supabase.from = vi.fn((table) => {
+                const chain = {
+                    select: vi.fn().mockReturnThis(),
+                    eq: vi.fn().mockReturnThis(),
+                    neq: vi.fn().mockReturnThis(),
+                    gte: vi.fn().mockReturnThis(),
+                    lte: vi.fn().mockReturnThis(),
+                    in: vi.fn().mockReturnThis(),
+                    or: vi.fn().mockReturnThis(),
+                    not: vi.fn().mockReturnThis(),
+                    ilike: vi.fn().mockReturnThis(),
+                    order: vi.fn().mockReturnThis(),
+                    limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+                    maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+                    range: vi.fn().mockImplementation(async () => ({
+                        data: table === 'transactions' ? dbRows : [],
+                        count: table === 'transactions' ? dbRows.length : 0,
+                        error: null
+                    }))
+                };
+                return chain;
+            });
+
+            await window.app.runAutoMatcher();
+            // Auto Matcher must completely exclude both Dip & Workshop rows and keep only TUI-1
+            expect((window.app.invalidTx || []).map(r => r.reference_number)).toEqual(['TUI-1']);
+            expect(window.app.automatchDistinctMappings).not.toContain('Dip & Workshop');
+
+            // ERP Preview treats Dip & Workshop as Exempt / Ready (NOT Invalid / Needs Fix)
+            window.app.erpData = [
+                { id: 1, reference_number: 'DIP-1', payment_date: '2026-03-01', student_id: '', item_name: 'Python Workshop', item_price: 1500, mapping: 'Dip & Workshop', bank: 'NUADCB136', id_status: 'Missing ID' },
+                { id: 3, reference_number: 'TUI-1', payment_date: '2026-03-01', student_id: '', item_name: 'Tuition Fees', item_price: 15000, mapping: 'Tuition', bank: 'NUADCB136', id_status: 'Missing ID' }
+            ];
+            window.app.renderErpPreview();
+            expect(document.getElementById('erp-stat-valid').textContent).toBe('1');
+            expect(document.getElementById('erp-stat-invalid').textContent).toBe('1');
+            expect(document.getElementById('erp-stat-ready').textContent).toBe('1');
+            const erpHtml = document.getElementById('erp-preview-body').innerHTML;
+            expect(erpHtml).toContain('Exempt (Dip &amp; Workshop)');
+
+            // Transaction Details modal displays neutral 'Exempt' badge instead of Missing ID / Error
+            await window.app.openTransactionDetailsModal(dbRows[0]);
+            const detailsBody = document.getElementById('modal-tx-details-body');
+            expect(detailsBody.querySelector('.badge.exempt')?.textContent).toBe('Exempt');
+        } finally {
+            supabase.from = origFrom;
+            window.app.invalidTx = origInvalidTx;
+            window.app.allStudentsData = origStudents;
+            window.app.erpData = origErpData;
+            window.app.userRole = origRole;
         }
     }
 });

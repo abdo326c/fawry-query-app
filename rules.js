@@ -30,6 +30,41 @@ export function validateID(id) {
 }
 
 /**
+ * Returns true if the given transaction or mapping values belong to a category
+ * (currently "Dip & Workshop") that does not follow standard tuition Student ID rules.
+ */
+export function isIdValidationExempt(txOrMapping, secondMapping = null) {
+    let m1 = txOrMapping;
+    let m2 = secondMapping;
+    if (txOrMapping && typeof txOrMapping === 'object') {
+        m1 = txOrMapping.mapping;
+        m2 = txOrMapping.second_mapping ?? txOrMapping.secondMapping;
+    }
+    const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return norm(m1) === 'dip & workshop' || norm(m2) === 'dip & workshop';
+}
+
+/**
+ * Returns the effective ID status for a transaction ('Valid', 'Exempt' for
+ * Dip & Workshop non-Valid rows, or the standard validation message).
+ */
+export function getEffectiveIdStatus(tx) {
+    if (!tx) return 'Missing ID';
+    const rawStatus = tx.id_status ? String(tx.id_status).trim() : validateID(tx.student_id);
+    if (rawStatus === 'Valid') return 'Valid';
+    if (rawStatus === 'Exempt' || isIdValidationExempt(tx)) return 'Exempt';
+    return rawStatus || 'Missing ID';
+}
+
+/**
+ * Returns true when a transaction is Valid or Exempt (i.e. not an invalid/missing ID issue).
+ */
+export function isNonInvalidTransaction(tx) {
+    const st = getEffectiveIdStatus(tx);
+    return st === 'Valid' || st === 'Exempt';
+}
+
+/**
  * Returns the item name as it was originally imported (before any fix or mapping),
  * recovered from check_column which is stored as `${reference_number}-${itemName}`.
  */
@@ -118,12 +153,17 @@ export function applyBusinessRules(base, { link, fix, lookupMapping }) {
     if (fix && fix.mapping) { mapping = fix.mapping; sources.mapping = 'fix'; }
     if (fix && fix.second_mapping) { secondMapping = fix.second_mapping; sources.secondMapping = 'fix'; }
 
+    const rawIdStatus = validateID(studentId);
+    const idStatus = (rawIdStatus !== 'Valid' && isIdValidationExempt(mapping, secondMapping))
+        ? 'Exempt'
+        : rawIdStatus;
+
     return {
         studentId,
         itemName,
         mapping,
         secondMapping,
-        idStatus: validateID(studentId),
+        idStatus,
         sources
     };
 }

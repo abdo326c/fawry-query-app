@@ -2,6 +2,9 @@ import { supabase } from './supabase.js';
 import { FawryProcessor } from './csv-processor.js';
 import {
     validateID,
+    isIdValidationExempt,
+    getEffectiveIdStatus,
+    isNonInvalidTransaction,
     fetchAll,
     fetchByIn,
     recomputeTransactions,
@@ -82,6 +85,22 @@ function renderIcons(root = null) {
     } catch (_e) {
         window.lucide.createIcons();
     }
+}
+
+/**
+ * Returns normalized display metadata for a transaction's Student ID status badge.
+ */
+function formatIdStatusMeta(tx, { defaultStatus = 'Missing ID' } = {}) {
+    const raw = tx?.id_status ? String(tx.id_status).trim() : '';
+    const effective = tx
+        ? (raw === 'Valid' ? 'Valid' : (raw === 'Exempt' || isIdValidationExempt(tx) ? 'Exempt' : (raw || defaultStatus)))
+        : defaultStatus;
+    let statusClass = 'valid';
+    if (effective === 'Exempt') statusClass = 'exempt';
+    else if (effective.includes('Missing')) statusClass = 'missing';
+    else if (effective.includes('Error') || effective !== 'Valid') statusClass = 'error';
+    const shortStatus = statusClass === 'error' && effective.startsWith('Error') ? 'Error' : effective;
+    return { statusText: effective, shortStatus, statusClass, isIssue: statusClass === 'missing' || statusClass === 'error' };
 }
 
 // Promise-based confirm dialog using the in-page modal
@@ -1826,7 +1845,7 @@ class App {
                                 .in('bank', fawryBanksSelected);
 
                             if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
-                            else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid');
+                            else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid').neq('id_status', 'Exempt');
                             else if (statusFilter === 'settled') q = q.eq('is_settled', true);
                             else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
                             else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
@@ -1835,6 +1854,9 @@ class App {
                         },
                         'id'
                     );
+                    if (statusFilter === 'invalid') {
+                        allData = allData.filter(tx => !isNonInvalidTransaction(tx));
+                    }
                 }
             } else {
                 rpcSucceeded = true;
@@ -1857,7 +1879,7 @@ class App {
                     if (!pDate || pDate < dateFrom || pDate > dateTo) return false;
                     const isSettledRow = r.is_settled !== undefined ? Boolean(r.is_settled) : true;
                     if (statusFilter === 'valid') return r.id_status === 'Valid';
-                    if (statusFilter === 'invalid') return r.id_status !== 'Valid';
+                    if (statusFilter === 'invalid') return !isNonInvalidTransaction(r);
                     if (statusFilter === 'settled') return isSettledRow;
                     if (statusFilter === 'unsettled') return !isSettledRow;
                     if (statusFilter === 'erp_recorded') return Boolean(r.erp_batch_number);
@@ -2256,6 +2278,7 @@ class App {
             document.getElementById('stat-total-collections').textContent = `EGP ${formatMoney(totalCollections)}`;
             
             let validCount = 0;
+            let exemptCount = 0;
             let totalCountAll = 0;
             let settledCount = 0;
             let erpRecordedCount = 0;
@@ -2264,12 +2287,21 @@ class App {
 
             if (rpcSucceeded) {
                 if (fawryBanksSelected.length > 0) {
+                    const exemptFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
+                        .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected)
+                        .neq('id_status', 'Valid')
+                        .or('id_status.eq.Exempt,mapping.ilike."Dip & Workshop",second_mapping.ilike."Dip & Workshop"');
+
                     if (summaryRpcData && summaryRpcData.kpis) {
                         validCount = Number(summaryRpcData.kpis.valid_count) || 0;
                         totalCountAll = Number(summaryRpcData.kpis.total_count) || 0;
                         settledCount = Number(summaryRpcData.kpis.settled_count) || 0;
                         erpRecordedCount = Number(summaryRpcData.kpis.erp_count) || 0;
                         unmappedCount = Number(summaryRpcData.kpis.unmapped_count) || 0;
+                        try {
+                            const { count: exCnt, error: exErr } = await exemptFilter();
+                            if (!exErr && exCnt !== null && exCnt !== undefined) exemptCount += Number(exCnt) || 0;
+                        } catch (_) {}
                         if (Array.isArray(summaryRpcData.categories)) {
                             summaryRpcData.categories.forEach(r => {
                                 const k = r.group_key || 'Unmapped';
@@ -2286,6 +2318,7 @@ class App {
                         const settledQuery = baseFilter().eq('is_settled', true);
                         const erpQuery = baseFilter().not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
                         const unmappedQuery = baseFilter().or('mapping.is.null,mapping.eq.');
+                        const exemptQuery = exemptFilter();
                         const catPromise = (groupBy === 'mapping')
                             ? Promise.resolve({ data: null })
                             : supabase.rpc('get_dashboard_pivot_by', { start_date: dateFrom, end_date: dateTo, group_col: 'mapping' });
@@ -2296,12 +2329,14 @@ class App {
                             { count: sCnt },
                             { count: eCnt },
                             { count: uCnt },
+                            { count: exCnt },
                             catRes
-                        ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, catPromise]);
+                        ] = await Promise.all([validQuery, totalQuery, settledQuery, erpQuery, unmappedQuery, exemptQuery, catPromise]);
 
                         if (vErr) throw vErr;
                         if (tErr) throw tErr;
                         validCount = vCnt || 0;
+                        exemptCount += exCnt || 0;
                         totalCountAll = tCnt || 0;
                         settledCount = sCnt || 0;
                         erpRecordedCount = eCnt || 0;
@@ -2325,7 +2360,8 @@ class App {
 
                 if (includeForeignBank && matchingForeignRows.length > 0) {
                     totalCountAll += matchingForeignRows.length;
-                    validCount += matchingForeignRows.filter(tx => tx.id_status === 'Valid').length;
+                    validCount += matchingForeignRows.filter(tx => getEffectiveIdStatus(tx) === 'Valid').length;
+                    exemptCount += matchingForeignRows.filter(tx => getEffectiveIdStatus(tx) === 'Exempt').length;
                     settledCount += matchingForeignRows.filter(tx => Boolean(tx.is_settled)).length;
                     erpRecordedCount += matchingForeignRows.filter(tx => tx.erp_batch_number && String(tx.erp_batch_number).trim() !== '').length;
                     unmappedCount += matchingForeignRows.filter(tx => !tx.mapping || String(tx.mapping).trim() === '').length;
@@ -2339,7 +2375,9 @@ class App {
                 totalCountAll = allData.length;
                 allData.forEach(tx => {
                     if (!selectedBanks.includes(tx.bank)) return;
-                    if (tx.id_status === 'Valid') validCount++;
+                    const eff = getEffectiveIdStatus(tx);
+                    if (eff === 'Valid') validCount++;
+                    else if (eff === 'Exempt') exemptCount++;
                     if (tx.is_settled) settledCount++;
                     if (tx.erp_batch_number && String(tx.erp_batch_number).trim() !== '') erpRecordedCount++;
                     if (!tx.mapping || String(tx.mapping).trim() === '') unmappedCount++;
@@ -2361,14 +2399,19 @@ class App {
                     : `${totalCountAll.toLocaleString()} matching record(s)`;
             }
 
-            const validPct = totalCountAll > 0 ? ((validCount / totalCountAll) * 100).toFixed(1) : 0;
-            const errorCount = Math.max(0, (totalCountAll || 0) - (validCount || 0));
+            const checkableTotal = Math.max(0, (totalCountAll || 0) - (exemptCount || 0));
+            const validPct = checkableTotal > 0 ? ((validCount / checkableTotal) * 100).toFixed(1) : (totalCountAll > 0 ? '100.0' : 0);
+            const errorCount = Math.max(0, (totalCountAll || 0) - (validCount || 0) - (exemptCount || 0));
             
             document.getElementById('stat-valid-pct').textContent = `${validPct}%`;
             document.getElementById('stat-errors').textContent = errorCount.toLocaleString();
 
             const validCountEl = document.getElementById('stat-valid-count');
-            if (validCountEl) validCountEl.textContent = `${validCount.toLocaleString()} valid tx`;
+            if (validCountEl) {
+                validCountEl.textContent = exemptCount > 0
+                    ? `${validCount.toLocaleString()} valid tx • ${exemptCount.toLocaleString()} exempt`
+                    : `${validCount.toLocaleString()} valid tx`;
+            }
 
             const unmappedEl = document.getElementById('stat-unmapped-count');
             if (unmappedEl) unmappedEl.textContent = `${unmappedCount.toLocaleString()} unmapped item(s)`;
@@ -2893,9 +2936,7 @@ class App {
             }
 
             const t = txRows[0];
-            let statusClass = 'valid';
-            if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
-            if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
+            const { statusClass, statusText } = formatIdStatusMeta(t, { defaultStatus: 'Unknown' });
             const extraCount = txRows.length > 1 ? ` <span class="text-muted">(${txRows.length} items in order)</span>` : '';
             const multiItemItemsHtml = txRows.length > 1
                 ? `<div style="grid-column: 1 / -1; margin-top: 0.25rem; padding: 0.4rem 0.55rem; border-radius: 6px; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); color: #f59e0b; font-size: 0.76rem;">
@@ -2907,7 +2948,7 @@ class App {
             previewEl.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.35rem;">
                     <span><strong>Transaction Found</strong>${extraCount} • ${escapeHTML(toDateOnly(t.payment_date) || 'N/A')}</span>
-                    <span class="badge ${statusClass}" style="font-size: 0.72rem;">${escapeHTML(t.id_status || 'Unknown')}</span>
+                    <span class="badge ${statusClass}" style="font-size: 0.72rem;">${escapeHTML(statusText)}</span>
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 0.75rem; color: var(--text-muted); font-size: 0.8rem;">
                     <div>Current ID: <strong style="color: var(--text-main);">${escapeHTML(t.student_id || 'Empty')}</strong></div>
@@ -4214,7 +4255,7 @@ class App {
             let options = [];
             
             if (currentColumn === 'id_status') {
-                options = ['Valid', 'Missing ID', 'Error'];
+                options = ['Valid', 'Exempt', 'Missing ID', 'Error'];
                 if (searchTerm) options = options.filter(opt => opt.toLowerCase().includes(searchTerm.toLowerCase()));
             }
             else if (currentColumn === 'proposed_fix') {
@@ -4441,9 +4482,13 @@ class App {
         // Quick Filter Pill
         const qf = this.txQuickFilter || 'all';
         if (qf === 'missing_id') {
-            query = query.ilike('id_status', '%Missing ID%');
+            query = query.ilike('id_status', '%Missing ID%')
+                .or('mapping.is.null,mapping.not.ilike."Dip & Workshop"')
+                .or('second_mapping.is.null,second_mapping.not.ilike."Dip & Workshop"');
         } else if (qf === 'error_id') {
-            query = query.ilike('id_status', '%Error%');
+            query = query.ilike('id_status', '%Error%')
+                .or('mapping.is.null,mapping.not.ilike."Dip & Workshop"')
+                .or('second_mapping.is.null,second_mapping.not.ilike."Dip & Workshop"');
         } else if (qf === 'unmapped') {
             query = query.or('mapping.is.null,mapping.eq.');
         } else if (qf === 'unsettled') {
@@ -4456,6 +4501,7 @@ class App {
                 if (col === 'id_status') {
                     const filters = [];
                     if (values.includes('Valid')) filters.push('id_status.eq.Valid');
+                    if (values.includes('Exempt')) filters.push('id_status.eq.Exempt', 'mapping.ilike."Dip & Workshop"', 'second_mapping.ilike."Dip & Workshop"');
                     if (values.includes('Missing ID')) filters.push('id_status.ilike.%Missing ID%');
                     if (values.includes('Error')) filters.push('id_status.ilike.%Error%');
                     if (filters.length > 0) query = query.or(filters.join(','));
@@ -4719,24 +4765,28 @@ class App {
         }
 
         const pageAmount = data.reduce((sum, r) => sum + (parseFloat(r.item_price || 0) || 0), 0);
-        const pageValidCount = data.filter(r => r.id_status === 'Valid').length;
-        const pageIssueCount = data.length - pageValidCount;
+        const pageValidCount = data.filter(r => getEffectiveIdStatus(r) === 'Valid').length;
+        const pageExemptCount = data.filter(r => getEffectiveIdStatus(r) === 'Exempt').length;
+        const pageIssueCount = data.filter(r => !isNonInvalidTransaction(r)).length;
         if (elPageAmt) elPageAmt.textContent = `EGP ${formatMoney(pageAmount)}`;
         if (elHealth) {
-            elHealth.innerHTML = pageIssueCount > 0
-                ? `<span style="color: var(--success);">${pageValidCount} Valid</span> &bull; <span style="color: var(--danger);">${pageIssueCount} Issue${pageIssueCount === 1 ? '' : 's'}</span>`
-                : `<span style="color: var(--success);">${pageValidCount} Valid</span>`;
+            const parts = [`<span style="color: var(--success);">${pageValidCount} Valid</span>`];
+            if (pageExemptCount > 0) {
+                parts.push(`<span style="color: var(--text-muted);">${pageExemptCount} Exempt</span>`);
+            }
+            if (pageIssueCount > 0) {
+                parts.push(`<span style="color: var(--danger);">${pageIssueCount} Issue${pageIssueCount === 1 ? '' : 's'}</span>`);
+            }
+            elHealth.innerHTML = parts.join(' &bull; ');
         }
 
         this.currentPageTransactions = data;
 
         tbody.innerHTML = data.map((t, idx) => {
-            let statusClass = 'valid';
-            if (t.id_status && t.id_status.includes('Missing')) statusClass = 'missing';
-            if (t.id_status && t.id_status.includes('Error')) statusClass = 'error';
-
-            const statusText = escapeHTML(t.id_status || '');
-            const shortStatus = statusClass === 'error' ? 'Error' : statusText;
+            const { statusClass, statusText, shortStatus } = formatIdStatusMeta(t, { defaultStatus: '' });
+            const statusTooltip = statusClass === 'exempt'
+                ? 'Exempt from standard tuition Student ID rules (Dip & Workshop)'
+                : statusText;
 
             const origItem = normalizeItemName(originalItemName(t)) || normalizeItemName(t.item_name) || '';
             const canEditRules = this.hasRole('accountant');
@@ -4758,7 +4808,7 @@ class App {
                     <td style="white-space: nowrap;">${escapeHTML(t.bank)}</td>
                     <td>
                         <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                            <span class="badge ${statusClass}">${shortStatus}</span>
+                            <span class="badge ${statusClass}" title="${escapeHTML(statusTooltip)}">${escapeHTML(shortStatus)}</span>
                             ${canEditRules ? `<button type="button" class="tx-quick-fix-btn ${statusClass}" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}">
                                 <i data-lucide="wrench"></i>
                             </button>` : ''}
@@ -4873,9 +4923,7 @@ class App {
         }
 
         const origItem = normalizeItemName(originalItemName(tx)) || normalizeItemName(tx.item_name) || '-';
-        let statusClass = 'valid';
-        if (tx.id_status && tx.id_status.includes('Missing')) statusClass = 'missing';
-        if (tx.id_status && tx.id_status.includes('Error')) statusClass = 'error';
+        const { statusClass, statusText } = formatIdStatusMeta(tx, { defaultStatus: 'Unknown' });
         const multiItemSummaryHtml = siblingItems.length > 1
             ? `<div style="grid-column: 1 / -1; margin-top: 0.35rem; padding: 0.45rem 0.65rem; border-radius: 6px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); font-size: 0.8rem;">
                 <strong>Order Contains ${siblingItems.length} Items:</strong>
@@ -4891,7 +4939,7 @@ class App {
                     <button type="button" class="btn btn-outline btn-sm" id="btn-tx-detail-copy-ref" style="padding: 0.12rem 0.45rem; font-size: 0.72rem;">Copy</button>
                 </div>
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
-                    <span class="badge ${statusClass}">${escapeHTML(tx.id_status || 'Unknown')}</span>
+                    <span class="badge ${statusClass}">${escapeHTML(statusText)}</span>
                     ${tx.is_settled ? '<span class="badge" style="background:#3b82f6;color:white;">Settled</span>' : '<span class="badge" style="background:rgba(148,163,184,0.2);color:var(--text-muted);">Unsettled</span>'}
                 </div>
             </div>
@@ -5509,15 +5557,15 @@ class App {
         try {
             const badRows = await fetchAll(
                 'transactions',
-                'reference_number, payment_date, student_id, id_status, item_name, item_price',
-                q => q.neq('id_status', 'Valid'),
+                'reference_number, payment_date, student_id, id_status, item_name, item_price, mapping, second_mapping',
+                q => q.neq('id_status', 'Valid').neq('id_status', 'Exempt'),
                 'id'
             );
 
-            // Group by reference_number so each reference appears once (include both Fawry & Foreign unresolved transactions)
+            // Group by reference_number so each reference appears once (exclude exempt Dip & Workshop rows)
             const byRef = new Map();
             for (const tx of badRows) {
-                if (!tx.reference_number) continue;
+                if (!tx.reference_number || isNonInvalidTransaction(tx)) continue;
                 const key = String(tx.reference_number).trim();
                 if (!byRef.has(key)) {
                     byRef.set(key, tx);
@@ -5525,7 +5573,7 @@ class App {
             }
             for (const ftx of (this.foreignTransactions || [])) {
                 const norm = this.normalizeForeignTransactionRow(ftx);
-                if (!norm.reference_number || norm.id_status === 'Valid') continue;
+                if (!norm.reference_number || isNonInvalidTransaction(norm)) continue;
                 const key = String(norm.reference_number).trim();
                 if (!byRef.has(key)) {
                     byRef.set(key, {
@@ -6723,7 +6771,7 @@ class App {
             // Fetch base invalidTx filtered by date range and optional targeted ref list
             // (Search and header filters are applied client-side in renderAutoMatcherPage so selections persist)
             let queryFn = (q) => {
-                q = q.neq('id_status', 'Valid');
+                q = q.neq('id_status', 'Valid').neq('id_status', 'Exempt');
                 if (dateFrom) q = q.gte('payment_date', dateFrom);
                 if (dateTo) q = q.lte('payment_date', dateTo);
                 if (this.targetedMatchRefs && this.targetedMatchRefs.length > 0 && this.targetedMatchRefs.length <= 500) {
@@ -6744,6 +6792,9 @@ class App {
                 const targetSet = new Set(this.targetedMatchRefs);
                 invalidTx = invalidTx.filter(t => targetSet.has(t.reference_number));
             }
+
+            // Ignore exempt categories (e.g. Dip & Workshop) — they do not follow standard tuition ID rules
+            invalidTx = (invalidTx || []).filter(t => !isNonInvalidTransaction(t));
 
             this.invalidTx = invalidTx; // Store for header filter dropdowns
 
@@ -8485,7 +8536,7 @@ class App {
         if (!labelEl) return;
         const rows = this.erpData || [];
         const validOnly = document.getElementById('erp-record-valid-only')?.checked ?? true;
-        const eligible = rows.filter(r => !r.erp_batch_number && (!validOnly || !r.id_status || r.id_status === 'Valid'));
+        const eligible = rows.filter(r => !r.erp_batch_number && (!validOnly || !r.id_status || isNonInvalidTransaction(r)));
         labelEl.textContent = eligible.length > 0 ? `Save References (${eligible.length.toLocaleString()} lines)` : 'Save References';
     }
 
@@ -8524,10 +8575,10 @@ class App {
         const summaryCard = document.getElementById('erp-summary-card');
         if (summaryCard) {
             summaryCard.style.display = '';
-            const validCnt = rows.filter(r => !r.id_status || r.id_status === 'Valid').length;
+            const validCnt = rows.filter(r => !r.id_status || isNonInvalidTransaction(r)).length;
             const invalidCnt = rows.length - validCnt;
             const recordedCnt = rows.filter(r => r.erp_batch_number).length;
-            const readyCnt = rows.filter(r => (!r.id_status || r.id_status === 'Valid') && !r.erp_batch_number).length;
+            const readyCnt = rows.filter(r => (!r.id_status || isNonInvalidTransaction(r)) && !r.erp_batch_number).length;
 
             const elTotal = document.getElementById('erp-stat-total');
             const elAmount = document.getElementById('erp-stat-amount');
@@ -8561,7 +8612,9 @@ class App {
         
         previewData.forEach((row, index) => {
             const paddedAccount = this.erpAccount(row);
-            const isValid = !row.id_status || row.id_status === 'Valid';
+            const effStatus = row.id_status ? getEffectiveIdStatus(row) : 'Valid';
+            const isValid = effStatus === 'Valid' || effStatus === 'Exempt';
+            const isExempt = effStatus === 'Exempt';
             const descriptionTail = `/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`;
             const tr = document.createElement('tr');
             if (!isValid) {
@@ -8569,7 +8622,10 @@ class App {
             }
 
             const accountCellHtml = isValid
-                ? `<span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>`
+                ? `<div>
+                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>
+                        ${isExempt ? `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">Exempt (Dip &amp; Workshop)</div>` : ''}
+                   </div>`
                 : `<div>
                         <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(paddedAccount || 'Missing ID')}</span>
                         <div style="font-size: 0.72rem; color: var(--danger); margin-top: 2px;">${escapeHTML(row.id_status)}</div>
@@ -8790,8 +8846,8 @@ class App {
             return;
         }
 
-        const invalidTransactions = rows.filter(row => row.id_status && row.id_status !== 'Valid');
-        const validTransactions = rows.filter(row => !row.id_status || row.id_status === 'Valid');
+        const invalidTransactions = rows.filter(row => row.id_status && !isNonInvalidTransaction(row));
+        const validTransactions = rows.filter(row => !row.id_status || isNonInvalidTransaction(row));
 
         if (invalidTransactions.length > 0) {
             const canFixErp = this.hasRole('accountant');
@@ -9049,9 +9105,9 @@ class App {
         try {
             let unexportedRows = this.erpData.filter(r => !r.erp_batch_number);
             const alreadyExported = this.erpData.length - unexportedRows.length;
-            const skippedInvalid = validOnly ? unexportedRows.filter(r => r.id_status && r.id_status !== 'Valid').length : 0;
+            const skippedInvalid = validOnly ? unexportedRows.filter(r => r.id_status && !isNonInvalidTransaction(r)).length : 0;
             if (validOnly) {
-                unexportedRows = unexportedRows.filter(r => !r.id_status || r.id_status === 'Valid');
+                unexportedRows = unexportedRows.filter(r => !r.id_status || isNonInvalidTransaction(r));
             }
             
             if (unexportedRows.length === 0) {
@@ -10056,11 +10112,20 @@ class App {
             const badge = document.getElementById('sidebar-automatch-badge');
             if (!badge) return;
             try {
-                const { count, error } = await supabase
-                    .from('transactions')
-                    .select('*', { count: 'exact', head: true })
-                    .neq('id_status', 'Valid');
-                if (!error && count !== null) {
+                const [totalRes, exemptRes] = await Promise.all([
+                    supabase
+                        .from('transactions')
+                        .select('*', { count: 'exact', head: true })
+                        .neq('id_status', 'Valid'),
+                    supabase
+                        .from('transactions')
+                        .select('*', { count: 'exact', head: true })
+                        .neq('id_status', 'Valid')
+                        .or('id_status.eq.Exempt,mapping.ilike."Dip & Workshop",second_mapping.ilike."Dip & Workshop"')
+                ]);
+                if (!totalRes.error && totalRes.count !== null && totalRes.count !== undefined) {
+                    const exemptCnt = (!exemptRes.error && exemptRes.count) ? exemptRes.count : 0;
+                    const count = Math.max(0, totalRes.count - exemptCnt);
                     if (count > 0) {
                         badge.textContent = count > 999 ? '999+' : count;
                         badge.style.display = 'inline-flex';
@@ -11915,13 +11980,13 @@ class App {
             rows = rows.filter(r => toDateOnly(r.value_date || r.payment_date || r.transaction_date || '') <= dateTo);
         }
         if (this.foreignQuickFilter === 'valid_id') {
-            rows = rows.filter(r => r.id_status === 'Valid');
+            rows = rows.filter(r => getEffectiveIdStatus(r) === 'Valid');
         } else if (this.foreignQuickFilter === 'name_match') {
             rows = rows.filter(r => r.match_source === 'name_match');
         } else if (this.foreignQuickFilter === 'missing_id') {
-            rows = rows.filter(r => !r.student_id || String(r.id_status || '').includes('Missing'));
+            rows = rows.filter(r => !isNonInvalidTransaction(r) && (!r.student_id || String(r.id_status || '').includes('Missing')));
         } else if (this.foreignQuickFilter === 'error_id') {
-            rows = rows.filter(r => Boolean(r.student_id) && r.id_status !== 'Valid' && !String(r.id_status || '').includes('Missing'));
+            rows = rows.filter(r => !isNonInvalidTransaction(r) && Boolean(r.student_id) && !String(r.id_status || '').includes('Missing'));
         }
 
         if (searchRaw) {
@@ -11957,9 +12022,10 @@ class App {
         const rows = this.filteredForeignTransactions || [];
         const currency = rows[0]?.currency || this.foreignTransactions?.[0]?.currency || 'USD';
         const totalAmt = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-        const validCount = rows.filter(r => r.id_status === 'Valid').length;
+        const validCount = rows.filter(r => getEffectiveIdStatus(r) === 'Valid').length;
+        const exemptCount = rows.filter(r => getEffectiveIdStatus(r) === 'Exempt').length;
         const nameMatchedCount = rows.filter(r => r.match_source === 'name_match').length;
-        const invalidCount = rows.length - validCount;
+        const invalidCount = Math.max(0, rows.length - validCount - exemptCount);
 
         const setEl = (id, text) => {
             const el = document.getElementById(id);
@@ -11998,12 +12064,7 @@ class App {
         if (nextBtn) nextBtn.disabled = this.foreignPage >= totalPages;
 
         tbody.innerHTML = pageRows.map((t, idx) => {
-            let statusClass = 'valid';
-            if (!t.id_status || t.id_status.includes('Missing')) statusClass = 'missing';
-            else if (t.id_status.includes('Error')) statusClass = 'error';
-
-            const statusText = escapeHTML(t.id_status || 'Missing ID');
-            const shortStatus = statusClass === 'error' ? 'Error' : statusText;
+            const { statusClass, statusText, shortStatus } = formatIdStatusMeta(t, { defaultStatus: 'Missing ID' });
 
             const rowCurrency = t.currency || currency;
 
@@ -12019,7 +12080,7 @@ class App {
                     <td style="white-space: nowrap;">${escapeHTML(t.bank || DEFAULT_FOREIGN_BANK)}</td>
                     <td>
                         <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
-                            <span class="badge ${statusClass}">${shortStatus}</span>
+                            <span class="badge ${statusClass}">${escapeHTML(shortStatus)}</span>
                             <button type="button" class="tx-quick-fix-btn ${statusClass} foreign-fix-btn" data-idx="${idx}" title="Fix / Edit Student ID for ${escapeHTML(t.reference_number)}">
                                 <i data-lucide="wrench"></i>
                             </button>
@@ -12052,9 +12113,7 @@ class App {
         const body = document.getElementById('modal-tx-details-body');
         if (!modal || !body || !row) return;
 
-        let statusClass = 'valid';
-        if (!row.id_status || row.id_status.includes('Missing')) statusClass = 'missing';
-        else if (row.id_status.includes('Error')) statusClass = 'error';
+        const { statusClass, statusText } = formatIdStatusMeta(row, { defaultStatus: 'Missing ID' });
 
         const currency = String(row.currency || 'USD').toUpperCase();
         const valueDate = toDateOnly(row.value_date || row.payment_date || row.transaction_date) || '-';
@@ -12074,7 +12133,7 @@ class App {
                     <button type="button" class="btn btn-outline btn-sm" id="btn-tx-detail-copy-ref" style="padding: 0.12rem 0.45rem; font-size: 0.72rem;">Copy</button>
                 </div>
                 <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                    <span class="badge ${statusClass}">${escapeHTML(row.id_status || 'Missing ID')}</span>
+                    <span class="badge ${statusClass}">${escapeHTML(statusText)}</span>
                     <span class="badge" style="background: rgba(56, 189, 248, 0.14); color: #38bdf8;">${escapeHTML(matchLabel)}</span>
                     ${row.erp_batch_number
                         ? `<span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b;">ERP: ${escapeHTML(row.erp_batch_number)}</span>`
