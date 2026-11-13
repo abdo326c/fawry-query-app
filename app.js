@@ -10761,14 +10761,6 @@ class App {
             return { synced: 0, error: null };
         }
 
-        const btn = !silent ? document.getElementById('btn-foreign-sync-cloud') : null;
-        const origHtml = btn ? btn.innerHTML : '';
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Syncing...';
-            if (window.lucide) lucide.createIcons();
-        }
-
         try {
             const tableClient = supabase.from('foreign_transactions');
             if (!tableClient || typeof tableClient.upsert !== 'function') {
@@ -10790,12 +10782,6 @@ class App {
         } catch (err) {
             if (!silent) Toast.show(`Supabase sync failed: ${err.message}`, 'error');
             return { synced: 0, error: err };
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = origHtml;
-                if (window.lucide) lucide.createIcons();
-            }
         }
     }
 
@@ -11074,10 +11060,6 @@ class App {
         });
         document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
             this.runForeignAutoMatchNames();
-        });
-        document.getElementById('btn-foreign-sync-cloud')?.addEventListener('click', () => {
-            if (!this.requireRole('operator', 'sync foreign transactions to Supabase')) return;
-            this.syncForeignTransactionsToSupabase({ silent: false });
         });
         document.getElementById('btn-foreign-copy-email')?.addEventListener('click', () => {
             this.copyForeignTransactionsForEmail();

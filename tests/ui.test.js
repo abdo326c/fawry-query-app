@@ -634,8 +634,8 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     await new Promise(r => setTimeout(r, 20));
     expect(document.getElementById('stat-total-collections').textContent).toBe('EGP 78,000.00');
 
-    // Verify Sync to Supabase button & strictly whitelisted DB row mapping
-    expect(document.getElementById('btn-foreign-sync-cloud')).not.toBeNull();
+    // Verify manual sync button was removed while keeping strictly whitelisted DB row mapping
+    expect(document.getElementById('btn-foreign-sync-cloud')).toBeNull();
     const dbRow = window.app.toForeignDbRow({
         reference_number: 'FJB_DB_1',
         value_date: '2026-02-01',
