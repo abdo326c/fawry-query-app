@@ -481,6 +481,7 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(document.querySelector('.nav-link[data-tab="foreign-transactions"]')).not.toBeNull();
     expect(document.getElementById('view-foreign-transactions')).not.toBeNull();
     expect(document.getElementById('btn-show-foreign-import')).not.toBeNull();
+    expect(document.getElementById('btn-foreign-clear-all')).toBeNull();
     expect(document.getElementById('modal-foreign-import')).not.toBeNull();
     expect(document.getElementById('modal-foreign-fix')).not.toBeNull();
 });

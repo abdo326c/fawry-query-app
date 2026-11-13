@@ -613,9 +613,6 @@
                         <button class="btn btn-outline" id="btn-foreign-export-excel" title="Export Foreign Transactions to Excel">
                             <i data-lucide="download"></i> Export Excel
                         </button>
-                        <button class="btn btn-outline" id="btn-foreign-clear-all" style="color: var(--danger); border-color: rgba(239, 68, 68, 0.35);" title="Clear all imported Foreign Transactions">
-                            <i data-lucide="trash-2"></i> Clear
-                        </button>
                     </div>
                 </div>
 
@@ -701,28 +698,29 @@
                         <thead>
                             <tr>
                                 <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="reference_number" style="cursor: pointer; user-select: none;">External Ref / Code <span class="sort-indicator"></span></span>
+                                    <span class="foreign-sort-trigger" data-sort-col="reference_number" style="cursor: pointer; user-select: none;">Ref Number <span class="sort-indicator"></span></span>
+                                </th>
+                                <th>
+                                    <span class="foreign-sort-trigger" data-sort-col="description" style="cursor: pointer; user-select: none;">Description <span class="sort-indicator"></span></span>
+                                </th>
+                                <th>
+                                    <span class="foreign-sort-trigger" data-sort-col="student_id" style="cursor: pointer; user-select: none;">Student ID * <span class="sort-indicator"></span></span>
+                                </th>
+                                <th>
+                                    <span class="foreign-sort-trigger" data-sort-col="extracted_name" style="cursor: pointer; user-select: none;">Student Name / Depositor (بمناولة) <span class="sort-indicator"></span></span>
                                 </th>
                                 <th>
                                     <span class="foreign-sort-trigger" data-sort-col="value_date" style="cursor: pointer; user-select: none;">Value Date <span class="sort-indicator">▼</span></span>
                                 </th>
-                                <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="student_id" style="cursor: pointer; user-select: none;">Student ID <span class="sort-indicator"></span></span>
-                                </th>
-                                <th>
-                                    <span class="foreign-sort-trigger" data-sort-col="extracted_name" style="cursor: pointer; user-select: none;">Student Name (Statement / Directory) <span class="sort-indicator"></span></span>
-                                </th>
-                                <th>Depositor (بمناولة)</th>
                                 <th style="text-align: right;">
                                     <span class="foreign-sort-trigger" data-sort-col="amount" style="cursor: pointer; user-select: none;">Credit Amount <span class="sort-indicator"></span></span>
                                 </th>
-                                <th>Bank Statement Narrative (البيان)</th>
                                 <th style="text-align: right;">ID Status / Action</th>
                             </tr>
                         </thead>
                         <tbody id="foreign-transactions-body">
                             <tr>
-                                <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
                                     No foreign transactions loaded yet. Click <strong>Import Bank Statement (PDF / Excel)</strong> to extract student deposits from a Banque Misr statement.
                                 </td>
                             </tr>

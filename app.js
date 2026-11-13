@@ -374,8 +374,7 @@ class App {
             'btn-cleanup-duplicates',
             'btn-dedup-mappings',
             'btn-dedup-fixes',
-            'btn-save-user-role',
-            'btn-foreign-clear-all'
+            'btn-save-user-role'
         ].forEach(id => setElVisible(id, isAdmin));
     }
 
@@ -10165,7 +10164,7 @@ class App {
             }
         });
 
-        // Action Buttons: Auto-Match Names, Export ERP, Copy Email, Export Excel, Clear
+        // Action Buttons: Auto-Match Names, Export ERP, Copy Email, Export Excel
         document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
             this.runForeignAutoMatchNames();
         });
@@ -10177,25 +10176,6 @@ class App {
         });
         document.getElementById('btn-foreign-export-excel')?.addEventListener('click', () => {
             this.exportForeignTransactionsExcel();
-        });
-        document.getElementById('btn-foreign-clear-all')?.addEventListener('click', async () => {
-            if (!this.requireRole('admin', 'clear foreign transactions')) return;
-            if (!this.foreignTransactions.length) {
-                Toast.show('No foreign transactions to clear', 'info');
-                return;
-            }
-            if (!await window.customConfirm(`Clear all ${this.foreignTransactions.length} foreign deposit transactions?`, 'Clear All', 'Cancel')) {
-                return;
-            }
-            this.foreignTransactions = [];
-            this.persistForeignTransactionsLocal();
-            try {
-                await supabase.from('foreign_transactions').delete().neq('reference_number', '');
-            } catch (_e) {
-                // ignore if table not created yet
-            }
-            this.applyForeignFilters();
-            Toast.show('Cleared foreign transactions', 'success');
         });
 
         // Student Directory Live Search inside #modal-foreign-fix
@@ -10496,11 +10476,11 @@ class App {
 
         thead.innerHTML = `
             <tr>
+                <th>Ref Number</th>
+                <th>Description</th>
+                <th>Student ID *</th>
+                <th>Student Name / Depositor</th>
                 <th>Value Date</th>
-                <th>Ref / Code</th>
-                <th>Student ID</th>
-                <th>Extracted Student Name</th>
-                <th>Depositor (بمناولة)</th>
                 <th style="text-align: right;">Credit (${escapeHTML(currency)})</th>
                 <th>Match Status</th>
             </tr>
@@ -10516,23 +10496,26 @@ class App {
                 ? `<span class="badge" style="background: rgba(16,185,129,0.15); color: #10b981; font-size: 0.72rem;">Exact Statement ID</span>`
                 : d.match_source === 'name_match'
                 ? `<span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; font-size: 0.72rem;">Name Matched (${d.match_confidence || 85}%)</span>`
-                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.72rem;">Needs ID Match</span>`;
+                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.72rem;">Missing ID (Required)</span>`;
 
             return `
                 <tr>
-                    <td style="white-space: nowrap;">${escapeHTML(d.value_date || '-')}</td>
-                    <td style="font-family: monospace; font-size: 0.78rem;">
-                        ${escapeHTML(d.reference_number)}
+                    <td style="font-family: monospace; font-size: 0.78rem; white-space: nowrap;">
+                        <strong>${escapeHTML(d.reference_number)}</strong>
                         <span class="badge" style="font-size: 0.68rem; margin-left: 4px;">${escapeHTML(d.transaction_code)}</span>
                     </td>
-                    <td style="font-family: monospace; font-weight: 700; color: ${isValid ? '#10b981' : 'var(--danger)'};">
-                        ${escapeHTML(d.student_id || 'Missing')}
+                    <td style="font-size: 0.78rem; max-width: 280px; color: var(--text-secondary);" title="${escapeHTML(d.description || '')}">
+                        ${escapeHTML(d.description || '-')}
+                    </td>
+                    <td style="font-family: monospace; font-weight: 700; color: ${isValid ? '#10b981' : 'var(--danger)'}; white-space: nowrap;">
+                        ${escapeHTML(d.student_id || 'Missing ID')}
                     </td>
                     <td>
                         <div style="font-weight: 600;">${escapeHTML(d.extracted_name || '-')}</div>
                         ${d.matched_student_name ? `<div style="font-size: 0.74rem; color: #38bdf8;">Directory: ${escapeHTML(d.matched_student_name)}</div>` : ''}
+                        ${d.handler_name ? `<div style="font-size: 0.72rem; color: var(--text-muted);">بمناولة: ${escapeHTML(d.handler_name)}</div>` : ''}
                     </td>
-                    <td style="font-size: 0.8rem; color: var(--text-secondary);">${escapeHTML(d.handler_name || (d.transaction_code === 'T35' ? 'SWIFT Wire' : '-'))}</td>
+                    <td style="white-space: nowrap;">${escapeHTML(d.value_date || '-')}</td>
                     <td style="text-align: right; font-weight: 700; font-family: monospace;">${escapeHTML(formatMoney(d.amount))}</td>
                     <td>${statusBadge}</td>
                 </tr>
@@ -10560,7 +10543,7 @@ class App {
 
         // Also upsert into Supabase foreign_transactions if table exists
         try {
-            const dbRows = ext.deposits.map(({ match_confidence, ...rest }) => rest);
+            const dbRows = ext.deposits.map(({ match_confidence, external_ref, ...rest }) => rest);
             await supabase.from('foreign_transactions').upsert(dbRows, { onConflict: 'reference_number' });
         } catch (_e) {
             // localStorage already updated seamlessly
@@ -10656,7 +10639,7 @@ class App {
         if (rows.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
                         No foreign transactions match the current filters. Click <strong>Import Bank Statement (PDF / Excel)</strong> to load statement deposits.
                     </td>
                 </tr>
@@ -10678,6 +10661,7 @@ class App {
 
         tbody.innerHTML = pageRows.map((row, idx) => {
             const isValid = row.id_status === 'Valid';
+            const usedTxFallback = !row.external_ref && row.transaction_ref && row.reference_number === row.transaction_ref;
             const codeBadge = row.transaction_code === 'T35'
                 ? `<span class="badge" style="background: rgba(168,85,247,0.16); color: #c084fc; font-size: 0.68rem;">T35 · SWIFT</span>`
                 : `<span class="badge" style="background: rgba(56,189,248,0.14); color: #38bdf8; font-size: 0.68rem;">${escapeHTML(row.transaction_code || 'CHF')} · Cash</span>`;
@@ -10688,7 +10672,10 @@ class App {
                            ${escapeHTML(row.student_id)}
                        </span>
                    </div>`
-                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(row.student_id || 'Missing ID')}</span>`;
+                : `<div>
+                       <span class="badge" style="background: rgba(239,68,68,0.16); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(row.student_id || 'Missing ID (Required)')}</span>
+                       <div style="font-size: 0.7rem; color: var(--danger); margin-top: 2px;">${escapeHTML(row.id_status || 'Mandatory')}</div>
+                   </div>`;
 
             const sourceBadge = row.match_source === 'name_match'
                 ? `<span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; font-size: 0.7rem;" title="Matched automatically by Student Name against Student Directory">Name Match</span>`
@@ -10701,36 +10688,34 @@ class App {
             return `
                 <tr style="${!isValid ? 'background: rgba(239, 68, 68, 0.04);' : ''}">
                     <td style="white-space: nowrap;">
-                        <div style="font-family: monospace; font-weight: 600; color: var(--primary);">${escapeHTML(row.reference_number)}</div>
+                        <div style="font-family: monospace; font-weight: 700; color: var(--primary);" title="${usedTxFallback ? 'From Transaction Reference (External Ref empty)' : 'From External. Ref No'}">${escapeHTML(row.reference_number)}</div>
                         <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 2px;">
                             ${codeBadge}
-                            ${row.transaction_ref ? `<span style="font-size: 0.7rem; color: var(--text-muted); font-family: monospace;">${escapeHTML(row.transaction_ref)}</span>` : ''}
+                            ${row.transaction_ref && row.transaction_ref !== row.reference_number ? `<span style="font-size: 0.7rem; color: var(--text-muted); font-family: monospace;" title="Transaction Reference">${escapeHTML(row.transaction_ref)}</span>` : ''}
                         </div>
                     </td>
-                    <td style="white-space: nowrap;">
-                        <div style="font-weight: 600;">${escapeHTML(row.value_date || '-')}</div>
-                        ${row.transaction_datetime ? `<div style="font-size: 0.7rem; color: var(--text-muted);">Tx: ${escapeHTML(row.transaction_datetime)}</div>` : ''}
+                    <td style="max-width: 340px; font-size: 0.82rem; color: var(--text-main); line-height: 1.4;" title="${escapeHTML(row.description || '')}">
+                        ${escapeHTML(row.description || '-')}
                     </td>
                     <td style="white-space: nowrap;">${idCellHtml}</td>
                     <td>
                         <div style="font-weight: 600; color: var(--text-main);">${escapeHTML(row.extracted_name || '-')}</div>
                         ${row.matched_student_name ? `<div style="font-size: 0.75rem; color: #10b981; margin-top: 2px;"><i data-lucide="user-check" style="width: 12px; height: 12px; vertical-align: -2px;"></i> ${escapeHTML(row.matched_student_name)}</div>` : ''}
+                        ${row.handler_name ? `<div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 2px;">بمناولة: ${escapeHTML(row.handler_name)}</div>` : ''}
                     </td>
-                    <td style="font-size: 0.82rem; color: var(--text-secondary);">
-                        ${escapeHTML(row.handler_name || (row.transaction_code === 'T35' ? 'SWIFT Wire' : '-'))}
+                    <td style="white-space: nowrap;">
+                        <div style="font-weight: 600;">${escapeHTML(row.value_date || '-')}</div>
+                        ${row.transaction_datetime ? `<div style="font-size: 0.7rem; color: var(--text-muted);">Tx: ${escapeHTML(row.transaction_datetime)}</div>` : ''}
                     </td>
                     <td style="text-align: right; white-space: nowrap;">
                         <span style="font-weight: 700; font-family: monospace; font-size: 0.95rem; color: var(--text-main);">${escapeHTML(formatMoney(row.amount))}</span>
                         <span style="font-size: 0.72rem; color: #38bdf8; margin-left: 3px; font-weight: 600;">${escapeHTML(row.currency || currency)}</span>
                     </td>
-                    <td style="max-width: 290px; font-size: 0.78rem; color: var(--text-muted); line-height: 1.35;" title="${escapeHTML(row.description || '')}">
-                        ${escapeHTML(row.description || '')}
-                    </td>
                     <td style="text-align: right; white-space: nowrap;">
                         <div style="display: inline-flex; align-items: center; gap: 0.4rem;">
                             ${sourceBadge}
-                            <button type="button" class="btn btn-outline btn-sm foreign-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px;">
-                                <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> ${isValid ? 'Edit' : 'Match ID'}
+                            <button type="button" class="btn btn-outline btn-sm foreign-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px; ${!isValid ? 'border-color: var(--danger); color: var(--danger);' : ''}">
+                                <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> ${isValid ? 'Edit ID' : 'Assign ID *'}
                             </button>
                         </div>
                     </td>
@@ -10777,7 +10762,7 @@ class App {
             box.innerHTML = `
                 <div><strong>Ref:</strong> <code>${escapeHTML(row.reference_number)}</code> &nbsp;|&nbsp; <strong>Value Date:</strong> ${escapeHTML(row.value_date || '-')} &nbsp;|&nbsp; <strong>Amount:</strong> <span style="color: #38bdf8; font-weight: 700;">${escapeHTML(row.currency || 'USD')} ${escapeHTML(formatMoney(row.amount))}</span></div>
                 <div style="margin-top: 0.35rem;"><strong>Extracted Student:</strong> ${escapeHTML(row.extracted_name || '-')} &nbsp;|&nbsp; <strong>Depositor (بمناولة):</strong> ${escapeHTML(row.handler_name || '-')}</div>
-                <div style="margin-top: 0.35rem; color: var(--text-muted);"><strong>Raw Bank Narrative:</strong> ${escapeHTML(row.description || '')}</div>
+                <div style="margin-top: 0.35rem; color: var(--text-muted);"><strong>Description:</strong> ${escapeHTML(row.description || '')}</div>
             `;
         }
 
@@ -10794,13 +10779,25 @@ class App {
         const newName = (document.getElementById('foreign-fix-student-name')?.value || '').trim();
         if (!ref) return;
 
+        if (!newId) {
+            Toast.show('Student ID is mandatory. Please enter or select a valid Student ID.', 'warning');
+            document.getElementById('foreign-fix-student-id')?.focus();
+            return;
+        }
+        const status = validateID(newId);
+        if (status !== 'Valid') {
+            Toast.show(`Invalid Student ID (${status}). Please enter a valid Student ID.`, 'warning');
+            document.getElementById('foreign-fix-student-id')?.focus();
+            return;
+        }
+
         const target = (this.foreignTransactions || []).find(r => r.reference_number === ref);
         if (!target) return;
 
         target.student_id = newId;
         target.matched_student_name = newName || target.matched_student_name;
-        target.id_status = validateID(newId);
-        target.match_source = newId ? 'manual' : 'unmatched';
+        target.id_status = status;
+        target.match_source = 'manual';
 
         this.persistForeignTransactionsLocal();
         try {
@@ -10816,7 +10813,7 @@ class App {
 
         document.getElementById('modal-foreign-fix')?.classList.add('hidden');
         this.applyForeignFilters();
-        Toast.show(`Updated Student ID for ${ref}`, 'success');
+        Toast.show(`Saved Student ID ${newId} for Ref ${ref}`, 'success');
     }
 
     async runForeignAutoMatchNames() {
@@ -10837,19 +10834,35 @@ class App {
         Toast.show(`Auto-Match complete: ${afterValid - beforeValid} additional deposit(s) matched (${afterValid}/${this.foreignTransactions.length} Valid)`, 'success');
     }
 
-    exportForeignErpTemplate() {
-        const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
+    async exportForeignErpTemplate() {
+        let rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
         if (!rows || rows.length === 0) {
             Toast.show('No foreign transactions to export', 'warning');
             return;
         }
+        const missingIdRows = rows.filter(r => !r.student_id || r.id_status !== 'Valid');
+        if (missingIdRows.length > 0) {
+            const validOnly = rows.filter(r => r.student_id && r.id_status === 'Valid');
+            if (validOnly.length === 0) {
+                Toast.show(`All ${missingIdRows.length} row(s) are missing a valid Student ID. Student ID is mandatory for ERP export.`, 'warning');
+                return;
+            }
+            const proceedValidOnly = await window.customConfirm(
+                `${missingIdRows.length} deposit(s) are missing a valid mandatory Student ID. Export the ${validOnly.length} valid deposit(s) now?`,
+                `Export Valid Only (${validOnly.length})`,
+                'Cancel'
+            );
+            if (!proceedValidOnly) return;
+            rows = validOnly;
+        }
+
         const exportData = rows.map((row, idx) => ({
             'Date': toDateOnly(row.value_date || row.transaction_date),
             'Voucher': '',
             'Company': 'NU',
             'Account': this.erpAccount(row),
             'Name': row.matched_student_name || row.extracted_name || '',
-            'Description': `${row.reference_number || ''}/Foreign Deposit/${row.extracted_name || ''}/${row.student_id || ''}`,
+            'Description': `${row.reference_number || ''}/${row.description || ''}/${row.student_id || ''}`,
             'Debit': 0,
             'Credit': Number(row.amount) || 0,
             'Currency': row.currency || 'USD',
@@ -10882,21 +10895,20 @@ class App {
             return;
         }
         const exportData = rows.map(r => ({
-            'External Ref No': r.reference_number || '',
-            'Transaction Reference': r.transaction_ref || '',
-            'Code': r.transaction_code || '',
-            'Value Date': r.value_date || '',
-            'Transaction Date/Time': r.transaction_datetime || '',
+            'Ref Number': r.reference_number || '',
+            'Description': r.description || '',
             'Student ID': r.student_id || '',
             'ID Status': r.id_status || '',
-            'Match Source': r.match_source || '',
             'Student Name (Statement)': r.extracted_name || '',
             'Student Name (Directory)': r.matched_student_name || '',
             'Depositor (بمناولة)': r.handler_name || '',
+            'Value Date': r.value_date || '',
+            'Transaction Date/Time': r.transaction_datetime || '',
             'Credit Amount': Number(r.amount) || 0,
             'Currency': r.currency || 'USD',
-            'Account Number': r.account_number || '',
-            'Raw Bank Narrative': r.description || ''
+            'Code': r.transaction_code || '',
+            'Transaction Reference': r.transaction_ref || '',
+            'Account Number': r.account_number || ''
         }));
         const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         const wb = XLSX.utils.book_new();
@@ -10912,14 +10924,14 @@ class App {
             return;
         }
         const tsv = [
-            ['Value Date', 'Ref No', 'Code', 'Student ID', 'Student Name', 'Depositor (بمناولة)', 'Amount', 'Currency'].join('\t'),
+            ['Ref Number', 'Description', 'Student ID', 'Student Name', 'Depositor (بمناولة)', 'Value Date', 'Amount', 'Currency'].join('\t'),
             ...rows.map(r => [
-                r.value_date || '',
                 r.reference_number || '',
-                r.transaction_code || '',
+                r.description || '',
                 r.student_id || 'Missing',
                 r.matched_student_name || r.extracted_name || '',
                 r.handler_name || '',
+                r.value_date || '',
                 formatMoney(r.amount),
                 r.currency || 'USD'
             ].join('\t'))

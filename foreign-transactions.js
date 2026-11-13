@@ -254,12 +254,22 @@ export function processBankStatementRows(rawRows, metadata = {}) {
             continue;
         }
 
+        // Reference is mandatory: use External. Ref No if present, otherwise fallback to Transaction Reference
+        const refNumber = String(r.external_ref || r.transaction_ref || '').trim();
+        if (!refNumber) {
+            excludedTreasury.push({
+                ...r,
+                exclude_reason: 'Missing Mandatory Reference (External Ref / Transaction Ref)'
+            });
+            continue;
+        }
+
         const parsed = parseStudentDepositNarrative(r.description, r.transaction_code);
-        const refNumber = r.external_ref || r.transaction_ref || `BM-${r.value_date || 'TX'}-${r._rowIndex}`;
         const idStatus = validateID(parsed.studentId);
 
         deposits.push({
             reference_number: refNumber,
+            external_ref: r.external_ref || '',
             transaction_ref: r.transaction_ref || '',
             transaction_code: r.transaction_code || 'CHF',
             event: r.event || 'INIT',
