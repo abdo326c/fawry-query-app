@@ -672,4 +672,24 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(foreignLightLogo).not.toBeNull();
     expect(foreignDarkLogo.getAttribute('src')).toBe('banque-misr-logo-dark.png');
     expect(foreignLightLogo.getAttribute('src')).toBe('banque-misr-logo-light.png');
+
+    // Verify CSP permits fallback FX APIs & PDF.js worker
+    const cspMeta = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') || '';
+    expect(cspMeta).toContain('https://open.er-api.com');
+    expect(cspMeta).toContain('https://*.currency-api.pages.dev');
+    expect(cspMeta).toContain('worker-src');
+
+    // Verify Foreign quick filter distinguishes missing_id vs error_id accurately
+    window.app.foreignTransactions = [
+        { reference_number: 'Q_VALID', value_date: '2026-02-01', student_id: '241002323', amount: 100, description: 'Tuition' },
+        { reference_number: 'Q_MISS', value_date: '2026-02-01', student_id: '', amount: 200, description: 'Missing' },
+        { reference_number: 'Q_ERR', value_date: '2026-02-01', student_id: '123', amount: 300, description: 'Bad ID' }
+    ];
+    window.app.foreignQuickFilter = 'missing_id';
+    window.app.applyForeignFilters();
+    expect(window.app.filteredForeignTransactions.map(r => r.reference_number)).toEqual(['Q_MISS']);
+
+    window.app.foreignQuickFilter = 'error_id';
+    window.app.applyForeignFilters();
+    expect(window.app.filteredForeignTransactions.map(r => r.reference_number)).toEqual(['Q_ERR']);
 });

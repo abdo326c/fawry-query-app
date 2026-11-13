@@ -520,13 +520,13 @@ DROP POLICY IF EXISTS foreign_tx_select ON public.foreign_transactions;
 CREATE POLICY foreign_tx_select ON public.foreign_transactions FOR SELECT TO authenticated USING (true);
 
 DROP POLICY IF EXISTS foreign_tx_insert ON public.foreign_transactions;
-CREATE POLICY foreign_tx_insert ON public.foreign_transactions FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY foreign_tx_insert ON public.foreign_transactions FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
 
 DROP POLICY IF EXISTS foreign_tx_update ON public.foreign_transactions;
-CREATE POLICY foreign_tx_update ON public.foreign_transactions FOR UPDATE TO authenticated USING (public.has_min_role('accountant')) WITH CHECK (public.has_min_role('accountant'));
+CREATE POLICY foreign_tx_update ON public.foreign_transactions FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
 
 DROP POLICY IF EXISTS foreign_tx_delete ON public.foreign_transactions;
-CREATE POLICY foreign_tx_delete ON public.foreign_transactions FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY foreign_tx_delete ON public.foreign_transactions FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
 -- 15. Daily USD/EGP Exchange Rates Table (for Multi-Currency Reporting)
 CREATE TABLE IF NOT EXISTS public.exchange_rates (
@@ -545,10 +545,10 @@ DROP POLICY IF EXISTS exchange_rates_select ON public.exchange_rates;
 CREATE POLICY exchange_rates_select ON public.exchange_rates FOR SELECT TO authenticated USING (true);
 
 DROP POLICY IF EXISTS exchange_rates_insert ON public.exchange_rates;
-CREATE POLICY exchange_rates_insert ON public.exchange_rates FOR INSERT TO authenticated WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY exchange_rates_insert ON public.exchange_rates FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
 
 DROP POLICY IF EXISTS exchange_rates_update ON public.exchange_rates;
-CREATE POLICY exchange_rates_update ON public.exchange_rates FOR UPDATE TO authenticated USING (public.has_min_role('operator')) WITH CHECK (public.has_min_role('operator'));
+CREATE POLICY exchange_rates_update ON public.exchange_rates FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('operator'))) WITH CHECK ((SELECT public.has_min_role('operator')));
 
 DROP POLICY IF EXISTS exchange_rates_delete ON public.exchange_rates;
-CREATE POLICY exchange_rates_delete ON public.exchange_rates FOR DELETE TO authenticated USING (public.has_min_role('admin'));
+CREATE POLICY exchange_rates_delete ON public.exchange_rates FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));

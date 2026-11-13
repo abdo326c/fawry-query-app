@@ -4587,6 +4587,23 @@ class App {
                     .order('id', { ascending: true });
                 if (error) throw error;
                 if (!rows || rows.length === 0) {
+                    // Fallback to Foreign Transactions (NuMisrUsd5) when ref isn't in Fawry transactions
+                    const localFx = (this.foreignTransactions || []).find(r => String(r.reference_number || '').trim() === refStr);
+                    if (localFx) {
+                        return this.openForeignTransactionDetailsModal(this.normalizeForeignTransactionRow(localFx));
+                    }
+                    try {
+                        const { data: fxRows } = await supabase
+                            .from('foreign_transactions')
+                            .select('*')
+                            .eq('reference_number', refStr)
+                            .limit(1);
+                        if (fxRows && fxRows.length > 0) {
+                            return this.openForeignTransactionDetailsModal(this.normalizeForeignTransactionRow(fxRows[0]));
+                        }
+                    } catch (_e) {
+                        // ignore if foreign_transactions table not created
+                    }
                     body.innerHTML = `<div class="text-center" style="padding: 2rem; color: var(--danger);">No transaction found with reference number <strong>${escapeHTML(refStr)}</strong>.</div>`;
                     return;
                 }
@@ -9243,17 +9260,53 @@ class App {
 
             const profileTxCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, item_price, fawry_fees, net_amount, total_amount, check_column, mapping, second_mapping, bank, merchant_name, id_status, is_settled, settlement_batch, erp_batch_number';
 
-            // Fetch student profile record (from cache or DB) + student transactions in parallel
+            // Fetch student profile record (from cache or DB) + Fawry transactions + Foreign transactions in parallel
             const cachedSt = (this.allStudentsData || []).find(s => sidVariants.includes(String(s.student_id)));
-            const [st, fetchedTxs] = await Promise.all([
+            const foreignPromise = (async () => {
+                try {
+                    const fxClient = supabase.from('foreign_transactions');
+                    if (fxClient && typeof fxClient.select === 'function') {
+                        const res = await fxClient.select('*').in('student_id', sidVariants);
+                        if (!res?.error && Array.isArray(res?.data)) return res.data;
+                    }
+                } catch (_e) { /* offline / unmigrated fallback */ }
+                return [];
+            })();
+            const [st, fetchedTxs, fetchedForeign] = await Promise.all([
                 cachedSt
                     ? Promise.resolve(cachedSt)
                     : supabase.from('student_master').select('*').in('student_id', sidVariants).limit(1).then(res => (res.data && res.data[0]) || null),
-                fetchAll('transactions', profileTxCols, q => q.in('student_id', sidVariants), 'id')
+                fetchAll('transactions', profileTxCols, q => q.in('student_id', sidVariants), 'id'),
+                foreignPromise
             ]);
 
+            // Merge cloud & local Foreign Transactions matching this Student ID
+            const fxByRef = new Map();
+            (this.foreignTransactions || [])
+                .map((r, i) => this.normalizeForeignTransactionRow(r, i))
+                .filter(r => sidVariants.includes(String(r.student_id || '').trim()))
+                .forEach(r => fxByRef.set(r.reference_number, r));
+            (fetchedForeign || [])
+                .map((r, i) => this.normalizeForeignTransactionRow(r, i))
+                .filter(r => sidVariants.includes(String(r.student_id || '').trim()))
+                .forEach(r => fxByRef.set(r.reference_number, r));
+            const studentForeignTxs = [...fxByRef.values()].map(r => {
+                const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
+                const usdAmt = Number(r.amount ?? r.item_price) || 0;
+                const fx = convertUsdToEgp(usdAmt, pDate, this.fxStore);
+                return {
+                    ...r,
+                    payment_date: pDate,
+                    item_name: r.description || r.item_name || 'Cash Deposit',
+                    item_price: fx.rate > 0 ? fx.egpAmount : usdAmt,
+                    raw_usd: usdAmt,
+                    currency: r.currency || 'USD',
+                    is_settled: true
+                };
+            });
+
             this.currentProfileStudent = st;
-            const txs = (fetchedTxs || []).sort((a, b) => {
+            const txs = [...(fetchedTxs || []), ...studentForeignTxs].sort((a, b) => {
                 const da = toDateOnly(a.payment_date) || '';
                 const db = toDateOnly(b.payment_date) || '';
                 if (da !== db) return db.localeCompare(da);
@@ -9447,7 +9500,7 @@ class App {
                 // Wire up "View in Transactions" shortcut
                 document.getElementById('btn-profile-view-in-tx')?.addEventListener('click', () => {
                     const txNav = document.querySelector('.nav-link[data-tab="transactions"]');
-                    const searchEl = document.getElementById('filter-search');
+                    const searchEl = document.getElementById('search-input');
                     if (searchEl) searchEl.value = String(sid).trim();
                     if (txNav) txNav.click();
                     this.currentPage = 1;
@@ -9501,7 +9554,7 @@ class App {
                     <td><span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-size: 0.74rem;">${escapeHTML(t.mapping || 'Unmapped')}</span></td>
                     <td style="font-size: 0.82rem; color: var(--text-secondary);">${escapeHTML(t.second_mapping || '-')}</td>
                     <td style="font-size: 0.82rem;">${escapeHTML(bankName)}</td>
-                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${formatMoney(t.item_price || 0)}</td>
+                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${isSameDaySettlementBank(t) ? `USD ${formatMoney(t.raw_usd ?? t.amount ?? 0)} <span style="font-size: 0.72rem; color: var(--text-muted);">(≈ EGP ${formatMoney(t.item_price || 0)})</span>` : formatMoney(t.item_price || 0)}</td>
                 </tr>
             `;
             }).join('');
@@ -9835,12 +9888,19 @@ class App {
                     const cleanQ = sanitizeForFilter(query);
                     if (!cleanQ) return;
 
-                    const [txRes, studentRes] = await Promise.all([
+                    const [txRes, foreignRes, studentRes] = await Promise.all([
                         supabase.from('transactions')
                             .select('id, reference_number, student_id, item_name, item_price, payment_date')
                             .or(`reference_number.ilike.%${cleanQ}%,student_id.ilike.%${cleanQ}%,item_name.ilike.%${cleanQ}%`)
                             .order('payment_date', { ascending: false })
                             .limit(5),
+                        supabase.from('foreign_transactions')
+                            .select('reference_number, student_id, description, amount, currency, value_date')
+                            .or(`reference_number.ilike.%${cleanQ}%,student_id.ilike.%${cleanQ}%,description.ilike.%${cleanQ}%,matched_student_name.ilike.%${cleanQ}%`)
+                            .order('value_date', { ascending: false })
+                            .limit(5)
+                            .then(res => res)
+                            .catch(() => ({ data: [] })),
                         supabase.from('student_master')
                             .select('student_id, full_name, college, program, email')
                             .or(`student_id.ilike.%${cleanQ}%,full_name.ilike.%${cleanQ}%`)
@@ -9848,9 +9908,21 @@ class App {
                     ]);
 
                     const txs = txRes.data || [];
+                    const cloudFx = Array.isArray(foreignRes?.data) ? foreignRes.data : [];
+                    const localFxMatches = (this.foreignTransactions || []).filter(r => {
+                        const ql = query.toLowerCase();
+                        return String(r.reference_number || '').toLowerCase().includes(ql)
+                            || String(r.student_id || '').toLowerCase().includes(ql)
+                            || String(r.description || '').toLowerCase().includes(ql)
+                            || String(r.matched_student_name || '').toLowerCase().includes(ql);
+                    });
+                    const fxMap = new Map();
+                    localFxMatches.forEach(r => fxMap.set(r.reference_number, r));
+                    cloudFx.forEach(r => fxMap.set(r.reference_number, r));
+                    const foreignHits = [...fxMap.values()].slice(0, 5);
                     const students = studentRes.data || [];
 
-                    if (txs.length === 0 && students.length === 0) {
+                    if (txs.length === 0 && foreignHits.length === 0 && students.length === 0) {
                         resultsContainer.innerHTML = `
                             <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
                                 No transactions or students found matching "${escapeHTML(query)}".
@@ -9868,6 +9940,20 @@ class App {
                                     <strong>${escapeHTML(tx.reference_number)}</strong>
                                     <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
                                         ID: ${escapeHTML(tx.student_id || '-')} &bull; ${escapeHTML(tx.item_name || '-')} &bull; EGP ${formatMoney(tx.item_price)} &bull; ${escapeHTML(toDateOnly(tx.payment_date))}
+                                    </span>
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+
+                    if (foreignHits.length > 0) {
+                        html += foreignHits.map(fx => `
+                            <div class="search-result-item" data-type="foreign" data-ref="${escapeHTML(fx.reference_number)}">
+                                <span class="result-type" style="color: #f59e0b;">FOREIGN</span>
+                                <div class="result-text">
+                                    <strong>${escapeHTML(fx.reference_number)}</strong>
+                                    <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem;">
+                                        ID: ${escapeHTML(fx.student_id || '-')} &bull; ${escapeHTML(fx.description || '-')} &bull; ${escapeHTML(fx.currency || 'USD')} ${formatMoney(fx.amount)} &bull; ${escapeHTML(toDateOnly(fx.value_date))}
                                     </span>
                                 </div>
                             </div>
@@ -9901,6 +9987,14 @@ class App {
                                 if (searchInp) searchInp.value = ref;
                                 this.currentPage = 1;
                                 this.loadTransactions();
+                            } else if (type === 'foreign') {
+                                const ref = item.getAttribute('data-ref');
+                                const fxNav = document.querySelector('.nav-link[data-tab="foreign-transactions"]');
+                                if (fxNav) fxNav.click();
+                                const searchInp = document.getElementById('foreign-search-input');
+                                if (searchInp) searchInp.value = ref;
+                                this.foreignPage = 1;
+                                this.applyForeignFilters();
                             } else if (type === 'student') {
                                 const sid = item.getAttribute('data-sid');
                                 const searchInp = document.getElementById('student-search-input');
@@ -11470,7 +11564,9 @@ class App {
         } else if (this.foreignQuickFilter === 'name_match') {
             rows = rows.filter(r => r.match_source === 'name_match');
         } else if (this.foreignQuickFilter === 'missing_id') {
-            rows = rows.filter(r => !r.id_status || r.id_status !== 'Valid');
+            rows = rows.filter(r => !r.student_id || String(r.id_status || '').includes('Missing'));
+        } else if (this.foreignQuickFilter === 'error_id') {
+            rows = rows.filter(r => Boolean(r.student_id) && r.id_status !== 'Valid' && !String(r.id_status || '').includes('Missing'));
         }
 
         if (searchRaw) {
@@ -11947,10 +12043,34 @@ class App {
         }
 
         try {
-            const beforeCount = (this.foreignTransactions || []).length;
-            this.foreignTransactions = (this.foreignTransactions || []).filter(r => !uids.has(r._uid));
+            const existingList = this.foreignTransactions || [];
+            const removedRefs = new Set();
+            const keptRows = [];
+            existingList.forEach(r => {
+                if (uids.has(r._uid)) {
+                    if (r.reference_number) removedRefs.add(String(r.reference_number).trim());
+                } else {
+                    keptRows.push(r);
+                }
+            });
+            const keptRefSet = new Set(keptRows.map(r => String(r.reference_number || '').trim()).filter(Boolean));
+            const orphanedRefs = [...removedRefs].filter(ref => !keptRefSet.has(ref));
+
+            const beforeCount = existingList.length;
+            this.foreignTransactions = keptRows;
             const deletedCount = beforeCount - this.foreignTransactions.length;
             this.persistForeignTransactionsLocal();
+
+            if (orphanedRefs.length > 0 && this.hasRole('admin')) {
+                try {
+                    const fxClient = supabase.from('foreign_transactions');
+                    if (fxClient && typeof fxClient.delete === 'function') {
+                        await fxClient.delete().in('reference_number', orphanedRefs);
+                    }
+                } catch (_e) {
+                    // ignore if offline / table not migrated
+                }
+            }
 
             document.getElementById('modal-detect-duplicates')?.classList.add('hidden');
             window.duplicateForeignUidsToDelete = [];
