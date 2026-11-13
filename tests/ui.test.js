@@ -732,11 +732,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     expect(html).not.toContain('preview.css');
     expect(html).not.toContain('preview-ui.js');
     expect(html).not.toContain('Studio Preview');
-    expect(html).toContain('styles.css?v=3.0.2');
+    expect(html).toContain('styles.css?v=3.0.3');
     expect(html).toContain('ui-chrome.js?v=1.0.0');
 
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
-    expect(swSrc).toContain('styles.css?v=3.0.2');
+    expect(swSrc).toContain('styles.css?v=3.0.3');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {
