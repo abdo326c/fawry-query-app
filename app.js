@@ -18,6 +18,12 @@ import {
     dateToExcelSerial,
     calculateSettlementDate
 } from './rules.js';
+import {
+    parseBankStatementGrid,
+    parseBanqueMisrPdfText,
+    matchForeignDepositsToStudents,
+    normalizePersonName
+} from './foreign-transactions.js';
 
 // Helper to run async task functions with bounded concurrency
 async function runConcurrent(tasks, concurrency = 4) {
@@ -157,6 +163,7 @@ class App {
         this.initDoublePaymentsDetector();
         this.initUsersAndRoles();
         this.initHygieneReportModal();
+        this.initForeignTransactions();
         this.initAuth();
     }
 
@@ -333,6 +340,7 @@ class App {
         // Operator+ controls (Imports, Student Master Add/Edit/Upload, Payment Links Create/Edit/Import)
         [
             'btn-show-import',
+            'btn-show-foreign-import',
             'btn-toggle-student-import',
             'btn-add-student',
             'btn-edit-profile-student',
@@ -356,7 +364,8 @@ class App {
             'btn-confirm-automatch',
             'btn-mark-settled',
             'btn-save-settlement-run',
-            'btn-record-erp'
+            'btn-record-erp',
+            'btn-foreign-automatch'
         ].forEach(id => setElVisible(id, isAccountant));
 
         // Admin-only controls (Duplicate cleanup, Deduplication, User Role management)
@@ -365,7 +374,8 @@ class App {
             'btn-cleanup-duplicates',
             'btn-dedup-mappings',
             'btn-dedup-fixes',
-            'btn-save-user-role'
+            'btn-save-user-role',
+            'btn-foreign-clear-all'
         ].forEach(id => setElVisible(id, isAdmin));
     }
 
@@ -801,6 +811,7 @@ class App {
                 }
                 if (tabId === 'dashboard') this.loadDashboard();
                 if (tabId === 'transactions') this.loadTransactions();
+                if (tabId === 'foreign-transactions') this.loadForeignTransactions();
                 if (tabId === 'mappings') this.loadMappings();
                 if (tabId === 'fixes') this.loadFixes();
                 if (tabId === 'history') this.loadHistory();
@@ -9950,6 +9961,973 @@ class App {
             if (window.lucide) lucide.createIcons();
         } catch (err) {
             console.warn('Failed to check hygiene audit report:', err);
+        }
+    }
+
+    // =========================================================================
+    // FOREIGN TRANSACTIONS (Smart Bank Statement Student Deposit Extractor)
+    // =========================================================================
+
+    initForeignTransactions() {
+        this.foreignTransactions = [];
+        this.filteredForeignTransactions = [];
+        this.foreignPage = 1;
+        this.foreignPageSize = 50;
+        this.foreignSortCol = 'value_date';
+        this.foreignSortAsc = false;
+        this.foreignQuickFilter = 'all';
+        this.pendingForeignExtraction = null;
+        this.foreignPreviewTab = 'deposits';
+        this.foreignStorageKey = 'fawry_app_foreign_transactions_v1';
+
+        try {
+            const cached = localStorage.getItem(this.foreignStorageKey);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) this.foreignTransactions = parsed;
+            }
+        } catch (_e) {
+            // ignore storage errors
+        }
+
+        // Open Statement Import Modal
+        document.getElementById('btn-show-foreign-import')?.addEventListener('click', () => {
+            if (!this.requireRole('operator', 'import bank statements')) return;
+            document.getElementById('modal-foreign-import')?.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons({ root: document.getElementById('modal-foreign-import') });
+        });
+
+        // Drag & Drop + File Input for PDF / Excel / CSV Statements
+        const dropZone = document.getElementById('foreign-drop-zone');
+        const fileInput = document.getElementById('foreign-file-input');
+        if (dropZone && fileInput) {
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                if (e.dataTransfer?.files?.length) {
+                    this.handleForeignStatementFiles(Array.from(e.dataTransfer.files));
+                }
+            });
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files?.length) {
+                    this.handleForeignStatementFiles(Array.from(e.target.files));
+                    e.target.value = '';
+                }
+            });
+        }
+
+        // Preview Tab Toggle inside Import Modal
+        const btnTabDeposits = document.getElementById('btn-foreign-preview-tab-deposits');
+        const btnTabExcluded = document.getElementById('btn-foreign-preview-tab-excluded');
+        btnTabDeposits?.addEventListener('click', () => {
+            this.foreignPreviewTab = 'deposits';
+            btnTabDeposits.className = 'btn btn-primary btn-sm';
+            if (btnTabExcluded) btnTabExcluded.className = 'btn btn-outline btn-sm';
+            this.renderForeignImportPreview();
+        });
+        btnTabExcluded?.addEventListener('click', () => {
+            this.foreignPreviewTab = 'excluded';
+            btnTabExcluded.className = 'btn btn-primary btn-sm';
+            if (btnTabDeposits) btnTabDeposits.className = 'btn btn-outline btn-sm';
+            this.renderForeignImportPreview();
+        });
+
+        // Confirm Save Extracted Deposits
+        document.getElementById('btn-confirm-foreign-import')?.addEventListener('click', () => {
+            this.savePendingForeignDeposits();
+        });
+
+        // Filters & Search
+        document.getElementById('btn-foreign-apply-filters')?.addEventListener('click', () => {
+            this.foreignPage = 1;
+            this.applyForeignFilters();
+        });
+        document.getElementById('btn-foreign-clear-filters')?.addEventListener('click', () => {
+            const df = document.getElementById('foreign-date-from');
+            const dt = document.getElementById('foreign-date-to');
+            const cf = document.getElementById('foreign-code-filter');
+            const si = document.getElementById('foreign-search-input');
+            if (df) df.value = '';
+            if (dt) dt.value = '';
+            if (cf) cf.value = '';
+            if (si) si.value = '';
+            this.foreignQuickFilter = 'all';
+            document.querySelectorAll('[data-foreign-quick-filter]').forEach(btn => {
+                const isAll = btn.getAttribute('data-foreign-quick-filter') === 'all';
+                btn.className = isAll ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+            });
+            this.foreignPage = 1;
+            this.applyForeignFilters();
+        });
+        document.getElementById('foreign-search-input')?.addEventListener('input', () => {
+            this.foreignPage = 1;
+            this.applyForeignFilters();
+        });
+        document.getElementById('foreign-code-filter')?.addEventListener('change', () => {
+            this.foreignPage = 1;
+            this.applyForeignFilters();
+        });
+        document.getElementById('foreign-date-from')?.addEventListener('change', () => {
+            this.foreignPage = 1;
+            this.applyForeignFilters();
+        });
+        document.getElementById('foreign-date-to')?.addEventListener('change', () => {
+            this.foreignPage = 1;
+            this.applyForeignFilters();
+        });
+
+        // Date Presets
+        document.querySelectorAll('[data-foreign-date-preset]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const preset = btn.getAttribute('data-foreign-date-preset');
+                const df = document.getElementById('foreign-date-from');
+                const dt = document.getElementById('foreign-date-to');
+                if (!df || !dt) return;
+                if (preset === 'all') {
+                    df.value = '';
+                    dt.value = '';
+                } else {
+                    const today = new Date();
+                    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    let start = new Date(today);
+                    let end = new Date(today);
+                    if (preset === '7d') start.setDate(today.getDate() - 6);
+                    else if (preset === 'this_month') {
+                        start = new Date(today.getFullYear(), today.getMonth(), 1);
+                        end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+                    } else if (preset === 'last_month') {
+                        start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+                        end = new Date(today.getFullYear(), today.getMonth(), 0);
+                    }
+                    df.value = fmt(start);
+                    dt.value = fmt(end);
+                }
+                this.foreignPage = 1;
+                this.applyForeignFilters();
+            });
+        });
+
+        // Quick Filter Pills
+        document.querySelectorAll('[data-foreign-quick-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.foreignQuickFilter = btn.getAttribute('data-foreign-quick-filter') || 'all';
+                document.querySelectorAll('[data-foreign-quick-filter]').forEach(b => {
+                    const active = b.getAttribute('data-foreign-quick-filter') === this.foreignQuickFilter;
+                    b.className = active ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+                });
+                this.foreignPage = 1;
+                this.applyForeignFilters();
+            });
+        });
+
+        // Column Sorting
+        document.querySelectorAll('.foreign-sort-trigger').forEach(trigger => {
+            trigger.addEventListener('click', () => {
+                const col = trigger.getAttribute('data-sort-col');
+                if (!col) return;
+                if (this.foreignSortCol === col) {
+                    this.foreignSortAsc = !this.foreignSortAsc;
+                } else {
+                    this.foreignSortCol = col;
+                    this.foreignSortAsc = col === 'student_id' || col === 'extracted_name';
+                }
+                document.querySelectorAll('.foreign-sort-trigger .sort-indicator').forEach(ind => { ind.textContent = ''; });
+                const ind = trigger.querySelector('.sort-indicator');
+                if (ind) ind.textContent = this.foreignSortAsc ? '▲' : '▼';
+                this.applyForeignFilters();
+            });
+        });
+
+        // Pagination
+        document.getElementById('foreign-page-size')?.addEventListener('change', (e) => {
+            this.foreignPageSize = parseInt(e.target.value, 10) || 50;
+            this.foreignPage = 1;
+            this.renderForeignTransactionsTable();
+        });
+        document.getElementById('foreign-btn-prev')?.addEventListener('click', () => {
+            if (this.foreignPage > 1) {
+                this.foreignPage--;
+                this.renderForeignTransactionsTable();
+            }
+        });
+        document.getElementById('foreign-btn-next')?.addEventListener('click', () => {
+            const totalPages = Math.max(1, Math.ceil(this.filteredForeignTransactions.length / this.foreignPageSize));
+            if (this.foreignPage < totalPages) {
+                this.foreignPage++;
+                this.renderForeignTransactionsTable();
+            }
+        });
+
+        // Action Buttons: Auto-Match Names, Export ERP, Copy Email, Export Excel, Clear
+        document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
+            this.runForeignAutoMatchNames();
+        });
+        document.getElementById('btn-foreign-export-erp')?.addEventListener('click', () => {
+            this.exportForeignErpTemplate();
+        });
+        document.getElementById('btn-foreign-copy-email')?.addEventListener('click', () => {
+            this.copyForeignTransactionsForEmail();
+        });
+        document.getElementById('btn-foreign-export-excel')?.addEventListener('click', () => {
+            this.exportForeignTransactionsExcel();
+        });
+        document.getElementById('btn-foreign-clear-all')?.addEventListener('click', async () => {
+            if (!this.requireRole('admin', 'clear foreign transactions')) return;
+            if (!this.foreignTransactions.length) {
+                Toast.show('No foreign transactions to clear', 'info');
+                return;
+            }
+            if (!await window.customConfirm(`Clear all ${this.foreignTransactions.length} foreign deposit transactions?`, 'Clear All', 'Cancel')) {
+                return;
+            }
+            this.foreignTransactions = [];
+            this.persistForeignTransactionsLocal();
+            try {
+                await supabase.from('foreign_transactions').delete().neq('reference_number', '');
+            } catch (_e) {
+                // ignore if table not created yet
+            }
+            this.applyForeignFilters();
+            Toast.show('Cleared foreign transactions', 'success');
+        });
+
+        // Student Directory Live Search inside #modal-foreign-fix
+        const searchInput = document.getElementById('foreign-fix-student-search');
+        const resultsBox = document.getElementById('foreign-fix-search-results');
+        if (searchInput && resultsBox) {
+            searchInput.addEventListener('input', () => {
+                const q = normalizePersonName(searchInput.value);
+                if (!q || q.length < 2) {
+                    resultsBox.style.display = 'none';
+                    resultsBox.innerHTML = '';
+                    return;
+                }
+                const students = this.allStudents || [];
+                const matches = students.filter(s => {
+                    const idStr = String(s.student_id || '').toLowerCase();
+                    const en = normalizePersonName(s.full_name || '');
+                    const ar = normalizePersonName(s.arabic_name || '');
+                    const g = normalizePersonName(s.guardian_name || '');
+                    return idStr.includes(q) || en.includes(q) || ar.includes(q) || g.includes(q);
+                }).slice(0, 12);
+
+                if (matches.length === 0) {
+                    resultsBox.style.display = 'block';
+                    resultsBox.innerHTML = `<div style="padding: 0.6rem 0.8rem; color: var(--text-muted); font-size: 0.8rem;">No matching students in directory</div>`;
+                    return;
+                }
+                resultsBox.style.display = 'block';
+                resultsBox.innerHTML = matches.map((s, idx) => `
+                    <div class="foreign-student-pick-item" data-idx="${idx}" style="padding: 0.55rem 0.8rem; border-bottom: 1px solid rgba(148,163,184,0.12); cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+                        <div>
+                            <div style="font-weight: 600; font-size: 0.84rem; color: var(--text-main);">${escapeHTML(s.full_name || s.arabic_name || '')}</div>
+                            ${s.arabic_name ? `<div style="font-size: 0.78rem; color: #38bdf8;">${escapeHTML(s.arabic_name)}</div>` : ''}
+                        </div>
+                        <span class="badge" style="font-family: monospace; font-weight: 700; background: rgba(16,185,129,0.15); color: #10b981;">${escapeHTML(s.student_id)}</span>
+                    </div>
+                `).join('');
+
+                resultsBox.querySelectorAll('.foreign-student-pick-item').forEach(el => {
+                    el.addEventListener('click', () => {
+                        const s = matches[parseInt(el.getAttribute('data-idx'), 10)];
+                        if (!s) return;
+                        const idInput = document.getElementById('foreign-fix-student-id');
+                        const nameInput = document.getElementById('foreign-fix-student-name');
+                        if (idInput) idInput.value = s.student_id || '';
+                        if (nameInput) nameInput.value = s.full_name || s.arabic_name || '';
+                        resultsBox.style.display = 'none';
+                    });
+                });
+            });
+        }
+
+        document.getElementById('btn-save-foreign-fix')?.addEventListener('click', () => {
+            this.saveForeignTransactionFix();
+        });
+    }
+
+    persistForeignTransactionsLocal() {
+        try {
+            localStorage.setItem(this.foreignStorageKey, JSON.stringify(this.foreignTransactions || []));
+        } catch (_e) {
+            // ignore quota errors
+        }
+    }
+
+    async ensureStudentsLoadedForForeign() {
+        if (Array.isArray(this.allStudents) && this.allStudents.length > 0) return this.allStudents;
+        try {
+            const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, mobile', null, 'student_id');
+            if (Array.isArray(rows) && rows.length > 0) {
+                this.allStudents = rows;
+            }
+        } catch (_e) {
+            // ignore if offline or empty
+        }
+        return this.allStudents || [];
+    }
+
+    async loadForeignTransactions() {
+        try {
+            const { data, error } = await supabase
+                .from('foreign_transactions')
+                .select('*')
+                .order('value_date', { ascending: false });
+            if (!error && Array.isArray(data) && data.length > 0) {
+                const byRef = new Map();
+                (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
+                data.forEach(r => byRef.set(r.reference_number, r));
+                this.foreignTransactions = [...byRef.values()];
+                this.persistForeignTransactionsLocal();
+            }
+        } catch (_e) {
+            // table may not exist yet in Supabase; local cache is used seamlessly
+        }
+        this.applyForeignFilters();
+    }
+
+    async loadPdfJsLibrary() {
+        if (window.pdfjsLib) return window.pdfjsLib;
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+            script.onload = () => {
+                if (window.pdfjsLib) {
+                    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                    resolve(window.pdfjsLib);
+                } else {
+                    reject(new Error('PDF.js failed to initialize'));
+                }
+            };
+            script.onerror = () => reject(new Error('Failed to load PDF reader library from CDN'));
+            document.head.appendChild(script);
+        });
+    }
+
+    async extractTextFromPdfFile(file) {
+        const pdfjsLib = await this.loadPdfJsLibrary();
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pageTexts = [];
+
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            // Sort items top-to-bottom (descending Y in PDF coordinates), then left-to-right (ascending X)
+            const items = (textContent.items || []).map(item => ({
+                str: item.str || '',
+                x: item.transform ? item.transform[4] : 0,
+                y: item.transform ? item.transform[5] : 0
+            }));
+            items.sort((a, b) => {
+                if (Math.abs(b.y - a.y) > 4) return b.y - a.y;
+                return a.x - b.x;
+            });
+
+            const lines = [];
+            let currentLine = [];
+            let lastY = null;
+            for (const it of items) {
+                if (!it.str.trim()) continue;
+                if (lastY !== null && Math.abs(it.y - lastY) > 4) {
+                    lines.push(currentLine.join(' '));
+                    currentLine = [];
+                }
+                currentLine.push(it.str.trim());
+                lastY = it.y;
+            }
+            if (currentLine.length > 0) lines.push(currentLine.join(' '));
+            pageTexts.push(lines.join('\n'));
+        }
+
+        return pageTexts.join('\n');
+    }
+
+    async parseSingleForeignStatementFile(file) {
+        const name = String(file.name || '').toLowerCase();
+        if (name.endsWith('.pdf')) {
+            const pdfText = await this.extractTextFromPdfFile(file);
+            return parseBanqueMisrPdfText(pdfText);
+        }
+        if (name.endsWith('.csv')) {
+            return new Promise((resolve, reject) => {
+                Papa.parse(file, {
+                    header: false,
+                    skipEmptyLines: false,
+                    complete: (res) => resolve(parseBankStatementGrid(res.data || [])),
+                    error: (err) => reject(err)
+                });
+            });
+        }
+        // Excel (.xlsx / .xls)
+        const buffer = await file.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: 'array' });
+        const firstSheet = wb.Sheets[wb.SheetNames[0]];
+        const grid = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' });
+        return parseBankStatementGrid(grid);
+    }
+
+    async handleForeignStatementFiles(files) {
+        if (!files || files.length === 0) return;
+        try {
+            Toast.show(`Reading ${files.length} bank statement file(s)...`, 'info');
+            const students = await this.ensureStudentsLoadedForForeign();
+
+            let combinedDeposits = [];
+            let combinedReversals = [];
+            let combinedTreasury = [];
+            let lastMeta = {};
+
+            for (const file of files) {
+                const parsed = await this.parseSingleForeignStatementFile(file);
+                lastMeta = parsed.metadata || lastMeta;
+                combinedDeposits.push(...(parsed.deposits || []));
+                combinedReversals.push(...(parsed.excludedReversals || []));
+                combinedTreasury.push(...(parsed.excludedTreasury || []));
+            }
+
+            // Deduplicate deposits across files by reference_number (e.g. if user uploaded overlapping CSV & PDF)
+            const uniqueByRef = new Map();
+            combinedDeposits.forEach(d => {
+                uniqueByRef.set(d.reference_number, d);
+            });
+
+            const matchedDeposits = matchForeignDepositsToStudents([...uniqueByRef.values()], students);
+
+            this.pendingForeignExtraction = {
+                metadata: lastMeta,
+                deposits: matchedDeposits,
+                excludedReversals: combinedReversals,
+                excludedTreasury: combinedTreasury
+            };
+
+            this.foreignPreviewTab = 'deposits';
+            document.getElementById('foreign-import-preview-panel')?.classList.remove('hidden');
+            const btnConfirm = document.getElementById('btn-confirm-foreign-import');
+            if (btnConfirm) {
+                btnConfirm.disabled = matchedDeposits.length === 0;
+                btnConfirm.innerHTML = `<i data-lucide="check-circle"></i> Import ${matchedDeposits.length.toLocaleString()} Student Deposit${matchedDeposits.length === 1 ? '' : 's'}`;
+            }
+
+            this.renderForeignImportPreview();
+            if (window.lucide) lucide.createIcons({ root: document.getElementById('modal-foreign-import') });
+            Toast.show(`Extracted ${matchedDeposits.length} student deposits (${combinedReversals.length} reversal rows & ${combinedTreasury.length} bank ops excluded)`, 'success');
+        } catch (err) {
+            console.error('Error parsing bank statement:', err);
+            Toast.show('Failed to parse statement: ' + (err.message || err), 'error');
+        }
+    }
+
+    renderForeignImportPreview() {
+        const ext = this.pendingForeignExtraction;
+        if (!ext) return;
+
+        const metaBanner = document.getElementById('foreign-import-meta-banner');
+        const currency = ext.metadata?.currency || 'USD';
+        const totalDepositAmt = (ext.deposits || []).reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+        const exactIds = (ext.deposits || []).filter(d => d.match_source === 'statement_id').length;
+        const nameMatches = (ext.deposits || []).filter(d => d.match_source === 'name_match').length;
+        const unmatched = (ext.deposits || []).length - exactIds - nameMatches;
+
+        if (metaBanner) {
+            metaBanner.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                    <span><strong>Account:</strong> <code style="color: #38bdf8;">${escapeHTML(ext.metadata?.accountNumber || 'Banque Misr')}</code></span>
+                    <span><strong>Currency:</strong> <span class="badge" style="background: rgba(16,185,129,0.15); color: #10b981;">${escapeHTML(currency)}</span></span>
+                    ${ext.metadata?.dateFrom ? `<span><strong>Period:</strong> ${escapeHTML(ext.metadata.dateFrom)} &rarr; ${escapeHTML(ext.metadata.dateTo || '')}</span>` : ''}
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap;">
+                    <span style="color: var(--success);">Exact ID: <strong>${exactIds}</strong></span>
+                    <span style="color: #38bdf8;">Name Matched: <strong>${nameMatches}</strong></span>
+                    <span style="color: var(--warning, #f59e0b);">Needs ID: <strong>${unmatched}</strong></span>
+                    <span style="color: var(--danger);">Reversed Excluded: <strong>${(ext.excludedReversals || []).length}</strong></span>
+                </div>
+            `;
+        }
+
+        const depCountEl = document.getElementById('foreign-preview-deposits-count');
+        const excCountEl = document.getElementById('foreign-preview-excluded-count');
+        const totalLabelEl = document.getElementById('foreign-preview-total-label');
+        if (depCountEl) depCountEl.textContent = (ext.deposits || []).length;
+        if (excCountEl) excCountEl.textContent = (ext.excludedReversals || []).length + (ext.excludedTreasury || []).length;
+        if (totalLabelEl) totalLabelEl.textContent = `Total Student Deposits: ${currency} ${formatMoney(totalDepositAmt)}`;
+
+        const thead = document.getElementById('foreign-import-preview-head');
+        const tbody = document.getElementById('foreign-import-preview-body');
+        if (!thead || !tbody) return;
+
+        if (this.foreignPreviewTab === 'excluded') {
+            thead.innerHTML = `
+                <tr>
+                    <th>Value Date</th>
+                    <th>Ref / Code</th>
+                    <th>Event</th>
+                    <th style="text-align: right;">Credit</th>
+                    <th style="text-align: right;">Debit</th>
+                    <th>Narrative</th>
+                    <th>Why Excluded</th>
+                </tr>
+            `;
+            const allExcluded = [...(ext.excludedReversals || []), ...(ext.excludedTreasury || [])];
+            if (allExcluded.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No excluded rows in this statement.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = allExcluded.map(r => `
+                <tr>
+                    <td style="white-space: nowrap;">${escapeHTML(r.value_date || r.transaction_date || '-')}</td>
+                    <td style="font-family: monospace; font-size: 0.78rem;">${escapeHTML(r.external_ref || r.transaction_ref || '-')} <span class="badge" style="font-size: 0.68rem;">${escapeHTML(r.transaction_code || '')}</span></td>
+                    <td><span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.7rem;">${escapeHTML(r.event || '')}</span></td>
+                    <td style="text-align: right; font-family: monospace;">${r.credit > 0 ? escapeHTML(formatMoney(r.credit)) : '-'}</td>
+                    <td style="text-align: right; font-family: monospace; color: var(--danger);">${r.debit > 0 ? escapeHTML(formatMoney(r.debit)) : '-'}</td>
+                    <td style="font-size: 0.78rem; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHTML(r.description || '')}">${escapeHTML(r.description || '')}</td>
+                    <td><span class="badge" style="background: rgba(245,158,11,0.14); color: #f59e0b; font-size: 0.72rem;">${escapeHTML(r.exclude_reason || 'Excluded')}</span></td>
+                </tr>
+            `).join('');
+            return;
+        }
+
+        thead.innerHTML = `
+            <tr>
+                <th>Value Date</th>
+                <th>Ref / Code</th>
+                <th>Student ID</th>
+                <th>Extracted Student Name</th>
+                <th>Depositor (بمناولة)</th>
+                <th style="text-align: right;">Credit (${escapeHTML(currency)})</th>
+                <th>Match Status</th>
+            </tr>
+        `;
+        if (!ext.deposits || ext.deposits.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No student deposits found in this file.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = ext.deposits.map(d => {
+            const isValid = d.id_status === 'Valid';
+            const statusBadge = d.match_source === 'statement_id'
+                ? `<span class="badge" style="background: rgba(16,185,129,0.15); color: #10b981; font-size: 0.72rem;">Exact Statement ID</span>`
+                : d.match_source === 'name_match'
+                ? `<span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; font-size: 0.72rem;">Name Matched (${d.match_confidence || 85}%)</span>`
+                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.72rem;">Needs ID Match</span>`;
+
+            return `
+                <tr>
+                    <td style="white-space: nowrap;">${escapeHTML(d.value_date || '-')}</td>
+                    <td style="font-family: monospace; font-size: 0.78rem;">
+                        ${escapeHTML(d.reference_number)}
+                        <span class="badge" style="font-size: 0.68rem; margin-left: 4px;">${escapeHTML(d.transaction_code)}</span>
+                    </td>
+                    <td style="font-family: monospace; font-weight: 700; color: ${isValid ? '#10b981' : 'var(--danger)'};">
+                        ${escapeHTML(d.student_id || 'Missing')}
+                    </td>
+                    <td>
+                        <div style="font-weight: 600;">${escapeHTML(d.extracted_name || '-')}</div>
+                        ${d.matched_student_name ? `<div style="font-size: 0.74rem; color: #38bdf8;">Directory: ${escapeHTML(d.matched_student_name)}</div>` : ''}
+                    </td>
+                    <td style="font-size: 0.8rem; color: var(--text-secondary);">${escapeHTML(d.handler_name || (d.transaction_code === 'T35' ? 'SWIFT Wire' : '-'))}</td>
+                    <td style="text-align: right; font-weight: 700; font-family: monospace;">${escapeHTML(formatMoney(d.amount))}</td>
+                    <td>${statusBadge}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    async savePendingForeignDeposits() {
+        const ext = this.pendingForeignExtraction;
+        if (!ext || !Array.isArray(ext.deposits) || ext.deposits.length === 0) return;
+
+        const byRef = new Map();
+        (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
+        ext.deposits.forEach(d => {
+            const existing = byRef.get(d.reference_number);
+            if (existing && existing.match_source === 'manual' && existing.student_id) {
+                byRef.set(d.reference_number, { ...d, student_id: existing.student_id, matched_student_name: existing.matched_student_name, id_status: existing.id_status, match_source: 'manual' });
+            } else {
+                byRef.set(d.reference_number, d);
+            }
+        });
+
+        this.foreignTransactions = [...byRef.values()];
+        this.persistForeignTransactionsLocal();
+
+        // Also upsert into Supabase foreign_transactions if table exists
+        try {
+            const dbRows = ext.deposits.map(({ match_confidence, ...rest }) => rest);
+            await supabase.from('foreign_transactions').upsert(dbRows, { onConflict: 'reference_number' });
+        } catch (_e) {
+            // localStorage already updated seamlessly
+        }
+
+        const accBadge = document.getElementById('foreign-stat-account-badge');
+        if (accBadge && ext.metadata?.accountNumber) {
+            accBadge.textContent = `Account ${ext.metadata.accountNumber} · ${ext.metadata.currency || 'USD'}`;
+        }
+
+        document.getElementById('modal-foreign-import')?.classList.add('hidden');
+        this.pendingForeignExtraction = null;
+        this.applyForeignFilters();
+        Toast.show(`Saved ${ext.deposits.length} student deposits to Foreign Transactions`, 'success');
+    }
+
+    applyForeignFilters() {
+        const dateFrom = document.getElementById('foreign-date-from')?.value || '';
+        const dateTo = document.getElementById('foreign-date-to')?.value || '';
+        const codeFilter = document.getElementById('foreign-code-filter')?.value || '';
+        const searchRaw = (document.getElementById('foreign-search-input')?.value || '').trim().toLowerCase();
+        const searchNorm = normalizePersonName(searchRaw);
+
+        let rows = [...(this.foreignTransactions || [])];
+
+        if (dateFrom) {
+            rows = rows.filter(r => (r.value_date || r.transaction_date || '') >= dateFrom);
+        }
+        if (dateTo) {
+            rows = rows.filter(r => (r.value_date || r.transaction_date || '') <= dateTo);
+        }
+        if (codeFilter) {
+            rows = rows.filter(r => String(r.transaction_code || '').toUpperCase() === codeFilter.toUpperCase());
+        }
+        if (this.foreignQuickFilter === 'valid_id') {
+            rows = rows.filter(r => r.id_status === 'Valid');
+        } else if (this.foreignQuickFilter === 'name_match') {
+            rows = rows.filter(r => r.match_source === 'name_match');
+        } else if (this.foreignQuickFilter === 'missing_id') {
+            rows = rows.filter(r => !r.id_status || r.id_status !== 'Valid');
+        }
+
+        if (searchRaw) {
+            rows = rows.filter(r => {
+                const hayRaw = `${r.reference_number || ''} ${r.transaction_ref || ''} ${r.student_id || ''} ${r.extracted_name || ''} ${r.matched_student_name || ''} ${r.handler_name || ''} ${r.description || ''}`.toLowerCase();
+                if (hayRaw.includes(searchRaw)) return true;
+                if (searchNorm) {
+                    const hayNorm = normalizePersonName(`${r.extracted_name || ''} ${r.matched_student_name || ''} ${r.handler_name || ''} ${r.description || ''}`);
+                    return hayNorm.includes(searchNorm);
+                }
+                return false;
+            });
+        }
+
+        const col = this.foreignSortCol || 'value_date';
+        const dir = this.foreignSortAsc ? 1 : -1;
+        rows.sort((a, b) => {
+            if (col === 'amount') {
+                return ((Number(a.amount) || 0) - (Number(b.amount) || 0)) * dir;
+            }
+            const va = String(a[col] ?? '').toLowerCase();
+            const vb = String(b[col] ?? '').toLowerCase();
+            if (va < vb) return -1 * dir;
+            if (va > vb) return 1 * dir;
+            return 0;
+        });
+
+        this.filteredForeignTransactions = rows;
+        this.renderForeignTransactionsTable();
+    }
+
+    renderForeignTransactionsTable() {
+        const rows = this.filteredForeignTransactions || [];
+        const currency = rows[0]?.currency || this.foreignTransactions?.[0]?.currency || 'USD';
+        const totalAmt = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+        const validCount = rows.filter(r => r.id_status === 'Valid').length;
+        const nameMatchedCount = rows.filter(r => r.match_source === 'name_match').length;
+        const invalidCount = rows.length - validCount;
+
+        const setEl = (id, text) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        };
+        setEl('foreign-stat-count', rows.length.toLocaleString());
+        setEl('foreign-stat-amount', `${currency} ${formatMoney(totalAmt)}`);
+        setEl('foreign-stat-valid', validCount.toLocaleString());
+        setEl('foreign-stat-name-matched', nameMatchedCount.toLocaleString());
+        setEl('foreign-stat-invalid', invalidCount.toLocaleString());
+
+        const tbody = document.getElementById('foreign-transactions-body');
+        if (!tbody) return;
+
+        if (rows.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                        No foreign transactions match the current filters. Click <strong>Import Bank Statement (PDF / Excel)</strong> to load statement deposits.
+                    </td>
+                </tr>
+            `;
+            setEl('foreign-page-info', 'Page 1 of 1');
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(rows.length / this.foreignPageSize));
+        if (this.foreignPage > totalPages) this.foreignPage = totalPages;
+        const startIdx = (this.foreignPage - 1) * this.foreignPageSize;
+        const pageRows = rows.slice(startIdx, startIdx + this.foreignPageSize);
+
+        setEl('foreign-page-info', `Page ${this.foreignPage} of ${totalPages}`);
+        const prevBtn = document.getElementById('foreign-btn-prev');
+        const nextBtn = document.getElementById('foreign-btn-next');
+        if (prevBtn) prevBtn.disabled = this.foreignPage <= 1;
+        if (nextBtn) nextBtn.disabled = this.foreignPage >= totalPages;
+
+        tbody.innerHTML = pageRows.map((row, idx) => {
+            const isValid = row.id_status === 'Valid';
+            const codeBadge = row.transaction_code === 'T35'
+                ? `<span class="badge" style="background: rgba(168,85,247,0.16); color: #c084fc; font-size: 0.68rem;">T35 · SWIFT</span>`
+                : `<span class="badge" style="background: rgba(56,189,248,0.14); color: #38bdf8; font-size: 0.68rem;">${escapeHTML(row.transaction_code || 'CHF')} · Cash</span>`;
+
+            const idCellHtml = isValid
+                ? `<div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                       <span class="student-dir-id-copy" data-copy-foreign-id="${escapeHTML(row.student_id)}" title="Click to copy Student ID" style="cursor: pointer; font-family: monospace; font-weight: 700; color: #38bdf8; background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.28); padding: 0.18rem 0.5rem; border-radius: 6px;">
+                           ${escapeHTML(row.student_id)}
+                       </span>
+                   </div>`
+                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(row.student_id || 'Missing ID')}</span>`;
+
+            const sourceBadge = row.match_source === 'name_match'
+                ? `<span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; font-size: 0.7rem;" title="Matched automatically by Student Name against Student Directory">Name Match</span>`
+                : row.match_source === 'manual'
+                ? `<span class="badge" style="background: rgba(168,85,247,0.15); color: #c084fc; font-size: 0.7rem;">Manual Match</span>`
+                : isValid
+                ? `<span class="badge" style="background: rgba(16,185,129,0.14); color: #10b981; font-size: 0.7rem;">Valid ID</span>`
+                : `<span class="badge" style="background: rgba(239,68,68,0.15); color: var(--danger); font-size: 0.7rem;">Needs ID</span>`;
+
+            return `
+                <tr style="${!isValid ? 'background: rgba(239, 68, 68, 0.04);' : ''}">
+                    <td style="white-space: nowrap;">
+                        <div style="font-family: monospace; font-weight: 600; color: var(--primary);">${escapeHTML(row.reference_number)}</div>
+                        <div style="display: flex; align-items: center; gap: 0.35rem; margin-top: 2px;">
+                            ${codeBadge}
+                            ${row.transaction_ref ? `<span style="font-size: 0.7rem; color: var(--text-muted); font-family: monospace;">${escapeHTML(row.transaction_ref)}</span>` : ''}
+                        </div>
+                    </td>
+                    <td style="white-space: nowrap;">
+                        <div style="font-weight: 600;">${escapeHTML(row.value_date || '-')}</div>
+                        ${row.transaction_datetime ? `<div style="font-size: 0.7rem; color: var(--text-muted);">Tx: ${escapeHTML(row.transaction_datetime)}</div>` : ''}
+                    </td>
+                    <td style="white-space: nowrap;">${idCellHtml}</td>
+                    <td>
+                        <div style="font-weight: 600; color: var(--text-main);">${escapeHTML(row.extracted_name || '-')}</div>
+                        ${row.matched_student_name ? `<div style="font-size: 0.75rem; color: #10b981; margin-top: 2px;"><i data-lucide="user-check" style="width: 12px; height: 12px; vertical-align: -2px;"></i> ${escapeHTML(row.matched_student_name)}</div>` : ''}
+                    </td>
+                    <td style="font-size: 0.82rem; color: var(--text-secondary);">
+                        ${escapeHTML(row.handler_name || (row.transaction_code === 'T35' ? 'SWIFT Wire' : '-'))}
+                    </td>
+                    <td style="text-align: right; white-space: nowrap;">
+                        <span style="font-weight: 700; font-family: monospace; font-size: 0.95rem; color: var(--text-main);">${escapeHTML(formatMoney(row.amount))}</span>
+                        <span style="font-size: 0.72rem; color: #38bdf8; margin-left: 3px; font-weight: 600;">${escapeHTML(row.currency || currency)}</span>
+                    </td>
+                    <td style="max-width: 290px; font-size: 0.78rem; color: var(--text-muted); line-height: 1.35;" title="${escapeHTML(row.description || '')}">
+                        ${escapeHTML(row.description || '')}
+                    </td>
+                    <td style="text-align: right; white-space: nowrap;">
+                        <div style="display: inline-flex; align-items: center; gap: 0.4rem;">
+                            ${sourceBadge}
+                            <button type="button" class="btn btn-outline btn-sm foreign-fix-btn" data-idx="${idx}" style="padding: 0.2rem 0.55rem; font-size: 0.74rem; height: 26px;">
+                                <i data-lucide="wrench" style="width: 12px; height: 12px;"></i> ${isValid ? 'Edit' : 'Match ID'}
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('[data-copy-foreign-id]').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const idVal = el.getAttribute('data-copy-foreign-id');
+                if (idVal && navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(idVal);
+                    Toast.show(`Copied Student ID: ${idVal}`, 'success');
+                }
+            });
+        });
+
+        tbody.querySelectorAll('.foreign-fix-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const row = pageRows[parseInt(btn.getAttribute('data-idx'), 10)];
+                if (row) this.openForeignFixModal(row);
+            });
+        });
+
+        if (window.lucide) lucide.createIcons({ root: tbody });
+    }
+
+    async openForeignFixModal(row) {
+        await this.ensureStudentsLoadedForForeign();
+        const modal = document.getElementById('modal-foreign-fix');
+        if (!modal) return;
+
+        document.getElementById('foreign-fix-ref').value = row.reference_number || '';
+        document.getElementById('foreign-fix-student-id').value = row.student_id || '';
+        document.getElementById('foreign-fix-student-name').value = row.matched_student_name || row.extracted_name || '';
+        const searchInput = document.getElementById('foreign-fix-student-search');
+        const resultsBox = document.getElementById('foreign-fix-search-results');
+        if (searchInput) searchInput.value = row.extracted_name || '';
+        if (resultsBox) resultsBox.style.display = 'none';
+
+        const box = document.getElementById('foreign-fix-narrative-box');
+        if (box) {
+            box.innerHTML = `
+                <div><strong>Ref:</strong> <code>${escapeHTML(row.reference_number)}</code> &nbsp;|&nbsp; <strong>Value Date:</strong> ${escapeHTML(row.value_date || '-')} &nbsp;|&nbsp; <strong>Amount:</strong> <span style="color: #38bdf8; font-weight: 700;">${escapeHTML(row.currency || 'USD')} ${escapeHTML(formatMoney(row.amount))}</span></div>
+                <div style="margin-top: 0.35rem;"><strong>Extracted Student:</strong> ${escapeHTML(row.extracted_name || '-')} &nbsp;|&nbsp; <strong>Depositor (بمناولة):</strong> ${escapeHTML(row.handler_name || '-')}</div>
+                <div style="margin-top: 0.35rem; color: var(--text-muted);"><strong>Raw Bank Narrative:</strong> ${escapeHTML(row.description || '')}</div>
+            `;
+        }
+
+        modal.classList.remove('hidden');
+        if (searchInput && searchInput.value) {
+            searchInput.dispatchEvent(new Event('input'));
+        }
+        if (window.lucide) lucide.createIcons({ root: modal });
+    }
+
+    async saveForeignTransactionFix() {
+        const ref = document.getElementById('foreign-fix-ref')?.value;
+        const newId = (document.getElementById('foreign-fix-student-id')?.value || '').trim();
+        const newName = (document.getElementById('foreign-fix-student-name')?.value || '').trim();
+        if (!ref) return;
+
+        const target = (this.foreignTransactions || []).find(r => r.reference_number === ref);
+        if (!target) return;
+
+        target.student_id = newId;
+        target.matched_student_name = newName || target.matched_student_name;
+        target.id_status = validateID(newId);
+        target.match_source = newId ? 'manual' : 'unmatched';
+
+        this.persistForeignTransactionsLocal();
+        try {
+            await supabase.from('foreign_transactions').update({
+                student_id: target.student_id,
+                matched_student_name: target.matched_student_name,
+                id_status: target.id_status,
+                match_source: target.match_source
+            }).eq('reference_number', ref);
+        } catch (_e) {
+            // ignore if table not migrated yet
+        }
+
+        document.getElementById('modal-foreign-fix')?.classList.add('hidden');
+        this.applyForeignFilters();
+        Toast.show(`Updated Student ID for ${ref}`, 'success');
+    }
+
+    async runForeignAutoMatchNames() {
+        if (!this.foreignTransactions || this.foreignTransactions.length === 0) {
+            Toast.show('No foreign transactions loaded to match', 'warning');
+            return;
+        }
+        const students = await this.ensureStudentsLoadedForForeign();
+        if (!students || students.length === 0) {
+            Toast.show('Student directory is empty. Please ensure Students Details are loaded.', 'warning');
+            return;
+        }
+        const beforeValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
+        this.foreignTransactions = matchForeignDepositsToStudents(this.foreignTransactions, students);
+        const afterValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
+        this.persistForeignTransactionsLocal();
+        this.applyForeignFilters();
+        Toast.show(`Auto-Match complete: ${afterValid - beforeValid} additional deposit(s) matched (${afterValid}/${this.foreignTransactions.length} Valid)`, 'success');
+    }
+
+    exportForeignErpTemplate() {
+        const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
+        if (!rows || rows.length === 0) {
+            Toast.show('No foreign transactions to export', 'warning');
+            return;
+        }
+        const exportData = rows.map((row, idx) => ({
+            'Date': toDateOnly(row.value_date || row.transaction_date),
+            'Voucher': '',
+            'Company': 'NU',
+            'Account': this.erpAccount(row),
+            'Name': row.matched_student_name || row.extracted_name || '',
+            'Description': `${row.reference_number || ''}/Foreign Deposit/${row.extracted_name || ''}/${row.student_id || ''}`,
+            'Debit': 0,
+            'Credit': Number(row.amount) || 0,
+            'Currency': row.currency || 'USD',
+            'Offset account type': 'Bank',
+            'Offset Non-ledger account': row.account_number || 'BM-USD',
+            'Offset main account': '',
+            'Method of payment': row.transaction_code || 'CHF',
+            'Payment reference': row.reference_number || '',
+            'Line number': idx + 1
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
+        rows.forEach((row, idx) => {
+            const serial = dateToExcelSerial(row.value_date || row.transaction_date);
+            if (serial !== null) {
+                const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 0 });
+                ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+            }
+        });
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Foreign_ERP_Export');
+        XLSX.writeFile(wb, `Dynamics_365_Foreign_Deposits_${toDateOnly(new Date())}.xlsx`);
+        Toast.show(`Exported ${exportData.length} Foreign Deposits to ERP Template`, 'success');
+    }
+
+    exportForeignTransactionsExcel() {
+        const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
+        if (!rows || rows.length === 0) {
+            Toast.show('No foreign transactions to export', 'warning');
+            return;
+        }
+        const exportData = rows.map(r => ({
+            'External Ref No': r.reference_number || '',
+            'Transaction Reference': r.transaction_ref || '',
+            'Code': r.transaction_code || '',
+            'Value Date': r.value_date || '',
+            'Transaction Date/Time': r.transaction_datetime || '',
+            'Student ID': r.student_id || '',
+            'ID Status': r.id_status || '',
+            'Match Source': r.match_source || '',
+            'Student Name (Statement)': r.extracted_name || '',
+            'Student Name (Directory)': r.matched_student_name || '',
+            'Depositor (بمناولة)': r.handler_name || '',
+            'Credit Amount': Number(r.amount) || 0,
+            'Currency': r.currency || 'USD',
+            'Account Number': r.account_number || '',
+            'Raw Bank Narrative': r.description || ''
+        }));
+        const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Foreign_Transactions');
+        XLSX.writeFile(wb, `Foreign_Transactions_${toDateOnly(new Date())}.xlsx`);
+        Toast.show(`Exported ${exportData.length} foreign transactions to Excel`, 'success');
+    }
+
+    async copyForeignTransactionsForEmail() {
+        const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
+        if (!rows || rows.length === 0) {
+            Toast.show('No foreign transactions to copy', 'warning');
+            return;
+        }
+        const tsv = [
+            ['Value Date', 'Ref No', 'Code', 'Student ID', 'Student Name', 'Depositor (بمناولة)', 'Amount', 'Currency'].join('\t'),
+            ...rows.map(r => [
+                r.value_date || '',
+                r.reference_number || '',
+                r.transaction_code || '',
+                r.student_id || 'Missing',
+                r.matched_student_name || r.extracted_name || '',
+                r.handler_name || '',
+                formatMoney(r.amount),
+                r.currency || 'USD'
+            ].join('\t'))
+        ].join('\n');
+
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(tsv);
+            Toast.show(`Copied ${rows.length} foreign transactions to clipboard`, 'success');
         }
     }
 

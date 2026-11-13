@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { validateID, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows } from '../rules.js';
+import { parseBankStatementGrid, parseBanqueMisrPdfText, matchForeignDepositsToStudents } from '../foreign-transactions.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -152,4 +153,79 @@ test('calculateSettlementDate shifts Sun-Wed by +1 day and Thu/Fri/Sat to Sunday
 
     // Month/Year rollover on Thursday (2026-12-31 is Thursday -> settles Sunday 2027-01-03)
     expect(calculateSettlementDate('2026-12-31T14:22:00Z')).toBe('2027-01-03');
+});
+
+test('parseBankStatementGrid extracts genuine student deposits and filters out REVR reversals & TD/T02/T06 bank rows', () => {
+    const sampleGrid = [
+        ['كشف حساب'],
+        ['', '', 'اسم العميل', 'جامعة النيل الاهلية', '', 'العملة', 'USD', '', 'تاريخ البداية', '2026-02-01'],
+        ['', '', 'رقم الفرع', '770', '', 'الرصيد الافتتاحي', '70366.58', '', 'تاريخ النهاية', '2026-02-03'],
+        ['', '', 'رقم الحساب', '7700120000000557', '', 'الرصيد الحالي', '168167.65'],
+        ['الرصيد بعد المعاملة', 'دائن', 'مدين', 'تاريخ و وقت المعاملة', 'تاريخ الحق', 'البيان', 'رقم المستند', 'الرقم المرجعي', 'كود الحركة', 'رقم الحركة', 'الحدث'],
+        ['70765.72', '399.14', '0', '2026-01-29 13:20:24', '2026-01-30', 'عائد ودائع | رقم 7700520000004779', '', '', 'TD3', '770C140USD 00001', 'ILIQ'],
+        ['170765.72', '100000', '0', '2026-01-29 13:20:24', '2026-01-30', 'تجديد / الغاء وديعة ألياً | رقم 7700520000004779', '', '', 'TD4', '770C140260320001', 'IMAT'],
+        ['172098.19', '1332.47', '0', '2026-02-01 09:14:25', '2026-02-01', 'ايداع نقدى | محمد خوجلي عثمان النور / 241000261 / بمناولة / هناء صلاح بن ادريس - ', '', 'FJB2603229880580', 'CHF', '512CHFD260320001', 'INIT'],
+        ['172298.98', '200.79', '0', '2026-02-01 11:35:38', '2026-02-01', 'ايداع نقدى | ABEER MAZEN / 241002241/ بمناولة / اسامه محمد ابوالعلا محمد - ', '', 'FJB2603229948236', 'CHF', '512CHFD260322010', 'INIT'],
+        ['172499.77', '200.79', '0', '2026-02-01 11:39:13', '2026-02-01', 'ايداع نقدى | GADEER MAZEN / 241002240 / بمناولة / اسامه محمد ابوالعلا محمد - ', '', 'FJB2603229951583', 'CHF', '512CHFD260322011', 'INIT'],
+        ['173079.24', '579.47', '0', '2026-02-01 15:16:42', '2026-02-01', 'ايداع نقدى | عبدالرحمن غسان منصور / id 211000875 - ', '', 'FJB2603230057683', 'CHF', '186CHFD260320026', 'INIT'],
+        ['173280.03', '200.79', '0', '2026-02-01 11:32:02', '2026-02-03', 'ايداع نقدى | GADEER MAZEN / 241002240 / بمناولة / اسامه محمد ابوالعلا محمد - ', '', 'FJB2603229948998', 'CHF', '512CHFD260320007', 'INIT'],
+        ['173079.24', '0', '200.79', '2026-02-01 11:35:29', '2026-02-03', 'ايداع نقدى | GADEER MAZEN / 241002240 / بمناولة / اسامه محمد ابوالعلا محمد - ', '', 'FJB2603229948998', 'CHF', '512CHFD260320007', 'REVR'],
+        ['173658.71', '579.47', '0', '2026-02-01 15:07:36', '2026-02-03', 'ايداع نقدى | عبدالرحمن غسان منصور / id 211000875 - ', '', 'FJB2603230051391', 'CHF', '186CHFD260320025', 'INIT'],
+        ['173079.24', '0', '579.47', '2026-02-01 15:17:02', '2026-02-03', 'ايداع نقدى | عبدالرحمن غسان منصور / id 211000875 - ', '', 'FJB2603230051391', 'CHF', '186CHFD260320025', 'REVR'],
+        ['173978.71', '899.47', '0', '2026-02-02 11:53:46', '2026-02-02', 'ايداع نقدى | محمد يحيي المغربي - ID 241002560 - ', '', 'FJB2603330195850', 'CHF', '391CHFD260330015', 'INIT'],
+        ['173923.65', '0', '55.06', '2026-02-02 13:42:35', '2026-02-02', 'عمولة تحاويل بالسويفت | - 100FCOT260330017', '', '', 'T06', '100FCOT260330017', 'INIT'],
+        ['168167.65', '0', '5756', '2026-02-02 13:42:35', '2026-02-02', 'تحاويل صادرة إلى الخارج | - 100FCOT260330017', '', '', 'T02', '100FCOT260330017', 'INIT']
+    ];
+
+    const res = parseBankStatementGrid(sampleGrid);
+    expect(res.metadata.accountNumber).toBe('7700120000000557');
+    expect(res.metadata.currency).toBe('USD');
+    expect(res.excludedReversals.length).toBe(4); // 2 INIT + 2 REVR rows cancelled out
+    expect(res.excludedTreasury.length).toBe(4);  // TD3, TD4, T06, T02
+    expect(res.deposits.length).toBe(5);          // Exactly 5 genuine student deposits
+
+    expect(res.deposits.map(d => d.student_id)).toEqual([
+        '241000261',
+        '241002241',
+        '241002240',
+        '211000875',
+        '241002560'
+    ]);
+    expect(res.deposits[0].extracted_name).toBe('محمد خوجلي عثمان النور');
+    expect(res.deposits[0].handler_name).toBe('هناء صلاح بن ادريس');
+    expect(res.deposits[0].amount).toBe(1332.47);
+});
+
+test('parseBanqueMisrPdfText and matchForeignDepositsToStudents resolve IDs and fuzzy Arabic/English names', () => {
+    const samplePdfText = `
+        Statement of Account
+        Customer Name جامعة النيل الاهلية
+        Account Number 7700120000000557
+        Currency USD
+        Date From 01-01-2026 Date To 01-02-2026
+        44,997.21 0.00 100,000.00 04-01-2026 16:15:43 30-12-2025 Booking TD Number 7700520000004779 770DEBK2600407PT TD1 770DEBK2600407PT DEBK
+        447,891.29 1,260.00 0.00 05-01-2026 08:23:25 05-01-2026 INCOMING SWIFT TRANSFER OUTSIDE EGYPT - EMAD ABDULSALAM ALZUQZUQ - /ROC/NCBK82825364BBMQ T35 100FOUR260050002 INIT
+        448,798.76 907.47 0.00 05-01-2026 13:10:13 05-01-2026 Cash Deposit سولاف انس الزعبي مناوله ساره انس الزعبي FJB2600526662342 CHF 519CHFD260050014 INIT
+        452,637.23 1,305.00 0.00 11-01-2026 11:59:51 12-01-2026 Cash Deposit ربح سفيان السنونس الوزري ID-231002371 FJB2601127264187 CHF 770CHFD260110015 INIT
+        451,332.23 0.00 1,305.00 11-01-2026 12:05:39 12-01-2026 Cash Deposit ربح سفيان السنونس الوزري ID-231002371 FJB2601127264187 CHF 770CHFD260110015 REVR
+    `;
+
+    const parsed = parseBanqueMisrPdfText(samplePdfText);
+    expect(parsed.metadata.accountNumber).toBe('7700120000000557');
+    expect(parsed.excludedReversals.length).toBe(2);
+    expect(parsed.excludedTreasury.length).toBe(1);
+    expect(parsed.deposits.length).toBe(2);
+
+    const matched = matchForeignDepositsToStudents(parsed.deposits, [
+        { student_id: '241009901', full_name: 'Emad Abdulsalam Alzuqzuq', arabic_name: 'عماد عبدالسلام الزقزوق' },
+        { student_id: '241009902', full_name: 'Solaf Anas Alzoubi', arabic_name: 'سولاف أنس الزعبي', guardian_name: 'سارة أنس الزعبي' }
+    ]);
+
+    expect(matched[0].student_id).toBe('241009901');
+    expect(matched[0].id_status).toBe('Valid');
+    expect(matched[0].match_source).toBe('name_match');
+
+    expect(matched[1].student_id).toBe('241009902');
+    expect(matched[1].id_status).toBe('Valid');
+    expect(matched[1].match_source).toBe('name_match');
 });

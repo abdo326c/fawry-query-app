@@ -475,4 +475,12 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(erpDateModal.classList.contains('hidden')).toBe(false);
     expect(document.getElementById('erp-date-choice-preview').innerHTML).toContain('2026-11-08');
     erpDateModal.classList.add('hidden');
+
+    // 5. Fawry Transactions rename & Foreign Transactions view / controls
+    expect(document.querySelector('.nav-link[data-tab="transactions"]').textContent).toContain('Fawry Transactions');
+    expect(document.querySelector('.nav-link[data-tab="foreign-transactions"]')).not.toBeNull();
+    expect(document.getElementById('view-foreign-transactions')).not.toBeNull();
+    expect(document.getElementById('btn-show-foreign-import')).not.toBeNull();
+    expect(document.getElementById('modal-foreign-import')).not.toBeNull();
+    expect(document.getElementById('modal-foreign-fix')).not.toBeNull();
 });
