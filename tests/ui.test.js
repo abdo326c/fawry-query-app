@@ -633,4 +633,23 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     document.getElementById('btn-dash-apply-fx').click();
     await new Promise(r => setTimeout(r, 20));
     expect(document.getElementById('stat-total-collections').textContent).toBe('EGP 78,000.00');
+
+    // Verify Sync to Supabase button & strictly whitelisted DB row mapping
+    expect(document.getElementById('btn-foreign-sync-cloud')).not.toBeNull();
+    const dbRow = window.app.toForeignDbRow({
+        reference_number: 'FJB_DB_1',
+        value_date: '2026-02-01',
+        amount: 500,
+        description: 'Tuition deposit',
+        _uid: 'temp_uid',
+        bank: 'NuMisrUsd5',
+        mapping: 'Tuition',
+        match_confidence: 'high',
+        extra_parser_field: 'should_be_stripped'
+    });
+    expect(dbRow.reference_number).toBe('FJB_DB_1');
+    expect(dbRow._uid).toBeUndefined();
+    expect(dbRow.bank).toBeUndefined();
+    expect(dbRow.mapping).toBeUndefined();
+    expect(dbRow.extra_parser_field).toBeUndefined();
 });

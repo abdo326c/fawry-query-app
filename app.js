@@ -10714,6 +10714,91 @@ class App {
         };
     }
 
+    toForeignDbRow(r) {
+        const norm = this.normalizeForeignTransactionRow(r);
+        if (!norm || !norm.reference_number) return null;
+        return {
+            reference_number: String(norm.reference_number).trim(),
+            transaction_ref: norm.transaction_ref ? String(norm.transaction_ref).trim() : null,
+            transaction_code: norm.transaction_code ? String(norm.transaction_code).trim() : 'CHF',
+            event: norm.event ? String(norm.event).trim() : 'INIT',
+            value_date: toDateOnly(norm.value_date || norm.payment_date || norm.transaction_date) || null,
+            transaction_date: toDateOnly(norm.transaction_date || norm.value_date || norm.payment_date) || null,
+            transaction_datetime: norm.transaction_datetime ? String(norm.transaction_datetime).trim() : null,
+            amount: Number(norm.amount ?? norm.item_price) || 0,
+            currency: norm.currency ? String(norm.currency).trim() : 'USD',
+            account_number: norm.account_number ? String(norm.account_number).trim() : null,
+            student_id: norm.student_id ? String(norm.student_id).trim() : null,
+            extracted_name: norm.extracted_name || null,
+            matched_student_name: norm.matched_student_name || null,
+            handler_name: norm.handler_name || null,
+            deposit_method: norm.deposit_method || 'Cash Deposit',
+            description: norm.description || null,
+            id_status: norm.id_status || null,
+            match_source: norm.match_source || 'unmatched',
+            erp_batch_number: norm.erp_batch_number || null,
+            erp_voucher: norm.erp_voucher || null
+        };
+    }
+
+    async syncForeignTransactionsToSupabase({ silent = false, rows = null } = {}) {
+        const sourceRows = Array.isArray(rows) ? rows : (this.foreignTransactions || []);
+        if (sourceRows.length === 0) {
+            if (!silent) Toast.show('No foreign transactions available to sync.', 'warning');
+            return { synced: 0, error: null };
+        }
+
+        const deduped = new Map();
+        sourceRows.forEach(r => {
+            const dbRow = this.toForeignDbRow(r);
+            if (dbRow && dbRow.reference_number) {
+                deduped.set(dbRow.reference_number, dbRow);
+            }
+        });
+        const dbRows = [...deduped.values()];
+        if (dbRows.length === 0) {
+            if (!silent) Toast.show('No valid reference numbers found to sync.', 'warning');
+            return { synced: 0, error: null };
+        }
+
+        const btn = !silent ? document.getElementById('btn-foreign-sync-cloud') : null;
+        const origHtml = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Syncing...';
+            if (window.lucide) lucide.createIcons();
+        }
+
+        try {
+            const tableClient = supabase.from('foreign_transactions');
+            if (!tableClient || typeof tableClient.upsert !== 'function') {
+                return { synced: 0, error: null };
+            }
+            const chunkSize = 200;
+            for (let i = 0; i < dbRows.length; i += chunkSize) {
+                const batch = dbRows.slice(i, i + chunkSize);
+                const { error } = await tableClient.upsert(batch, { onConflict: 'reference_number' });
+                if (error) {
+                    if (!silent) Toast.show(`Supabase sync failed: ${error.message}`, 'error');
+                    return { synced: 0, error };
+                }
+            }
+            if (!silent) {
+                Toast.show(`Synced ${dbRows.length} foreign transaction(s) to Supabase`, 'success');
+            }
+            return { synced: dbRows.length, error: null };
+        } catch (err) {
+            if (!silent) Toast.show(`Supabase sync failed: ${err.message}`, 'error');
+            return { synced: 0, error: err };
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                if (window.lucide) lucide.createIcons();
+            }
+        }
+    }
+
     async applyManualFixesToForeignTransactions(fixesList) {
         const fixes = Array.isArray(fixesList) ? fixesList : (this.allFixesData || []);
         if (!fixes.length || !Array.isArray(this.foreignTransactions) || this.foreignTransactions.length === 0) {
@@ -10990,6 +11075,10 @@ class App {
         document.getElementById('btn-foreign-automatch')?.addEventListener('click', () => {
             this.runForeignAutoMatchNames();
         });
+        document.getElementById('btn-foreign-sync-cloud')?.addEventListener('click', () => {
+            if (!this.requireRole('operator', 'sync foreign transactions to Supabase')) return;
+            this.syncForeignTransactionsToSupabase({ silent: false });
+        });
         document.getElementById('btn-foreign-copy-email')?.addEventListener('click', () => {
             this.copyForeignTransactionsForEmail();
         });
@@ -11079,12 +11168,22 @@ class App {
                 .from('foreign_transactions')
                 .select('*')
                 .order('value_date', { ascending: false });
-            if (!error && Array.isArray(data) && data.length > 0) {
+            if (!error && Array.isArray(data)) {
+                const cloudRefs = new Set(data.map(r => r.reference_number).filter(Boolean));
+                const unsyncedLocal = (this.foreignTransactions || []).filter(r => r.reference_number && !cloudRefs.has(r.reference_number));
+
                 const byRef = new Map();
                 (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
                 data.forEach(r => byRef.set(r.reference_number, r));
                 this.foreignTransactions = [...byRef.values()].map((r, i) => this.normalizeForeignTransactionRow(r, i));
                 this.persistForeignTransactionsLocal();
+
+                if (unsyncedLocal.length > 0 && this.hasRole('operator')) {
+                    const res = await this.syncForeignTransactionsToSupabase({ silent: true, rows: unsyncedLocal });
+                    if (res.synced > 0) {
+                        Toast.show(`Synced ${res.synced} local foreign transaction(s) to Supabase`, 'success');
+                    }
+                }
             } else if (Array.isArray(this.foreignTransactions)) {
                 this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
             }
@@ -11347,12 +11446,7 @@ class App {
         this.persistForeignTransactionsLocal();
 
         // Also upsert into Supabase foreign_transactions if table exists
-        try {
-            const dbRows = incomingRows.map(({ match_confidence, external_ref, _uid, item_price, payment_date, item_name, mapping, second_mapping, bank, check_column, ...rest }) => rest);
-            await supabase.from('foreign_transactions').upsert(dbRows, { onConflict: 'reference_number' });
-        } catch (_e) {
-            // localStorage already updated seamlessly
-        }
+        const syncRes = await this.syncForeignTransactionsToSupabase({ silent: true, rows: incomingRows });
 
         const accBadge = document.getElementById('foreign-stat-account-badge');
         if (accBadge) {
@@ -11363,7 +11457,11 @@ class App {
         this.pendingForeignExtraction = null;
         this.erpBaseKey = null;
         this.applyForeignFilters();
-        Toast.show(`Saved ${incomingRows.length} student deposits to Foreign Transactions`, 'success');
+        if (syncRes.error) {
+            Toast.show(`Saved ${incomingRows.length} locally, but Supabase sync failed: ${syncRes.error.message}`, 'warning');
+        } else {
+            Toast.show(`Saved ${incomingRows.length} student deposits to Foreign Transactions`, 'success');
+        }
     }
 
     applyForeignFilters() {
@@ -11948,6 +12046,7 @@ class App {
             .map((r, i) => this.normalizeForeignTransactionRow(r, i));
         const afterValid = this.foreignTransactions.filter(r => r.id_status === 'Valid').length;
         this.persistForeignTransactionsLocal();
+        await this.syncForeignTransactionsToSupabase({ silent: true });
         this.applyForeignFilters();
         Toast.show(`Auto-Match complete: ${afterValid - beforeValid} additional deposit(s) matched (${afterValid}/${this.foreignTransactions.length} Valid)`, 'success');
     }
