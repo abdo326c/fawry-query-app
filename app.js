@@ -5982,7 +5982,7 @@ class App {
                     guardian_name: document.getElementById('stu-modal-guardian-name')?.value.trim() || null,
                     guardian_mobile: document.getElementById('stu-modal-guardian-mobile')?.value.trim() || null,
                     college: document.getElementById('stu-modal-college')?.value.trim() || null,
-                    program: document.getElementById('stu-modal-program')?.value.trim() || null,
+                    program: ensureProgramHasLevelPrefix(document.getElementById('stu-modal-program')?.value.trim() || ''),
                     source: 'Manual'
                 };
 
@@ -6011,10 +6011,6 @@ class App {
                 }
             });
         }
-
-        document.getElementById('btn-label-existing-students')?.addEventListener('click', () => {
-            this.labelExistingStudentsInDatabase({ silent: false });
-        });
 
         document.getElementById('btn-export-students')?.addEventListener('click', async () => {
             try {
@@ -7020,7 +7016,11 @@ class App {
                 }
             }
 
-            const mergedRecords = records.map(r => this.mergeStudentRecord(existingMap.get(r.student_id), r));
+            const mergedRecords = records.map(r => {
+                const merged = this.mergeStudentRecord(existingMap.get(r.student_id), r);
+                merged.program = ensureProgramHasLevelPrefix(merged.program);
+                return merged;
+            });
 
             status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${mergedRecords.length} records to database...`;
             
@@ -8874,14 +8874,13 @@ class App {
                 tr.style.background = 'rgba(239, 68, 68, 0.04)';
             }
 
-            const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(row));
             const accountCellHtml = isValid
                 ? `<div>
-                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>${stuLevelBadge}
+                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>
                         ${isExempt ? `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">Exempt (Dip &amp; Workshop)</div>` : ''}
                    </div>`
                 : `<div>
-                        <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(paddedAccount || 'Missing ID')}</span>${stuLevelBadge}
+                        <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(paddedAccount || 'Missing ID')}</span>
                         <div style="font-size: 0.72rem; color: var(--danger); margin-top: 2px;">${escapeHTML(row.id_status)}</div>
                    </div>`;
 

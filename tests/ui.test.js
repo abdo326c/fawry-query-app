@@ -1282,6 +1282,7 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
                 guardian_name: 'Mr. Mmdouh Abdallh Matoly', // Picked Father from continuation row over 'Other'
                 guardian_mobile: '01123585899',
                 college: 'Engineering and Applied Sciences', // Preserved from StudentDetails
+                program: '(UG) Undergraduate / Bachelor of Science',
                 source: 'Merged'
             });
 
@@ -1293,7 +1294,7 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
                 national_id: '29811192100477',
                 email: 'kamoussa@nu.edu.eg',
                 mobile: '01007824027',
-                program: 'Graduate / Master / Microelectronic System Design-MSc',
+                program: '(PG) Graduate / Master / Microelectronic System Design-MSc',
                 source: 'ApplicantReport'
             });
         } finally {
@@ -1331,15 +1332,16 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
         expect(fxHtml).toContain('badge-level-pg');
         expect(fxHtml).toContain('(PG)');
 
-        // ERP Preview shows (UG) and (PG) badges next to Account Number
+        // ERP Preview stays clean without (UG)/(PG) level badges
         window.app.erpData = [
             { reference_number: 'ERP_UG', payment_date: '2026-11-12', student_id: '241001111', item_price: 5000, item_name: 'Tuition', mapping: 'Tuition', id_status: 'Valid', bank: 'NUADIB64' },
             { reference_number: 'ERP_PG', payment_date: '2026-11-12', student_id: '1710367', item_price: 6000, item_name: 'Tuition', mapping: 'Tuition', id_status: 'Valid', bank: 'NUADIB64' }
         ];
         window.app.renderErpPreview();
         const erpPreviewHtml = document.getElementById('erp-preview-body')?.innerHTML || '';
-        expect(erpPreviewHtml).toContain('badge-level-ug');
-        expect(erpPreviewHtml).toContain('badge-level-pg');
+        expect(erpPreviewHtml).not.toContain('badge-level-ug');
+        expect(erpPreviewHtml).not.toContain('badge-level-pg');
+        expect(document.getElementById('btn-label-existing-students')).toBeNull();
 
         // Students Directory table renders (UG) and (PG) badges and indexes level tags for search
         window.app.allStudents.forEach(s => window.app.indexStudentRecord(s));
