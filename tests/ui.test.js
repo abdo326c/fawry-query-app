@@ -1278,6 +1278,7 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
                 arabic_name: 'فاطمة ممدوح عبدالله',
                 national_id: '30103312501609',
                 email: 'f.mmdouh@nu.edu.eg', // Preserved existing NU email from StudentDetails
+                personal_email: 'fatmamamdouh593@gmail.com', // Routed personal email into secondary field
                 mobile: '01014015386',
                 guardian_name: 'Mr. Mmdouh Abdallh Matoly', // Picked Father from continuation row over 'Other'
                 guardian_mobile: '01123585899',
@@ -1293,6 +1294,7 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
                 arabic_name: 'كريم محمد موسى ابوالخير',
                 national_id: '29811192100477',
                 email: 'kamoussa@nu.edu.eg',
+                personal_email: null, // Duplicate NU email in Personal Email column is not stored as personal
                 mobile: '01007824027',
                 program: '(PG) Graduate / Master / Microelectronic System Design-MSc',
                 source: 'ApplicantReport'
@@ -1343,7 +1345,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
         expect(erpPreviewHtml).not.toContain('badge-level-pg');
         expect(document.getElementById('btn-label-existing-students')).toBeNull();
 
-        // Students Directory table renders (UG) and (PG) badges and indexes level tags for search
+        // Students Directory table renders (UG)/(PG) badges + NU email primary and personal email secondary
+        window.app.allStudents[0].email = 'a.hassan@nu.edu.eg';
+        window.app.allStudents[0].personal_email = 'ali.personal@gmail.com';
+        window.app.allStudents[1].email = null;
+        window.app.allStudents[1].personal_email = 'kareem.personal@gmail.com';
         window.app.allStudents.forEach(s => window.app.indexStudentRecord(s));
         window.app.filteredStudentsData = [...window.app.allStudents];
         window.app.studentsCurrentPage = 1;
@@ -1351,6 +1357,17 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
         const studentsHtml = document.getElementById('students-table-body')?.innerHTML || '';
         expect(studentsHtml).toContain('badge-level-ug');
         expect(studentsHtml).toContain('badge-level-pg');
+        expect(studentsHtml).toContain('a.hassan@nu.edu.eg');
+        expect(studentsHtml).toContain('ali.personal@gmail.com');
+        expect(studentsHtml).toContain('No NU email');
+        expect(studentsHtml).toContain('kareem.personal@gmail.com');
+        expect(window.app.allStudents[0]._searchHaystack).toContain('ali.personal@gmail.com');
+
+        // Student Add/Edit modal populates NU email and Personal email separately
+        window.app.openStudentModal(window.app.allStudents[0]);
+        expect(document.getElementById('stu-modal-email')?.value).toBe('a.hassan@nu.edu.eg');
+        expect(document.getElementById('stu-modal-personal-email')?.value).toBe('ali.personal@gmail.com');
+        document.getElementById('modal-student')?.classList.add('hidden');
 
         // labelExistingStudentsInDatabase prefixes existing students in DB with (UG) and (PG)
         const { supabase } = await import('../supabase.js');

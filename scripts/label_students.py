@@ -111,16 +111,63 @@ def pick_longer_name(a, b):
     return b if len(str(b)) >= len(str(a)) else a
 
 
+def is_nu_email(email):
+    if not email:
+        return False
+    s = str(email).strip()
+    return '@' in s and bool(re.search(r'@([a-z0-9-]+\.)*nu\.edu([.,]eg)?$', s, re.I))
+
+
+def classify_emails(*candidates):
+    email = None
+    personal_email = None
+    for raw in candidates:
+        s = clean_text(raw)
+        if not s:
+            continue
+        if is_nu_email(s):
+            if not email:
+                email = s
+        else:
+            if not personal_email:
+                personal_email = s
+    return email, personal_email
+
+
+def merge_emails(existing, incoming, is_sd=False):
+    ex = existing or {}
+    inc = incoming or {}
+    nu_order = (
+        [inc.get('email'), inc.get('personal_email'), ex.get('email'), ex.get('personal_email')]
+        if is_sd
+        else [ex.get('email'), ex.get('personal_email'), inc.get('email'), inc.get('personal_email')]
+    )
+    per_order = (
+        [inc.get('personal_email'), inc.get('email'), ex.get('personal_email'), ex.get('email')]
+        if is_sd
+        else [inc.get('personal_email'), ex.get('personal_email'), inc.get('email'), ex.get('email')]
+    )
+    email = next((str(c).strip() for c in nu_order if c and is_nu_email(c)), None)
+    personal_email = next((str(c).strip() for c in per_order if c and str(c).strip() and not is_nu_email(c)), None)
+    return email, personal_email
+
+
 def merge_record(existing, incoming):
     if not existing:
-        return dict(incoming)
+        email, personal_email = classify_emails(incoming.get('email'), incoming.get('personal_email'))
+        rec = dict(incoming)
+        rec['email'] = email
+        rec['personal_email'] = personal_email
+        return rec
     is_sd = incoming.get('source') == 'StudentDetails'
+    email, personal_email = merge_emails(existing, incoming, is_sd=is_sd)
     return {
         'student_id': incoming.get('student_id') or existing.get('student_id'),
         'full_name': pick_longer_name(existing.get('full_name'), incoming.get('full_name')),
         'arabic_name': incoming.get('arabic_name') or existing.get('arabic_name') or None,
         'national_id': incoming.get('national_id') or existing.get('national_id') or None,
-        'email': (incoming.get('email') or existing.get('email')) if is_sd else (existing.get('email') or incoming.get('email')),
+        'email': email,
+        'personal_email': personal_email,
         'mobile': incoming.get('mobile') or existing.get('mobile') or None,
         'guardian_name': incoming.get('guardian_name') or existing.get('guardian_name') or None,
         'guardian_mobile': incoming.get('guardian_mobile') or existing.get('guardian_mobile') or None,
@@ -188,7 +235,7 @@ def parse_workbook_into_map(filepath, records_map):
 
                 uni_email = row[hmap['Email1']] if 'Email1' in hmap else (row[hmap['University Email']] if 'University Email' in hmap else None)
                 per_email = row[hmap['personalEmail']] if 'personalEmail' in hmap else (row[hmap['Personal Email']] if 'Personal Email' in hmap else None)
-                email = clean_text(uni_email) or clean_text(per_email)
+                email, personal_email = classify_emails(uni_email, per_email)
 
                 phone_val = row[hmap['PhoneNumber1']] if 'PhoneNumber1' in hmap else (row[hmap['Phone Number']] if 'Phone Number' in hmap else None)
                 mobile = clean_phone(phone_val)
@@ -230,6 +277,7 @@ def parse_workbook_into_map(filepath, records_map):
                     'arabic_name': arabic_name,
                     'national_id': national_id,
                     'email': email,
+                    'personal_email': personal_email,
                     'mobile': mobile,
                     'guardian_name': guardian_name,
                     'guardian_mobile': guardian_mobile,
@@ -252,7 +300,9 @@ def parse_workbook_into_map(filepath, records_map):
                 full_name = clean_text(row[hmap.get('Student Name', hmap.get('Full Name', -1))])
                 arabic_name = clean_text(row[hmap['Arabic Name']]) if 'Arabic Name' in hmap else None
                 national_id = clean_national_id(row[hmap['National ID']] if 'National ID' in hmap else None, raw_sid, student_id)
-                email = clean_text(row[hmap['Email']] if 'Email' in hmap else None)
+                raw_email = row[hmap['Email']] if 'Email' in hmap else (row[hmap['NU Email']] if 'NU Email' in hmap else None)
+                raw_per_email = row[hmap['Personal Email']] if 'Personal Email' in hmap else (row[hmap['Secondary Email']] if 'Secondary Email' in hmap else None)
+                email, personal_email = classify_emails(raw_email, raw_per_email)
                 mob1 = clean_phone(row[hmap['Mobile Phone Number']]) if 'Mobile Phone Number' in hmap else (clean_phone(row[hmap['Mobile']]) if 'Mobile' in hmap else None)
                 mob2 = clean_phone(row[hmap['Home Phone Number']]) if 'Home Phone Number' in hmap else None
                 mobile = mob1 or mob2
@@ -268,6 +318,7 @@ def parse_workbook_into_map(filepath, records_map):
                     'arabic_name': arabic_name,
                     'national_id': national_id,
                     'email': email,
+                    'personal_email': personal_email,
                     'mobile': mobile,
                     'guardian_name': guardian_name,
                     'guardian_mobile': guardian_mobile,
@@ -306,7 +357,7 @@ def main():
     out_ws = out_wb.active
     out_ws.title = 'Students'
     headers = [
-        'Student ID', 'Level', 'Full Name', 'Arabic Name', 'Email',
+        'Student ID', 'Level', 'Full Name', 'Arabic Name', 'Email', 'Personal Email',
         'Mobile', 'National ID', 'College', 'Program',
         'Guardian Name', 'Guardian Mobile', 'Source'
     ]
@@ -327,6 +378,7 @@ def main():
             s.get('full_name') or '',
             s.get('arabic_name') or '',
             s.get('email') or '',
+            s.get('personal_email') or '',
             s.get('mobile') or '',
             s.get('national_id') or '',
             s.get('college') or '',

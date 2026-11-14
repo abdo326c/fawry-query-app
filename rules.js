@@ -1081,6 +1081,70 @@ function detectCollegeCode(str) {
     return null;
 }
 
+/**
+ * Returns true if the given email address belongs to the NU domain (@nu.edu.eg or subdomain).
+ */
+export function isNuEmail(email) {
+    if (!email) return false;
+    const s = String(email).trim();
+    if (!s.includes('@')) return false;
+    return /@([a-z0-9-]+\.)*nu\.edu([.,]eg)?$/i.test(s);
+}
+
+/**
+ * Partitions candidate email strings into main NU email (`email`) and secondary (`personal_email`).
+ */
+export function classifyStudentEmails(...candidates) {
+    let email = null;
+    let personal_email = null;
+    for (const raw of candidates) {
+        if (!raw) continue;
+        const s = String(raw).trim();
+        if (!s) continue;
+        if (isNuEmail(s)) {
+            if (!email) email = s;
+        } else {
+            if (!personal_email) personal_email = s;
+        }
+    }
+    return { email, personal_email };
+}
+
+/**
+ * Merges main NU email (`email`) and secondary (`personal_email`) between existing and incoming student records.
+ */
+export function mergeStudentEmails(existing = {}, incoming = {}, isFromStudentDetails = false) {
+    const nuOrder = isFromStudentDetails
+        ? [incoming?.email, incoming?.personal_email, existing?.email, existing?.personal_email]
+        : [existing?.email, existing?.personal_email, incoming?.email, incoming?.personal_email];
+    const personalOrder = isFromStudentDetails
+        ? [incoming?.personal_email, incoming?.email, existing?.personal_email, existing?.email]
+        : [incoming?.personal_email, existing?.personal_email, incoming?.email, existing?.email];
+
+    let email = null;
+    for (const c of nuOrder) {
+        const s = c ? String(c).trim() : '';
+        if (s && isNuEmail(s)) { email = s; break; }
+    }
+
+    let personal_email = null;
+    for (const c of personalOrder) {
+        const s = c ? String(c).trim() : '';
+        if (s && !isNuEmail(s)) { personal_email = s; break; }
+    }
+
+    return { email, personal_email };
+}
+
+/**
+ * Returns display-ready { nuEmail, personalEmail } ensuring NU email is always primary.
+ */
+export function getStudentDisplayEmails(student) {
+    if (!student) return { nuEmail: null, personalEmail: null };
+    const { email, personal_email } = classifyStudentEmails(student.email, student.personal_email);
+    return { nuEmail: email, personalEmail: personal_email };
+}
+
 const _studentLookupIndexCache = new WeakMap();
 
 /**
@@ -1146,10 +1210,12 @@ export function buildStudentLookupIndex(students = []) {
             idMap.set(normSid.toUpperCase(), s);
         }
 
-        if (s.email) {
-            const em = String(s.email).toLowerCase().trim();
-            if (em.includes('@') && em.length >= 6) {
-                pushUnique(emailMap, em, s, normSid);
+        for (const rawEm of [s.email, s.personal_email]) {
+            if (rawEm) {
+                const em = String(rawEm).toLowerCase().trim();
+                if (em.includes('@') && em.length >= 6) {
+                    pushUnique(emailMap, em, s, normSid);
+                }
             }
         }
 
@@ -1295,8 +1361,9 @@ function resolveCandidateGroup(candidates, context) {
             }
         }
 
-        const em = student.email ? String(student.email).toLowerCase().trim() : '';
-        if (em && txEmailsSet.has(em)) {
+        const em1 = student.email ? String(student.email).toLowerCase().trim() : '';
+        const em2 = student.personal_email ? String(student.personal_email).toLowerCase().trim() : '';
+        if ((em1 && txEmailsSet.has(em1)) || (em2 && txEmailsSet.has(em2))) {
             score += 60;
             reasons.push('Email');
         }

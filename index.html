@@ -2346,7 +2346,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.6.4"></script>
+    <script type="module" src="app.js?v=2.6.5"></script>
     <script defer src="ui-chrome.js?v=1.0.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">
@@ -2412,12 +2412,21 @@
                         <input type="text" id="stu-modal-arabic-name" class="input-text" placeholder="الاسم بالعربية">
                     </div>
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label>Email</label>
+                        <label>NU Email (Main)</label>
                         <input type="email" id="stu-modal-email" class="input-text" placeholder="student@nu.edu.eg">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Personal Email (Secondary)</label>
+                        <input type="email" id="stu-modal-personal-email" class="input-text" placeholder="personal@example.com">
                     </div>
                     <div class="form-group" style="margin-bottom: 0;">
                         <label>Mobile Phone</label>
                         <input type="text" id="stu-modal-mobile" class="input-text" placeholder="010XXXXXXXX">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>College</label>
+                        <input type="text" id="stu-modal-college" class="input-text" list="datalist-student-colleges" placeholder="e.g. Engineering and Applied Sciences">
+                        <datalist id="datalist-student-colleges"></datalist>
                     </div>
                     <div class="form-group" style="margin-bottom: 0;">
                         <label>Guardian Name</label>
@@ -2427,12 +2436,7 @@
                         <label>Guardian Mobile</label>
                         <input type="text" id="stu-modal-guardian-mobile" class="input-text" placeholder="010XXXXXXXX">
                     </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label>College</label>
-                        <input type="text" id="stu-modal-college" class="input-text" list="datalist-student-colleges" placeholder="e.g. Engineering and Applied Sciences">
-                        <datalist id="datalist-student-colleges"></datalist>
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
+                    <div class="form-group" style="margin-bottom: 0; grid-column: 1 / -1;">
                         <label>Program / Major</label>
                         <input type="text" id="stu-modal-program" class="input-text" placeholder="e.g. Computer Science">
                     </div>

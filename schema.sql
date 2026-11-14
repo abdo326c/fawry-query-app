@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS student_master (
   arabic_name     VARCHAR(255),
   national_id     VARCHAR(50),
   email           VARCHAR(255),
+  personal_email  VARCHAR(255),
   mobile          VARCHAR(50),
   guardian_name   VARCHAR(255),
   guardian_mobile VARCHAR(50),
@@ -150,15 +151,19 @@ CREATE TABLE IF NOT EXISTS student_master (
   source          VARCHAR(100),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE student_master ADD COLUMN IF NOT EXISTS personal_email TEXT;
 CREATE INDEX IF NOT EXISTS idx_student_master_national_id ON student_master(national_id);
 CREATE INDEX IF NOT EXISTS idx_student_master_email ON student_master(email);
 CREATE INDEX IF NOT EXISTS idx_student_master_email_lower ON public.student_master (LOWER(BTRIM(email)));
+CREATE INDEX IF NOT EXISTS idx_student_master_personal_email ON public.student_master(personal_email);
+CREATE INDEX IF NOT EXISTS idx_student_master_personal_email_lower ON public.student_master (LOWER(BTRIM(personal_email)));
 CREATE INDEX IF NOT EXISTS idx_student_master_mobile ON student_master(mobile);
 CREATE INDEX IF NOT EXISTS idx_student_master_college ON public.student_master(college);
 CREATE INDEX IF NOT EXISTS idx_student_master_name_trgm ON public.student_master USING gin (full_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_student_master_mobile_trgm ON public.student_master USING gin (mobile gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_student_master_gmobile_trgm ON public.student_master USING gin (guardian_mobile gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_student_master_email_trgm ON public.student_master USING gin (email gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_student_master_personal_email_trgm ON public.student_master USING gin (personal_email gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_student_master_natid_trgm ON public.student_master USING gin (national_id gin_trgm_ops);
 
 -- 7. Payment Links Catalog Table

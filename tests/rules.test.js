@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows, normalizeStudentIdValue, normalizePhoneKey, normalizeAutoMatchName, extractCandidateStudentIds, buildStudentLookupIndex, matchTransactionToStudent, getStudentProgramLevel, formatStudentLevelTag } from '../rules.js';
+import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows, normalizeStudentIdValue, normalizePhoneKey, normalizeAutoMatchName, extractCandidateStudentIds, buildStudentLookupIndex, matchTransactionToStudent, getStudentProgramLevel, formatStudentLevelTag, isNuEmail, classifyStudentEmails, mergeStudentEmails, getStudentDisplayEmails } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
 import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates, getEgyptDateTimeParts, getEgyptNoonTimestampMs, getMsUntilNextEgyptNoon, isRateStaleForEgyptNoon } from '../fx-rates.js';
 
@@ -699,4 +699,74 @@ test('getStudentProgramLevel and formatStudentLevelTag classify Undergraduate as
     expect(getStudentProgramLevel('')).toBe('');
     expect(getStudentProgramLevel(null)).toBe('');
     expect(formatStudentLevelTag({})).toBe('');
+});
+
+test('student email classification keeps @nu.edu.eg as main email and routes personal emails to personal_email', () => {
+    expect(isNuEmail('a.adel@nu.edu.eg')).toBe(true);
+    expect(isNuEmail('m.wael@eu4m.nu.edu.eg')).toBe(true);
+    expect(isNuEmail('user@gmail.com')).toBe(false);
+    expect(isNuEmail('user@nu.edu.eg.fake.com')).toBe(false);
+
+    expect(classifyStudentEmails('yo.ismail@nu.edu.eg', 'youssef@gmail.com')).toEqual({
+        email: 'yo.ismail@nu.edu.eg',
+        personal_email: 'youssef@gmail.com'
+    });
+    expect(classifyStudentEmails(null, 'laila@gmail.com')).toEqual({
+        email: null,
+        personal_email: 'laila@gmail.com'
+    });
+    expect(classifyStudentEmails(null, 'm.ali@nu.edu.eg')).toEqual({
+        email: 'm.ali@nu.edu.eg',
+        personal_email: null
+    });
+    expect(classifyStudentEmails('kamoussa@nu.edu.eg', 'kamoussa@nu.edu.eg')).toEqual({
+        email: 'kamoussa@nu.edu.eg',
+        personal_email: null
+    });
+
+    // Merging preserves existing NU email even if incoming is StudentDetails with only a personal email
+    expect(mergeStudentEmails(
+        { email: 'a.khaled@nu.edu.eg', personal_email: null },
+        { email: null, personal_email: 'a.khaled@gmail.com' },
+        true
+    )).toEqual({
+        email: 'a.khaled@nu.edu.eg',
+        personal_email: 'a.khaled@gmail.com'
+    });
+
+    // Merging promotes incoming NU email if existing legacy record had a personal email in `email`
+    expect(mergeStudentEmails(
+        { email: 'old.personal@gmail.com', personal_email: null },
+        { email: 's.student@nu.edu.eg', personal_email: 'new.personal@gmail.com' },
+        false
+    )).toEqual({
+        email: 's.student@nu.edu.eg',
+        personal_email: 'new.personal@gmail.com'
+    });
+
+    expect(getStudentDisplayEmails({ email: 'legacy@gmail.com', personal_email: null })).toEqual({
+        nuEmail: null,
+        personalEmail: 'legacy@gmail.com'
+    });
+});
+
+test('auto-matcher matches students by either NU email or personal_email', () => {
+    const students = [
+        { student_id: '241001111', full_name: 'Ali Hassan', email: 'a.hassan@nu.edu.eg', personal_email: 'ali.personal@gmail.com' }
+    ];
+    const index = buildStudentLookupIndex(students);
+
+    const byPersonal = matchTransactionToStudent(
+        { student_id: '', item_name: 'Tuition' },
+        { index, link: { customer_email: 'ali.personal@gmail.com' } }
+    );
+    expect(byPersonal.proposedStudent?.student_id).toBe('241001111');
+    expect(byPersonal.confidenceTier).toBe('high');
+
+    const byNu = matchTransactionToStudent(
+        { student_id: 'a.hassan@nu.edu.eg', item_name: 'Tuition' },
+        { index }
+    );
+    expect(byNu.proposedStudent?.student_id).toBe('241001111');
+    expect(byNu.confidenceTier).toBe('high');
 });

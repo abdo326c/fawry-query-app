@@ -28,8 +28,11 @@ import {
     ensureProgramHasLevelPrefix,
     normalizePhoneKey,
     buildStudentLookupIndex,
-    matchTransactionToStudent
-} from './rules.js?v=2.6.0';
+    matchTransactionToStudent,
+    classifyStudentEmails,
+    mergeStudentEmails,
+    getStudentDisplayEmails
+} from './rules.js?v=2.6.1';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -4676,7 +4679,7 @@ class App {
             try {
                 const data = await fetchAll(
                     'student_master',
-                    'student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source',
+                    'student_id, full_name, arabic_name, national_id, email, personal_email, mobile, guardian_name, guardian_mobile, college, program, source',
                     null,
                     'student_id'
                 );
@@ -6146,6 +6149,7 @@ class App {
                     arabic_name: document.getElementById('stu-modal-arabic-name')?.value.trim() || null,
                     national_id: document.getElementById('stu-modal-national-id')?.value.trim() || null,
                     email: document.getElementById('stu-modal-email')?.value.trim() || null,
+                    personal_email: document.getElementById('stu-modal-personal-email')?.value.trim() || null,
                     mobile: document.getElementById('stu-modal-mobile')?.value.trim() || null,
                     guardian_name: document.getElementById('stu-modal-guardian-name')?.value.trim() || null,
                     guardian_mobile: document.getElementById('stu-modal-guardian-mobile')?.value.trim() || null,
@@ -6193,24 +6197,28 @@ class App {
                     ? this.filteredStudentsData
                     : await this.ensureFullStudentMaster();
 
-                const rows = (exportSource || []).map(s => ({
-                    'Student ID': s.student_id || '',
-                    'Level': s._levelTag || formatStudentLevelTag(getStudentProgramLevel(s)),
-                    'Full Name': s.full_name || '',
-                    'Arabic Name': s.arabic_name || '',
-                    'Email': s.email || '',
-                    'Mobile': s.mobile || '',
-                    'National ID': s.national_id || '',
-                    'College': s.college || '',
-                    'Program': s.program || '',
-                    'Guardian Name': s.guardian_name || '',
-                    'Guardian Mobile': s.guardian_mobile || '',
-                    'Source': s.source || ''
-                }));
+                const rows = (exportSource || []).map(s => {
+                    const { nuEmail, personalEmail } = getStudentDisplayEmails(s);
+                    return {
+                        'Student ID': s.student_id || '',
+                        'Level': s._levelTag || formatStudentLevelTag(getStudentProgramLevel(s)),
+                        'Full Name': s.full_name || '',
+                        'Arabic Name': s.arabic_name || '',
+                        'Email': nuEmail || '',
+                        'Personal Email': personalEmail || '',
+                        'Mobile': s.mobile || '',
+                        'National ID': s.national_id || '',
+                        'College': s.college || '',
+                        'Program': s.program || '',
+                        'Guardian Name': s.guardian_name || '',
+                        'Guardian Mobile': s.guardian_mobile || '',
+                        'Source': s.source || ''
+                    };
+                });
 
                 const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(rows));
                 ws['!cols'] = [
-                    { wch: 14 }, { wch: 10 }, { wch: 28 }, { wch: 26 }, { wch: 28 },
+                    { wch: 14 }, { wch: 10 }, { wch: 28 }, { wch: 26 }, { wch: 28 }, { wch: 28 },
                     { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 24 },
                     { wch: 24 }, { wch: 16 }, { wch: 16 }
                 ];
@@ -6874,6 +6882,7 @@ class App {
                         arabic_name: s.arabic_name ?? null,
                         national_id: s.national_id ?? null,
                         email: s.email ?? null,
+                        personal_email: s.personal_email ?? null,
                         mobile: s.mobile ?? null,
                         guardian_name: s.guardian_name ?? null,
                         guardian_mobile: s.guardian_mobile ?? null,
@@ -6923,7 +6932,10 @@ class App {
     }
 
     mergeStudentRecord(existing, incoming) {
-        if (!existing) return { ...incoming };
+        if (!existing) {
+            const { email, personal_email } = classifyStudentEmails(incoming?.email, incoming?.personal_email);
+            return { ...incoming, email, personal_email };
+        }
         const pickLongerName = (a, b) => {
             if (!a) return b || null;
             if (!b) return a || null;
@@ -6934,12 +6946,14 @@ class App {
             return String(b).length >= String(a).length ? b : a;
         };
         const isFromStudentDetails = incoming.source === 'StudentDetails';
+        const { email, personal_email } = mergeStudentEmails(existing, incoming, isFromStudentDetails);
         return {
             student_id: incoming.student_id || existing.student_id,
             full_name: pickLongerName(existing.full_name, incoming.full_name),
             arabic_name: incoming.arabic_name || existing.arabic_name || null,
             national_id: incoming.national_id || existing.national_id || null,
-            email: (isFromStudentDetails ? (incoming.email || existing.email) : (existing.email || incoming.email)) || null,
+            email,
+            personal_email,
             mobile: incoming.mobile || existing.mobile || null,
             guardian_name: incoming.guardian_name || existing.guardian_name || null,
             guardian_mobile: incoming.guardian_mobile || existing.guardian_mobile || null,
@@ -7034,7 +7048,7 @@ class App {
                     for (const row of dataRows) {
                         if (!row || row.length === 0) continue;
 
-                        let rawSid, student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
+                        let rawSid, student_id, full_name, arabic_name, national_id, email, personal_email, mobile, guardian_name, guardian_mobile, college, program, source;
 
                         if ('PEOPLE_ID1' in headerMap || 'People ID' in headerMap) {
                             const pidCol = 'PEOPLE_ID1' in headerMap ? 'PEOPLE_ID1' : 'People ID';
@@ -7065,8 +7079,9 @@ class App {
                             arabic_name = cleanText(row[headerMap['ARABICNAME'] ?? headerMap['Arabic Name']]);
                             national_id = cleanNationalId(row[headerMap['GOVERNMENT_ID1'] ?? headerMap['Government Id']], rawSid, student_id)
                                 || cleanNationalId(row[headerMap['PASSPORT_NUMBER1'] ?? headerMap['Passport Number']], rawSid, student_id);
-                            email = cleanText(row[headerMap['Email1'] ?? headerMap['University Email']])
-                                || cleanText(row[headerMap['personalEmail'] ?? headerMap['Personal Email']]);
+                            const rawUniEmail = cleanText(row[headerMap['Email1'] ?? headerMap['University Email']]);
+                            const rawPersonalEmail = cleanText(row[headerMap['personalEmail'] ?? headerMap['Personal Email']]);
+                            ({ email, personal_email } = classifyStudentEmails(rawUniEmail, rawPersonalEmail));
                             mobile = cleanPhone(row[headerMap['PhoneNumber1'] ?? headerMap['Phone Number']]);
                             const rel = cleanText(row[headerMap['Guardian_Relation'] ?? headerMap['Parent Relation']]);
                             const rawGName = cleanText(row[headerMap['Guardian_NAME'] ?? headerMap['Parent Name']]);
@@ -7098,7 +7113,7 @@ class App {
 
                             if (student_id) {
                                 const incoming = {
-                                    student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
+                                    student_id, full_name, arabic_name, national_id, email, personal_email, mobile, guardian_name, guardian_mobile, college, program, source
                                 };
                                 const merged = this.mergeStudentRecord(existingRec, incoming);
                                 if (isPrimaryParent && (rawGName || rawGMob)) merged._isPrimaryParent = true;
@@ -7107,7 +7122,7 @@ class App {
                             }
                             continue;
                         } else if ('Student ID' in headerMap && 'Full Name' in headerMap) {
-                            // Exported / Master Combined format (has all 11 student_master columns)
+                            // Exported / Master Combined format (has student_master columns)
                             rawSid = String(row[headerMap['Student ID']] || '').trim();
                             student_id = this.normalizeStudentId(rawSid);
                             if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
@@ -7115,7 +7130,9 @@ class App {
                             full_name = cleanText(row[headerMap['Full Name']]);
                             arabic_name = cleanText(row[headerMap['Arabic Name']]);
                             national_id = cleanNationalId(row[headerMap['National ID']], rawSid, student_id);
-                            email = cleanText(row[headerMap['Email']]);
+                            const rawUniEmail = cleanText(row[headerMap['NU Email'] ?? headerMap['University Email'] ?? headerMap['Email']]);
+                            const rawPersonalEmail = cleanText(row[headerMap['Personal Email'] ?? headerMap['Secondary Email'] ?? headerMap['personalEmail']]);
+                            ({ email, personal_email } = classifyStudentEmails(rawUniEmail, rawPersonalEmail));
                             mobile = cleanPhone(row[headerMap['Mobile']]);
                             guardian_name = cleanText(row[headerMap['Guardian Name']]);
                             guardian_mobile = cleanPhone(row[headerMap['Guardian Mobile']]);
@@ -7130,7 +7147,9 @@ class App {
                             full_name = cleanText(row[headerMap['Student Name']]);
                             arabic_name = null;
                             national_id = cleanNationalId(row[headerMap['National ID']], rawSid, student_id);
-                            email = cleanText(row[headerMap['Email']]);
+                            const rawEmail = cleanText(row[headerMap['Email'] ?? headerMap['University Email']]);
+                            const rawPersonalEmail = cleanText(row[headerMap['Personal Email'] ?? headerMap['personalEmail']]);
+                            ({ email, personal_email } = classifyStudentEmails(rawEmail, rawPersonalEmail));
                             mobile = cleanPhone(row[headerMap['Mobile Phone Number']]) || cleanPhone(row[headerMap['Home Phone Number']]);
                             guardian_name = null;
                             guardian_mobile = null;
@@ -7141,7 +7160,7 @@ class App {
 
                         if (student_id) {
                             const incoming = {
-                                student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
+                                student_id, full_name, arabic_name, national_id, email, personal_email, mobile, guardian_name, guardian_mobile, college, program, source
                             };
                             recordsMap.set(student_id, this.mergeStudentRecord(recordsMap.get(student_id), incoming));
                         }
@@ -9681,10 +9700,12 @@ class App {
                 const el = document.getElementById(id);
                 if (el) el.value = v || '';
             };
+            const { nuEmail, personalEmail } = getStudentDisplayEmails(student);
             setVal('stu-modal-national-id', student.national_id);
             setVal('stu-modal-name', student.full_name);
             setVal('stu-modal-arabic-name', student.arabic_name);
-            setVal('stu-modal-email', student.email);
+            setVal('stu-modal-email', nuEmail);
+            setVal('stu-modal-personal-email', personalEmail);
             setVal('stu-modal-mobile', student.mobile);
             setVal('stu-modal-guardian-name', student.guardian_name);
             setVal('stu-modal-guardian-mobile', student.guardian_mobile);
@@ -9699,7 +9720,7 @@ class App {
             }
             [
                 'stu-modal-national-id', 'stu-modal-name', 'stu-modal-arabic-name',
-                'stu-modal-email', 'stu-modal-mobile', 'stu-modal-guardian-name',
+                'stu-modal-email', 'stu-modal-personal-email', 'stu-modal-mobile', 'stu-modal-guardian-name',
                 'stu-modal-guardian-mobile', 'stu-modal-college', 'stu-modal-program'
             ].forEach(id => {
                 const el = document.getElementById(id);
@@ -9725,6 +9746,7 @@ class App {
             s.full_name,
             s.arabic_name,
             s.email,
+            s.personal_email,
             s.mobile,
             s.guardian_mobile,
             s.guardian_name,
@@ -9855,6 +9877,21 @@ class App {
 
         tbody.innerHTML = pageItems.map(s => {
             const levelBadge = this.renderStudentLevelBadge(getStudentProgramLevel(s));
+            const { nuEmail, personalEmail } = getStudentDisplayEmails(s);
+            const emailCellHtml = `
+                <div class="student-emails-cell" style="display: flex; flex-direction: column; gap: 0.18rem;">
+                    ${nuEmail
+                        ? `<span class="copyable-email" style="color: var(--primary); font-weight: 500;" data-email="${escapeHTML(nuEmail)}" title="Click to copy NU email">${escapeHTML(nuEmail)}</span>`
+                        : (personalEmail
+                            ? `<span style="color: var(--text-muted); font-size: 0.78rem; font-style: italic;">No NU email</span>`
+                            : `<span style="color: var(--text-muted);">—</span>`)
+                    }
+                    ${personalEmail
+                        ? `<span class="copyable-email" style="color: var(--text-muted); font-size: 0.78rem;" data-email="${escapeHTML(personalEmail)}" title="Click to copy personal email"><span style="opacity: 0.7; margin-right: 0.25rem;">Personal:</span>${escapeHTML(personalEmail)}</span>`
+                        : ''
+                    }
+                </div>
+            `;
             return `
             <tr class="student-row" style="cursor: pointer;" data-sid="${escapeHTML(s.student_id)}">
                 <td style="white-space: nowrap;">
@@ -9866,7 +9903,7 @@ class App {
                     </div>
                 </td>
                 <td><strong>${escapeHTML(s.full_name)}</strong></td>
-                <td><span class="copyable-email" style="color: var(--primary); font-weight: 500;" data-email="${escapeHTML(s.email || '')}" title="Click to copy">${escapeHTML(s.email)}</span></td>
+                <td>${emailCellHtml}</td>
                 <td>${escapeHTML(s.mobile)}</td>
                 <td>${escapeHTML(s.college)}</td>
                 <td>${escapeHTML(s.program)}</td>
@@ -9919,8 +9956,9 @@ class App {
                 });
 
                 const st = this.currentProfileStudent || {};
+                const { nuEmail, personalEmail } = getStudentDisplayEmails(st);
                 let name = st.full_name || st.name || '-';
-                let email = st.email || '-';
+                let email = [nuEmail, personalEmail].filter(Boolean).join(' | ') || '-';
                 let phone = st.mobile || st.phone || '-';
                 let college = st.college || '-';
                 let program = st.program || '-';
@@ -10088,7 +10126,7 @@ class App {
                 const arabicName = st?.arabic_name || '';
                 const college = st?.college || '';
                 const program = st?.program || '';
-                const email = st?.email || '';
+                const { nuEmail: email, personalEmail } = getStudentDisplayEmails(st);
                 const mobile = st?.mobile || '';
                 const natId = st?.national_id || '';
                 const guardianName = st?.guardian_name || '';
@@ -10194,8 +10232,12 @@ class App {
                                 ${renderCopyableField(mobile, 'Mobile Number')}
                             </div>
                             <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.84rem;">
-                                <span style="color: var(--text-muted);">Email:</span>
-                                ${renderCopyableField(email, 'Email Address')}
+                                <span style="color: var(--text-muted);">NU Email:</span>
+                                ${renderCopyableField(email, 'NU Email')}
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.84rem;">
+                                <span style="color: var(--text-muted);">Personal Email:</span>
+                                ${renderCopyableField(personalEmail, 'Personal Email')}
                             </div>
                         </div>
 
@@ -10436,6 +10478,7 @@ class App {
             'Total Amount (EGP)': Number(grandTotal.toFixed(2))
         });
 
+        const { nuEmail, personalEmail } = getStudentDisplayEmails(st);
         const profileRows = [
             { 'Field': 'Student ID', 'Value': sid },
             { 'Field': 'Level', 'Value': studentLevelTag || '-' },
@@ -10443,7 +10486,8 @@ class App {
             { 'Field': 'Arabic Name', 'Value': st.arabic_name || '-' },
             { 'Field': 'College', 'Value': st.college || '-' },
             { 'Field': 'Program', 'Value': st.program || '-' },
-            { 'Field': 'Email', 'Value': st.email || '-' },
+            { 'Field': 'NU Email', 'Value': nuEmail || '-' },
+            { 'Field': 'Personal Email', 'Value': personalEmail || '-' },
             { 'Field': 'Mobile', 'Value': st.mobile || '-' },
             { 'Field': 'National ID', 'Value': st.national_id || '-' },
             { 'Field': 'Total Transactions', 'Value': txs.length },
@@ -10673,7 +10717,7 @@ class App {
                             .then(res => res)
                             .catch(() => ({ data: [] })),
                         supabase.from('student_master')
-                            .select('student_id, full_name, college, program, email')
+                            .select('student_id, full_name, college, program, email, personal_email')
                             .or(`student_id.ilike.%${cleanQ}%,full_name.ilike.%${cleanQ}%`)
                             .limit(5)
                     ]);
