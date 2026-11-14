@@ -1452,4 +1452,82 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
         linksJumpInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
         expect(window.app.paymentLinksPage).toBe(2);
     }
+
+    // 18. Student import skips unchanged records and upsertStudentMasterBatches adaptively splits timed-out batches
+    {
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const origXLSX = globalThis.XLSX;
+        const origLoadStudents = window.app.loadStudents;
+
+        try {
+            window.app.loadStudents = vi.fn().mockResolvedValue();
+
+            // 18a: Unchanged existing record should not be re-upserted; only new/changed records are uploaded
+            const upsertedIds = [];
+            supabase.from = vi.fn((table) => ({
+                select: vi.fn().mockReturnThis(),
+                in: vi.fn().mockResolvedValue({
+                    data: table === 'student_master' ? [{
+                        student_id: '202000160',
+                        full_name: 'Fatma Mmdouh Abdallh',
+                        arabic_name: null,
+                        national_id: null,
+                        email: 'f.mmdouh@nu.edu.eg',
+                        personal_email: 'fatma@gmail.com',
+                        mobile: '01014015386',
+                        guardian_name: null,
+                        guardian_mobile: null,
+                        college: null,
+                        program: '(UG) Undergraduate / Bachelor of Science',
+                        source: 'ApplicantReport'
+                    }] : [],
+                    error: null
+                }),
+                upsert: vi.fn(async (batch) => {
+                    upsertedIds.push(...batch.map(r => r.student_id));
+                    return { error: null };
+                }),
+                delete: vi.fn(() => ({ in: vi.fn().mockResolvedValue({ error: null }) })),
+                insert: vi.fn().mockResolvedValue({ error: null })
+            }));
+
+            const unchangedSheet = [
+                ['People ID', 'First Name', 'Last Name', 'University Email', 'Personal Email', 'Phone Number', 'Program', 'Degree'],
+                ['202000160', 'Fatma', 'Mmdouh Abdallh', 'f.mmdouh@nu.edu.eg', 'fatma@gmail.com', '01014015386', 'Undergraduate', 'Bachelor of Science'],
+                ['202000999', 'Omar', 'Ali', 'o.ali@nu.edu.eg', null, '01099999999', 'Undergraduate', 'Bachelor of Science']
+            ];
+            globalThis.XLSX = {
+                read: (buf) => ({ SheetNames: ['ApplicantReport'], Sheets: { ApplicantReport: buf._rows } }),
+                utils: { sheet_to_json: (sheet) => sheet }
+            };
+            await window.app.handleStudentImport([{ name: 'ApplicantReport 1.xlsx', arrayBuffer: async () => ({ _rows: unchangedSheet }) }]);
+            expect(upsertedIds).toEqual(['202000999']);
+            expect(document.getElementById('student-upload-status')?.textContent).toContain('1 unchanged');
+
+            // 18b: upsertStudentMasterBatches splits timed-out batches in half and completes without error
+            const attemptSizes = [];
+            const succeededIds = [];
+            supabase.from = vi.fn(() => ({
+                upsert: vi.fn(async (batch) => {
+                    attemptSizes.push(batch.length);
+                    if (batch.length > 30) {
+                        return { error: { code: '57014', message: 'canceling statement due to statement timeout' } };
+                    }
+                    succeededIds.push(...batch.map(r => r.student_id));
+                    return { error: null };
+                })
+            }));
+            const synthetic = Array.from({ length: 80 }, (_, i) => ({ student_id: `2026${String(i).padStart(4, '0')}` }));
+            const uploaded = await window.app.upsertStudentMasterBatches(synthetic, { batchSize: 80, concurrency: 1, minBatchSize: 25 });
+            expect(uploaded).toBe(80);
+            expect(succeededIds.length).toBe(80);
+            expect(attemptSizes[0]).toBe(80);
+            expect(attemptSizes.some(sz => sz <= 30)).toBe(true);
+        } finally {
+            supabase.from = origFrom;
+            globalThis.XLSX = origXLSX;
+            window.app.loadStudents = origLoadStudents;
+        }
+    }
 });

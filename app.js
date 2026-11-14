@@ -6894,15 +6894,7 @@ class App {
             }
 
             if (rowsToUpdate.length > 0) {
-                const upsertTasks = [];
-                for (let i = 0; i < rowsToUpdate.length; i += 1000) {
-                    const batch = rowsToUpdate.slice(i, i + 1000);
-                    upsertTasks.push(async () => {
-                        const { error } = await supabase.from('student_master').upsert(batch, { onConflict: 'student_id' });
-                        if (error) throw error;
-                    });
-                }
-                await runConcurrent(upsertTasks, 4);
+                await this.upsertStudentMasterBatches(rowsToUpdate);
             }
 
             this.rebuildStudentMasterMap(allRows || []);
@@ -6929,6 +6921,53 @@ class App {
                 if (window.lucide) lucide.createIcons();
             }
         }
+    }
+
+    /**
+     * Upsert student_master rows in conservative batches so GIN trigram index updates
+     * stay well within Supabase's statement_timeout, automatically splitting timed-out chunks.
+     */
+    async upsertStudentMasterBatches(records, { batchSize = 150, concurrency = 2, minBatchSize = 25, onProgress = null } = {}) {
+        if (!Array.isArray(records) || records.length === 0) return 0;
+
+        const isTimeoutError = (err) => {
+            const msg = String(err?.message || err?.details || err || '').toLowerCase();
+            return err?.code === '57014' || msg.includes('statement timeout') || msg.includes('canceling statement');
+        };
+
+        let uploadedCount = 0;
+        const upsertChunk = async (chunk, retried = false) => {
+            const { error } = await supabase.from('student_master').upsert(chunk, { onConflict: 'student_id' });
+            if (!error) {
+                uploadedCount += chunk.length;
+                if (typeof onProgress === 'function') {
+                    onProgress(uploadedCount, records.length);
+                }
+                return chunk.length;
+            }
+
+            if (isTimeoutError(error)) {
+                if (chunk.length > minBatchSize) {
+                    const mid = Math.ceil(chunk.length / 2);
+                    await upsertChunk(chunk.slice(0, mid), false);
+                    await upsertChunk(chunk.slice(mid), false);
+                    return chunk.length;
+                }
+                if (!retried) {
+                    await new Promise(resolve => setTimeout(resolve, 350));
+                    return upsertChunk(chunk, true);
+                }
+            }
+            throw error;
+        };
+
+        const tasks = [];
+        for (let i = 0; i < records.length; i += batchSize) {
+            const chunk = records.slice(i, i + batchSize);
+            tasks.push(() => upsertChunk(chunk));
+        }
+        await runConcurrent(tasks, concurrency);
+        return uploadedCount;
     }
 
     mergeStudentRecord(existing, incoming) {
@@ -7182,22 +7221,25 @@ class App {
             status.innerHTML = `<i data-lucide="loader" class="spin"></i> Merging with existing database records...`;
             const lookupIds = [...new Set([...records.map(r => r.student_id), ...paddedLegacyIds])];
             const existingMap = new Map();
+            const rawExistingByNormId = new Map();
             const legacyIdsToDelete = [];
 
             const lookupChunks = [];
-            for (let i = 0; i < lookupIds.length; i += 500) {
-                lookupChunks.push(lookupIds.slice(i, i + 500));
+            for (let i = 0; i < lookupIds.length; i += 250) {
+                lookupChunks.push(lookupIds.slice(i, i + 250));
             }
             const existingChunkResults = await runConcurrent(lookupChunks.map(chunk => async () => {
                 const { data: existingRows, error: exErr } = await supabase.from('student_master').select('*').in('student_id', chunk);
                 if (exErr) throw exErr;
                 return existingRows || [];
-            }), 4);
+            }), 3);
             for (const existingRows of existingChunkResults) {
                 for (const ex of existingRows) {
                     const normId = this.normalizeStudentId(ex.student_id);
                     if (ex.student_id !== normId) {
                         legacyIdsToDelete.push(ex.student_id);
+                    } else if (!rawExistingByNormId.has(normId)) {
+                        rawExistingByNormId.set(normId, ex);
                     }
                     existingMap.set(normId, this.mergeStudentRecord(existingMap.get(normId), { ...ex, student_id: normId }));
                 }
@@ -7209,29 +7251,38 @@ class App {
                 return merged;
             });
 
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${mergedRecords.length} records to database...`;
-            
+            const syncFields = [
+                'student_id', 'full_name', 'arabic_name', 'national_id',
+                'email', 'personal_email', 'mobile', 'guardian_name',
+                'guardian_mobile', 'college', 'program', 'source'
+            ];
+            const recordsToUpsert = mergedRecords.filter(merged => {
+                const rawEx = rawExistingByNormId.get(merged.student_id);
+                if (!rawEx) return true;
+                return syncFields.some(field => (merged[field] ?? null) !== (rawEx[field] ?? null));
+            });
+
             let insertedCount = 0;
-            const upsertTasks = [];
-            for (let i = 0; i < mergedRecords.length; i += 1000) {
-                const batch = mergedRecords.slice(i, i + 1000);
-                upsertTasks.push(async () => {
-                    const { error } = await supabase.from('student_master').upsert(batch);
-                    if (error) throw error;
-                    insertedCount += batch.length;
-                    status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.min(100, Math.round((insertedCount / mergedRecords.length) * 100))}%`;
-                    return batch.length;
+            if (recordsToUpsert.length > 0) {
+                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${recordsToUpsert.length.toLocaleString()} new/updated records...`;
+                insertedCount = await this.upsertStudentMasterBatches(recordsToUpsert, {
+                    batchSize: 150,
+                    concurrency: 2,
+                    onProgress: (done, total) => {
+                        status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading... ${Math.min(100, Math.round((done / total) * 100))}%`;
+                    }
                 });
             }
-            await runConcurrent(upsertTasks, 4);
 
             // Clean up any old 0-padded duplicate rows in student_master that have now been merged into their normalized IDs
             if (legacyIdsToDelete.length > 0) {
-                for (let i = 0; i < legacyIdsToDelete.length; i += 500) {
-                    await supabase.from('student_master').delete().in('student_id', legacyIdsToDelete.slice(i, i + 500));
+                for (let i = 0; i < legacyIdsToDelete.length; i += 200) {
+                    const { error: delErr } = await supabase.from('student_master').delete().in('student_id', legacyIdsToDelete.slice(i, i + 200));
+                    if (delErr) throw delErr;
                 }
             }
 
+            const unchangedCount = mergedRecords.length - recordsToUpsert.length;
             if (this.currentUser) {
                 await supabase.from('import_batches').insert({
                     user_email: this.currentUser.email,
@@ -7239,12 +7290,18 @@ class App {
                     status: 'success',
                     records_processed: mergedRecords.length,
                     records_inserted: insertedCount,
-                    details: { type: 'student_master', legacy_ids_cleaned: legacyIdsToDelete.length }
+                    details: {
+                        type: 'student_master',
+                        legacy_ids_cleaned: legacyIdsToDelete.length,
+                        unchanged_skipped: unchangedCount
+                    }
                 });
             }
 
             status.className = 'alert alert-success';
-            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length.toLocaleString()} students!`;
+            status.innerHTML = unchangedCount > 0
+                ? `<i data-lucide="check-circle"></i> Successfully processed ${mergedRecords.length.toLocaleString()} students (${insertedCount.toLocaleString()} added/updated, ${unchangedCount.toLocaleString()} unchanged)!`
+                : `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length.toLocaleString()} students!`;
             if (window.lucide) lucide.createIcons();
             await this.loadStudents({ forceReload: true });
 
