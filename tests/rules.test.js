@@ -1,7 +1,7 @@
 import { expect, test, vi } from 'vitest';
 import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows, normalizeStudentIdValue, normalizePhoneKey, normalizeAutoMatchName, extractCandidateStudentIds, buildStudentLookupIndex, matchTransactionToStudent, getStudentProgramLevel, formatStudentLevelTag } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
-import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates } from '../fx-rates.js';
+import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates, getEgyptDateTimeParts, getEgyptNoonTimestampMs, getMsUntilNextEgyptNoon, isRateStaleForEgyptNoon } from '../fx-rates.js';
 
 vi.mock('../supabase.js', () => ({
     supabase: {}
@@ -441,6 +441,60 @@ test('FX rates support Per-Tx Value Date, Latest Daily Rate, Custom override, an
     expect(store.ratesByDate['2026-01-09'].rate).toBe(48.75);
     expect(store.ratesByDate['2026-01-10'].rate).toBe(52.5); // manual preserved
     expect(fetchedUrls.some(u => u.includes('@2026-01-09'))).toBe(true);
+});
+
+test('FX daily 12:00 PM Egypt schedule handles UTC+2 winter, UTC+3 DST, staleness, and manual overrides', async () => {
+    // Winter (Nov -> UTC+2): 10:00:00Z == 12:00:00 Africa/Cairo
+    const winterBeforeNoon = new Date('2026-11-14T09:00:00Z'); // 11:00 Cairo
+    expect(getEgyptDateTimeParts(winterBeforeNoon)).toEqual({
+        dateStr: '2026-11-14',
+        hour: 11,
+        minute: 0,
+        second: 0
+    });
+    expect(getEgyptNoonTimestampMs('2026-11-14')).toBe(Date.parse('2026-11-14T10:00:00Z'));
+    expect(getMsUntilNextEgyptNoon(winterBeforeNoon)).toBe(3600 * 1000);
+
+    // After 12:00 PM Cairo in winter -> next noon is tomorrow 10:00Z (23h away from 13:00 Cairo)
+    const winterAfterNoon = new Date('2026-11-14T11:00:00Z'); // 13:00 Cairo
+    expect(getMsUntilNextEgyptNoon(winterAfterNoon)).toBe(23 * 3600 * 1000);
+
+    // Summer DST (June -> UTC+3): 09:00:00Z == 12:00:00 Africa/Cairo
+    const summerBeforeNoon = new Date('2026-06-15T08:30:00Z'); // 11:30 Cairo
+    expect(getEgyptDateTimeParts(summerBeforeNoon).hour).toBe(11);
+    expect(getEgyptNoonTimestampMs('2026-06-15')).toBe(Date.parse('2026-06-15T09:00:00Z'));
+    expect(getMsUntilNextEgyptNoon(summerBeforeNoon)).toBe(30 * 60 * 1000);
+
+    // Staleness checks: same-day rate fetched before 12 PM Cairo is fresh before noon, stale at/after 12 PM Cairo
+    const morningEntry = { date: '2026-11-14', rate: 53.0, source: 'auto', updatedAt: '2026-11-14T08:00:00Z' }; // 10:00 Cairo
+    expect(isRateStaleForEgyptNoon(morningEntry, new Date('2026-11-14T09:59:00Z'))).toBe(false); // 11:59 Cairo
+    expect(isRateStaleForEgyptNoon(morningEntry, new Date('2026-11-14T10:00:00Z'))).toBe(true);  // 12:00 Cairo
+
+    const noonEntry = { date: '2026-11-14', rate: 53.5, source: 'auto', updatedAt: '2026-11-14T10:01:00Z' }; // 12:01 Cairo
+    expect(isRateStaleForEgyptNoon(noonEntry, new Date('2026-11-14T15:00:00Z'))).toBe(false);
+
+    // Manual override for today must never be overwritten automatically at 12:00 PM
+    const manualToday = { date: '2026-11-14', rate: 55.0, source: 'manual', updatedAt: '2026-11-14T07:00:00Z' };
+    expect(isRateStaleForEgyptNoon(manualToday, new Date('2026-11-14T11:00:00Z'))).toBe(false);
+
+    // syncMissingFxRates refreshes morning auto rate once Egypt clock crosses 12:00 PM
+    const store = createEmptyFxStore();
+    store.latest = { ...morningEntry };
+    store.ratesByDate['2026-11-14'] = { rate: 53.0, source: 'auto', updatedAt: '2026-11-14T08:00:00Z' };
+    let callCount = 0;
+    const mockFetch = async () => {
+        callCount++;
+        return { ok: true, json: async () => ({ date: '2026-11-14', usd: { egp: 54.12 } }) };
+    };
+    const syncRes = await syncMissingFxRates([], store, {
+        fetchImpl: mockFetch,
+        now: new Date('2026-11-14T10:05:00Z') // 12:05 PM Cairo
+    });
+    expect(callCount).toBe(1);
+    expect(syncRes.latestUpdated).toBe(true);
+    expect(store.latest.rate).toBe(54.12);
+    expect(store.ratesByDate['2026-11-14'].rate).toBe(54.12);
+    expect(isRateStaleForEgyptNoon(store.latest, new Date('2026-11-14T14:00:00Z'))).toBe(false);
 });
 
 test('Dip & Workshop transactions are exempt from standard Student ID validation rules', () => {

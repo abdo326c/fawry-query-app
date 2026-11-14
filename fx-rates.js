@@ -3,6 +3,101 @@ import { toDateOnly } from './rules.js';
 export const FX_STORAGE_KEY = 'fawry_app_fx_rates_v1';
 export const DEFAULT_FX_MODE = 'historical'; // 'historical' | 'latest' | 'custom'
 export const DEFAULT_USD_EGP_FALLBACK_RATE = 49.5;
+export const EGYPT_TIMEZONE = 'Africa/Cairo';
+export const EGYPT_DAILY_FX_HOUR = 12;
+
+/**
+ * Returns YYYY-MM-DD and 24-hour clock parts in Egypt time (Africa/Cairo),
+ * handling winter (UTC+2) and summer DST (UTC+3) regardless of local OS timezone.
+ */
+export function getEgyptDateTimeParts(date = new Date()) {
+    const d = date instanceof Date ? date : new Date(date);
+    const valid = Number.isNaN(d.getTime()) ? new Date() : d;
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: EGYPT_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+    });
+    const parts = {};
+    for (const p of fmt.formatToParts(valid)) {
+        if (p.type !== 'literal') parts[p.type] = p.value;
+    }
+    const hour = Number(parts.hour) % 24;
+    const minute = Number(parts.minute) || 0;
+    const second = Number(parts.second) || 0;
+    return {
+        dateStr: `${parts.year}-${parts.month}-${parts.day}`,
+        hour,
+        minute,
+        second
+    };
+}
+
+/**
+ * Resolves the exact epoch milliseconds for a target hour (default 12:00:00 PM) on `dateStr`
+ * in Africa/Cairo timezone, automatically adjusting for EET (UTC+2) vs EEST DST (UTC+3).
+ */
+export function getEgyptNoonTimestampMs(dateStr, targetHour = EGYPT_DAILY_FX_HOUR) {
+    const [y, m, d] = String(dateStr || '').split('-').map(Number);
+    if (!y || !m || !d) return NaN;
+    // Egypt uses UTC+2 or UTC+3; probe UTC+2 first and adjust if Cairo clock differs
+    const utcBase = Date.UTC(y, m - 1, d, targetHour, 0, 0, 0);
+    let candidate = utcBase - 2 * 3600 * 1000;
+    const probe = getEgyptDateTimeParts(new Date(candidate));
+    if (probe.dateStr === dateStr && probe.hour === targetHour) {
+        return candidate;
+    }
+    // Try DST offset (UTC+3) or compute exact hour difference
+    const alt = utcBase - 3 * 3600 * 1000;
+    const altProbe = getEgyptDateTimeParts(new Date(alt));
+    if (altProbe.dateStr === dateStr && altProbe.hour === targetHour) {
+        return alt;
+    }
+    const diffHours = probe.hour - targetHour;
+    return candidate - diffHours * 3600 * 1000;
+}
+
+/**
+ * Returns milliseconds from `now` until the next `targetHour`:00:00 Egypt time.
+ */
+export function getMsUntilNextEgyptNoon(now = new Date(), targetHour = EGYPT_DAILY_FX_HOUR) {
+    const validNow = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+    const { dateStr } = getEgyptDateTimeParts(validNow);
+    const todayNoonMs = getEgyptNoonTimestampMs(dateStr, targetHour);
+    if (Number.isFinite(todayNoonMs) && validNow.getTime() < todayNoonMs) {
+        return Math.max(1000, todayNoonMs - validNow.getTime());
+    }
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const nextDateStr = toDateOnly(new Date(Date.UTC(y, m - 1, d + 1, 12, 0, 0)));
+    const nextNoonMs = getEgyptNoonTimestampMs(nextDateStr, targetHour);
+    if (!Number.isFinite(nextNoonMs)) return 24 * 3600 * 1000;
+    return Math.max(1000, nextNoonMs - validNow.getTime());
+}
+
+/**
+ * Returns true if the stored `latest` FX entry should be refreshed for today's 12:00 PM Egypt schedule.
+ * Manual overrides for today are preserved until overwritten explicitly.
+ */
+export function isRateStaleForEgyptNoon(entry, now = new Date(), targetHour = EGYPT_DAILY_FX_HOUR) {
+    if (!entry || !(Number(entry.rate) > 0)) return true;
+    const { dateStr: egyptToday, hour } = getEgyptDateTimeParts(now);
+    const entryDate = entry.date || '';
+    if (entry.source === 'manual' && entryDate === egyptToday) return false;
+    if (entryDate !== egyptToday) return true;
+    if (hour >= targetHour) {
+        const todayNoonMs = getEgyptNoonTimestampMs(egyptToday, targetHour);
+        const updatedMs = entry.updatedAt ? Date.parse(entry.updatedAt) : NaN;
+        if (!Number.isFinite(updatedMs) || (Number.isFinite(todayNoonMs) && updatedMs < todayNoonMs)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
@@ -277,26 +372,35 @@ export function convertUsdToEgp(amountUsd, dateStr, store, opts = {}) {
  * Fetches today's latest rate (when stale) and any missing historical dates with bounded concurrency.
  * Never overwrites manual overrides. Returns summary of synced records.
  */
-export async function syncMissingFxRates(dates = [], store, { fetchImpl = typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null, concurrency = 4, todayStr = toDateOnly(new Date()), forceLatest = false } = {}) {
+export async function syncMissingFxRates(dates = [], store, { fetchImpl = typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null, concurrency = 4, todayStr, now = new Date(), forceLatest = false } = {}) {
     const targetStore = store || createEmptyFxStore();
     if (!targetStore.ratesByDate) targetStore.ratesByDate = {};
     const updatedRecords = [];
     let latestUpdated = false;
     let failedCount = 0;
 
-    // 1. Refresh daily latest rate if needed (don't overwrite today's manual override unless forced)
-    const shouldRefreshLatest = forceLatest || !targetStore.latest?.rate || (todayStr && targetStore.latest.date !== todayStr && targetStore.latest.source !== 'manual');
+    const validNow = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+    const egyptNow = getEgyptDateTimeParts(validNow);
+    const effectiveTodayStr = todayStr || egyptNow.dateStr;
+
+    // 1. Refresh daily latest rate when stale for today's 12:00 PM Egypt schedule (don't overwrite today's manual override unless forced)
+    const isLatestManualToday = targetStore.latest?.source === 'manual' && targetStore.latest?.date === effectiveTodayStr;
+    const staleForSchedule = todayStr && todayStr !== egyptNow.dateStr
+        ? (!targetStore.latest?.rate || (targetStore.latest.date !== effectiveTodayStr && !isLatestManualToday))
+        : isRateStaleForEgyptNoon(targetStore.latest, validNow);
+    const shouldRefreshLatest = forceLatest || (!isLatestManualToday && staleForSchedule);
     if (shouldRefreshLatest) {
-        const latestRes = await fetchUsdToEgpRateForDate('latest', fetchImpl, todayStr);
+        const latestRes = await fetchUsdToEgpRateForDate('latest', fetchImpl, effectiveTodayStr);
         if (latestRes && latestRes.rate > 0) {
-            const latestDate = todayStr || latestRes.date;
-            if (!targetStore.latest || forceLatest || targetStore.latest.source !== 'manual' || targetStore.latest.date !== todayStr) {
+            const latestDate = effectiveTodayStr || latestRes.date;
+            const fetchTimestampIso = validNow.toISOString();
+            if (!targetStore.latest || forceLatest || targetStore.latest.source !== 'manual' || targetStore.latest.date !== effectiveTodayStr) {
                 targetStore.latest = {
                     date: latestDate,
                     rate: latestRes.rate,
                     source: 'auto',
                     provider: latestRes.provider,
-                    updatedAt: latestRes.updatedAt
+                    updatedAt: fetchTimestampIso
                 };
                 latestUpdated = true;
             }
@@ -305,7 +409,7 @@ export async function syncMissingFxRates(dates = [], store, { fetchImpl = typeof
                     rate: latestRes.rate,
                     source: 'auto',
                     provider: latestRes.provider,
-                    updatedAt: latestRes.updatedAt
+                    updatedAt: fetchTimestampIso
                 };
                 updatedRecords.push({ rate_date: latestDate, ...targetStore.ratesByDate[latestDate] });
             }

@@ -45,7 +45,10 @@ import {
     resolveUsdToEgpRate,
     convertUsdToEgp,
     syncMissingFxRates,
-    setManualFxRate
+    setManualFxRate,
+    getEgyptDateTimeParts,
+    getMsUntilNextEgyptNoon,
+    isRateStaleForEgyptNoon
 } from './fx-rates.js';
 
 // Helper to run async task functions with bounded concurrency
@@ -1139,6 +1142,8 @@ class App {
         // USD -> EGP Daily Exchange Rate Controls
         this.fxStore = loadFxStore();
         this.fxDbLoaded = false;
+        this.fxNoonTimer = null;
+        this.scheduleDailyFxNoonSync();
 
         const fxModeEl = document.getElementById('dashboard-fx-mode');
         const fxRateInput = document.getElementById('dashboard-fx-rate-input');
@@ -1189,7 +1194,7 @@ class App {
                     fxRateInput.focus();
                     return;
                 }
-                const todayStr = toDateOnly(new Date());
+                const todayStr = getEgyptDateTimeParts().dateStr;
                 this.fxStore = setManualFxRate(this.fxStore, {
                     dateStr: todayStr,
                     rate: val,
@@ -1611,7 +1616,7 @@ class App {
         const mode = this.fxStore.mode || 'historical';
         if (modeEl && modeEl.value !== mode) modeEl.value = mode;
 
-        const todayStr = toDateOnly(new Date());
+        const todayStr = getEgyptDateTimeParts().dateStr;
         const resolved = resolveUsdToEgpRate(todayStr, this.fxStore);
 
         if (badgeEl) {
@@ -1635,20 +1640,60 @@ class App {
                 statusEl.textContent = `Custom manual override active (${this.fxStore.customRate.toFixed(4)} EGP/USD across all foreign deposits).`;
             } else if (mode === 'latest') {
                 statusEl.textContent = resolved.rate > 0
-                    ? `Latest daily rate (${resolved.rateDate || todayStr}, ${resolved.source}) applied to all USD deposits.`
+                    ? `Latest daily rate (${resolved.rateDate || todayStr}, ${resolved.source}) · auto-updates daily 12:00 PM Egypt.`
                     : `Click Sync or enter a Manual Rate Override to convert USD → EGP.`;
             } else {
                 statusEl.textContent = count > 0
-                    ? `Per-Tx Value Date active (${count} cached daily rate${count === 1 ? '' : 's'}) · converts each deposit using its Value Date.`
-                    : `Per-Tx Value Date active · syncs daily FX rates automatically when USD deposits are loaded.`;
+                    ? `Per-Tx Value Date active (${count} cached rate${count === 1 ? '' : 's'}) · auto-updates daily 12:00 PM Egypt.`
+                    : `Per-Tx Value Date active · auto-updates daily at 12:00 PM Egypt.`;
             }
+        }
+    }
+
+    scheduleDailyFxNoonSync() {
+        if (this.fxNoonTimer) {
+            clearTimeout(this.fxNoonTimer);
+            this.fxNoonTimer = null;
+        }
+        const runNoonSyncIfDue = async () => {
+            try {
+                if (!this.fxStore) this.fxStore = loadFxStore();
+                if (isRateStaleForEgyptNoon(this.fxStore.latest)) {
+                    await this.syncDashboardFxRates();
+                    if (typeof document !== 'undefined' && document.getElementById('dashboard-view')?.classList.contains('active')) {
+                        await this.loadDashboard?.();
+                    }
+                }
+            } catch (_e) {
+                // Keep UI resilient if offline at noon; next visibilitychange or Dashboard load retries
+            }
+        };
+
+        const delayMs = getMsUntilNextEgyptNoon();
+        const safeDelayMs = Math.min(Math.max(1000, delayMs), 2147483647);
+        this.fxNoonTimer = setTimeout(async () => {
+            await runNoonSyncIfDue();
+            this.scheduleDailyFxNoonSync();
+        }, safeDelayMs);
+        if (typeof this.fxNoonTimer?.unref === 'function') {
+            this.fxNoonTimer.unref();
+        }
+
+        if (typeof document !== 'undefined' && !this._fxVisibilityBound) {
+            this._fxVisibilityBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    runNoonSyncIfDue();
+                }
+            });
         }
     }
 
     async syncDashboardFxRates({ dates = [], forceLatest = false } = {}) {
         if (!this.fxStore) this.fxStore = loadFxStore();
 
-        if (!this.fxDbLoaded) {
+        const shouldCheckDb = !this.fxDbLoaded || forceLatest || isRateStaleForEgyptNoon(this.fxStore.latest);
+        if (shouldCheckDb) {
             this.fxDbLoaded = true;
             try {
                 const { data, error } = await supabase
@@ -1662,8 +1707,15 @@ class App {
                         const r = Number(row.rate);
                         if (!d || !(r > 0)) continue;
                         const existing = this.fxStore.ratesByDate[d];
-                        // Prefer manual override or keep existing fresher entry
-                        if (!existing || (row.source === 'manual' && existing.source !== 'manual')) {
+                        const incomingMs = row.updated_at ? Date.parse(row.updated_at) : NaN;
+                        const existingMs = existing?.updatedAt ? Date.parse(existing.updatedAt) : NaN;
+                        const incomingIsNewerAuto = existing
+                            && existing.source !== 'manual'
+                            && (row.source || 'auto') !== 'manual'
+                            && Number.isFinite(incomingMs)
+                            && (!Number.isFinite(existingMs) || incomingMs > existingMs);
+                        // Prefer manual override or fresher server timestamp
+                        if (!existing || (row.source === 'manual' && existing.source !== 'manual') || incomingIsNewerAuto) {
                             this.fxStore.ratesByDate[d] = {
                                 rate: r,
                                 source: row.source || 'auto',
@@ -1674,12 +1726,18 @@ class App {
                     }
                     const sortedDates = Object.keys(this.fxStore.ratesByDate).sort();
                     const newest = sortedDates[sortedDates.length - 1];
-                    if (newest && (!this.fxStore.latest || this.fxStore.latest.date <= newest)) {
+                    const newestEntry = newest ? this.fxStore.ratesByDate[newest] : null;
+                    const latestMs = this.fxStore.latest?.updatedAt ? Date.parse(this.fxStore.latest.updatedAt) : NaN;
+                    const newestMs = newestEntry?.updatedAt ? Date.parse(newestEntry.updatedAt) : NaN;
+                    const sameDateFresher = this.fxStore.latest?.date === newest
+                        && this.fxStore.latest?.source !== 'manual'
+                        && (newestEntry?.source === 'manual' || (Number.isFinite(newestMs) && (!Number.isFinite(latestMs) || newestMs > latestMs)));
+                    if (newest && (!this.fxStore.latest || this.fxStore.latest.date < newest || sameDateFresher)) {
                         this.fxStore.latest = {
                             date: newest,
-                            rate: this.fxStore.ratesByDate[newest].rate,
-                            source: this.fxStore.ratesByDate[newest].source,
-                            updatedAt: this.fxStore.ratesByDate[newest].updatedAt
+                            rate: newestEntry.rate,
+                            source: newestEntry.source,
+                            updatedAt: newestEntry.updatedAt
                         };
                     }
                     saveFxStore(this.fxStore);
@@ -1698,7 +1756,8 @@ class App {
                         rate_date: rec.rate_date,
                         currency_pair: 'USD_EGP',
                         rate: rec.rate,
-                        source: rec.source || 'auto'
+                        source: rec.source || 'auto',
+                        updated_at: rec.updatedAt || new Date().toISOString()
                     }));
                     await supabase.from('exchange_rates').upsert(dbPayload, { onConflict: 'rate_date,currency_pair' });
                 }

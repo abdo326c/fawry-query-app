@@ -1,0 +1,33 @@
+name: Daily USD-EGP FX Rate Sync (12 PM Egypt)
+
+on:
+  schedule:
+    # 09:00 UTC = 12:00 PM Africa/Cairo during DST (UTC+3)
+    # 10:00 UTC = 12:00 PM Africa/Cairo during standard time (UTC+2)
+    # update_fx_rate.js verifies Africa/Cairo hour === 12 so only one run updates daily.
+    - cron: '0 9,10 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-fx-rate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Sync USD -> EGP daily rate at 12:00 PM Egypt time
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            node scripts/update_fx_rate.js --force
+          else
+            node scripts/update_fx_rate.js
+          fi
