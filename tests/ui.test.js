@@ -1204,4 +1204,172 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             window.app.userRole = origRole;
         }
     }
+
+    // Student Master import supports new ApplicantReport ("People ID" + continuation rows), multi-file import, and Master Exports
+    {
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const origXLSX = globalThis.XLSX;
+        const origLoadStudents = window.app.loadStudents;
+        const upsertedBatches = [];
+
+        try {
+            window.app.loadStudents = vi.fn().mockResolvedValue();
+            supabase.from = vi.fn((table) => ({
+                select: vi.fn().mockReturnThis(),
+                in: vi.fn().mockResolvedValue({
+                    data: table === 'student_master' ? [{
+                        student_id: '202000160',
+                        full_name: 'Fatma Mmdouh',
+                        arabic_name: null,
+                        national_id: null,
+                        email: 'f.mmdouh@nu.edu.eg',
+                        mobile: null,
+                        guardian_name: null,
+                        guardian_mobile: null,
+                        college: 'Engineering and Applied Sciences',
+                        program: 'Undergraduate / Bachelor of Science',
+                        source: 'StudentDetails'
+                    }] : [],
+                    error: null
+                }),
+                upsert: vi.fn(async (batch) => {
+                    upsertedBatches.push(...batch);
+                    return { error: null };
+                }),
+                delete: vi.fn(() => ({ in: vi.fn().mockResolvedValue({ error: null }) })),
+                insert: vi.fn().mockResolvedValue({ error: null })
+            }));
+
+            const fakeSheet1 = [
+                [],
+                ['List Of Applicants'],
+                ['People ID', 'Submitted Date', 'Applicant Status', 'First Name', 'Middle Name', 'Last Name', null, 'Arabic Name', 'University Email', 'Personal Email', 'Birth Date', 'Gender', 'Primary Citizenship', 'Secondary Citizenship', 'Country of Birth', 'Primary Language', 'Secondary Language', 'Government Id', 'Passport Number', 'Source name', 'Phone Number', 'Primary Address', 'City', 'Country', 'University', 'High School Certificate', 'Category', 'Total Score Marks', 'Total Score Percent', 'School Name', 'is Transfer', 'Other School Name', 'Program', 'Degree', 'Curriculum', 'Scholarship', 'Offer Status', 'Offer Decision', 'Notes', 'Parent Relation', 'Parent Name', 'Parent Profession', 'Parent Mobile', 'Parent Address', 'End Date'],
+                ['202000160', '18/06/2020', 'Approved', 'Fatma', 'Mmdouh', 'Abdallh', null, 'فاطمة ممدوح عبدالله', null, 'fatmamamdouh593@gmail.com', '31/03/2001', 'Female', 'Egypt', null, 'Egypt', 'Arabic', 'Arabic', '30103312501609', '0', null, '01014015386', null, null, 'EGYPT', null, null, null, '', 0, 'Other', 'No', null, 'Undergraduate', 'Bachelor of Science', 'Architecture and Urban Design', null, null, null, null, 'Other', 'Fatma Mmdouh Abdallh', null, null, null, '2019-02-03'],
+                [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 'Father', 'Mr. Mmdouh Abdallh Matoly', 'تاجر عقارات', '01123585899', null, '2019-02-03']
+            ];
+            const fakeSheet2 = [
+                [],
+                ['List Of Applicants'],
+                ['People ID', 'First Name', 'Middle Name', 'Last Name', 'Arabic Name', 'University Email', 'Personal Email', 'Government Id', 'Passport Number', 'Phone Number', 'University', 'Program', 'Degree', 'Curriculum', 'Parent Relation', 'Parent Name', 'Parent Mobile'],
+                ['001710367', 'Kareem', 'Mohamed', 'Moussa', 'كريم محمد موسى ابوالخير', 'kamoussa@nu.edu.eg', 'kamoussa@nu.edu.eg', '29811192100477', null, '01007824027', null, 'Graduate', 'Master', 'Microelectronic System Design-MSc', 'Other', 'Kareem Mohamed Moussa', null]
+            ];
+
+            globalThis.XLSX = {
+                read: (buf) => ({
+                    SheetNames: ['ApplicantReport'],
+                    Sheets: { ApplicantReport: buf._rows }
+                }),
+                utils: {
+                    sheet_to_json: (sheet) => sheet
+                }
+            };
+
+            const file1 = { name: 'ApplicantReport 1.xlsx', arrayBuffer: async () => ({ _rows: fakeSheet1 }) };
+            const file2 = { name: 'ApplicantReport 2.xlsx', arrayBuffer: async () => ({ _rows: fakeSheet2 }) };
+
+            await window.app.handleStudentImport([file1, file2]);
+
+            expect(upsertedBatches.length).toBe(2);
+            const s1 = upsertedBatches.find(r => r.student_id === '202000160');
+            expect(s1).toMatchObject({
+                student_id: '202000160',
+                full_name: 'Fatma Mmdouh Abdallh',
+                arabic_name: 'فاطمة ممدوح عبدالله',
+                national_id: '30103312501609',
+                email: 'f.mmdouh@nu.edu.eg', // Preserved existing NU email from StudentDetails
+                mobile: '01014015386',
+                guardian_name: 'Mr. Mmdouh Abdallh Matoly', // Picked Father from continuation row over 'Other'
+                guardian_mobile: '01123585899',
+                college: 'Engineering and Applied Sciences', // Preserved from StudentDetails
+                source: 'Merged'
+            });
+
+            const s2 = upsertedBatches.find(r => r.student_id === '1710367');
+            expect(s2).toMatchObject({
+                student_id: '1710367',
+                full_name: 'Kareem Mohamed Moussa',
+                arabic_name: 'كريم محمد موسى ابوالخير',
+                national_id: '29811192100477',
+                email: 'kamoussa@nu.edu.eg',
+                mobile: '01007824027',
+                program: 'Graduate / Master / Microelectronic System Design-MSc',
+                source: 'ApplicantReport'
+            });
+        } finally {
+            supabase.from = origFrom;
+            globalThis.XLSX = origXLSX;
+            window.app.loadStudents = origLoadStudents;
+        }
+    }
+
+    // Student (UG) / (PG) program level badges in Transactions, BM Transactions, ERP Preview, Students Directory, and Excel exports
+    {
+        window.app.allStudents = [
+            { student_id: '241001111', full_name: 'Ali Hassan', program: 'Undergraduate / Bachelor of Science / Computer Science', college: 'ITCS' },
+            { student_id: '1710367', full_name: 'Kareem Moussa', program: 'Graduate / Master / Microelectronic System Design-MSc', college: 'ENG' }
+        ];
+        window.app.allStudentsData = window.app.allStudents;
+        window.app.rebuildStudentMasterMap(window.app.allStudents);
+
+        expect(window.app.getStudentLevelBySid('241001111')).toBe('UG');
+        expect(window.app.getStudentLevelLabelBySid('241001111')).toBe('(UG)');
+        expect(window.app.getStudentLevelBySid('001710367')).toBe('PG');
+        expect(window.app.getStudentLevelLabelBySid('001710367')).toBe('(PG)');
+
+        // BM Transactions table shows (UG) and (PG) badges next to Student ID
+        window.app.foreignQuickFilter = 'all';
+        window.app.foreignSearchTerm = '';
+        window.app.foreignTransactions = [
+            { reference_number: 'FX_UG', value_date: '2026-11-12', student_id: '241001111', amount: 1000, currency: 'USD', description: 'UG Tuition', id_status: 'Valid' },
+            { reference_number: 'FX_PG', value_date: '2026-11-12', student_id: '1710367', amount: 1500, currency: 'USD', description: 'PG Tuition', id_status: 'Valid' }
+        ];
+        window.app.applyForeignFilters();
+        const fxHtml = document.getElementById('foreign-transactions-body')?.innerHTML || '';
+        expect(fxHtml).toContain('badge-level-ug');
+        expect(fxHtml).toContain('(UG)');
+        expect(fxHtml).toContain('badge-level-pg');
+        expect(fxHtml).toContain('(PG)');
+
+        // ERP Preview shows (UG) and (PG) badges next to Account Number
+        window.app.erpData = [
+            { reference_number: 'ERP_UG', payment_date: '2026-11-12', student_id: '241001111', item_price: 5000, item_name: 'Tuition', mapping: 'Tuition', id_status: 'Valid', bank: 'NUADIB64' },
+            { reference_number: 'ERP_PG', payment_date: '2026-11-12', student_id: '1710367', item_price: 6000, item_name: 'Tuition', mapping: 'Tuition', id_status: 'Valid', bank: 'NUADIB64' }
+        ];
+        window.app.renderErpPreview();
+        const erpPreviewHtml = document.getElementById('erp-preview-body')?.innerHTML || '';
+        expect(erpPreviewHtml).toContain('badge-level-ug');
+        expect(erpPreviewHtml).toContain('badge-level-pg');
+
+        // Students Directory table renders (UG) and (PG) badges and indexes level tags for search
+        window.app.allStudents.forEach(s => window.app.indexStudentRecord(s));
+        window.app.filteredStudentsData = [...window.app.allStudents];
+        window.app.studentsCurrentPage = 1;
+        window.app.renderStudentsPage();
+        const studentsHtml = document.getElementById('students-table-body')?.innerHTML || '';
+        expect(studentsHtml).toContain('badge-level-ug');
+        expect(studentsHtml).toContain('badge-level-pg');
+
+        // labelExistingStudentsInDatabase prefixes existing students in DB with (UG) and (PG)
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const labeledBatches = [];
+        try {
+            window.app.userRole = 'admin';
+            supabase.from = vi.fn(() => ({
+                upsert: vi.fn(async (batch) => {
+                    labeledBatches.push(...batch);
+                    return { error: null };
+                })
+            }));
+            const labelRes = await window.app.labelExistingStudentsInDatabase({ silent: true });
+            expect(labelRes.ugCount).toBe(1);
+            expect(labelRes.pgCount).toBe(1);
+            expect(labelRes.updated).toBe(2);
+            expect(labeledBatches.find(r => r.student_id === '241001111')?.program).toBe('(UG) Undergraduate / Bachelor of Science / Computer Science');
+            expect(labeledBatches.find(r => r.student_id === '1710367')?.program).toBe('(PG) Graduate / Master / Microelectronic System Design-MSc');
+        } finally {
+            supabase.from = origFrom;
+        }
+    }
 });

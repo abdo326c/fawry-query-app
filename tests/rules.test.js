@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows, normalizeStudentIdValue, normalizePhoneKey, normalizeAutoMatchName, extractCandidateStudentIds, buildStudentLookupIndex, matchTransactionToStudent } from '../rules.js';
+import { validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction, originalItemName, applyBusinessRules, toDateOnly, dateToExcelSerial, calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate, normalizeItemName, buildMappingLookup, sanitizeExcelValue, sanitizeExcelRows, normalizeStudentIdValue, normalizePhoneKey, normalizeAutoMatchName, extractCandidateStudentIds, buildStudentLookupIndex, matchTransactionToStudent, getStudentProgramLevel, formatStudentLevelTag } from '../rules.js';
 import { parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages, matchForeignDepositsToStudents, normalizeArabicPresentation, orderBidiPdfLineItems } from '../foreign-transactions.js';
 import { createEmptyFxStore, extractUsdEgpFromPayload, resolveUsdToEgpRate, convertUsdToEgp, setManualFxRate, syncMissingFxRates } from '../fx-rates.js';
 
@@ -630,4 +630,19 @@ test('High-precision Auto-Matcher engine handles embedded IDs, sibling phones, k
     expect(normalizePhoneKey('01234567890')).toBe('');
     expect(normalizePhoneKey('2023123455', { strictMobile: true })).toBe('');
     expect(normalizePhoneKey('01012345678', { strictMobile: true })).toBe('1012345678');
+});
+
+test('getStudentProgramLevel and formatStudentLevelTag classify Undergraduate as UG and all other programs as PG', () => {
+    expect(getStudentProgramLevel('Undergraduate / Bachelor of Science / Computer Science')).toBe('UG');
+    expect(getStudentProgramLevel({ program: 'Undergraduate / Bachelor of Business Administration' })).toBe('UG');
+    expect(formatStudentLevelTag({ program: 'Undergraduate / Bachelor of Science' })).toBe('(UG)');
+
+    expect(getStudentProgramLevel('Graduate / Master / Microelectronic System Design-MSc')).toBe('PG');
+    expect(getStudentProgramLevel('Graduate / Diploma / Software Engineering Diploma')).toBe('PG');
+    expect(getStudentProgramLevel({ program: 'PhD in Engineering' })).toBe('PG');
+    expect(formatStudentLevelTag({ program: 'Graduate / Master / MBA' })).toBe('(PG)');
+
+    expect(getStudentProgramLevel('')).toBe('');
+    expect(getStudentProgramLevel(null)).toBe('');
+    expect(formatStudentLevelTag({})).toBe('');
 });

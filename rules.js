@@ -774,6 +774,65 @@ export function normalizeStudentIdValue(val) {
 }
 
 /**
+ * Classifies a student record or program string into 'UG' (Undergraduate) or 'PG' (Postgraduate / non-Undergraduate).
+ * Rule: All Undergraduate programs are labeled 'UG'; otherwise 'PG'.
+ * Returns '' when no student or program is provided.
+ */
+export function getStudentProgramLevel(studentOrProgram) {
+    if (studentOrProgram === null || studentOrProgram === undefined) return '';
+    let prog = '';
+    if (typeof studentOrProgram === 'object') {
+        const hasIdentity = Boolean(
+            studentOrProgram.student_id ||
+            studentOrProgram.full_name ||
+            studentOrProgram.arabic_name ||
+            studentOrProgram.program !== undefined
+        );
+        if (!hasIdentity) return '';
+        if (studentOrProgram.level === 'UG' || studentOrProgram.level === '(UG)') return 'UG';
+        if (studentOrProgram.level === 'PG' || studentOrProgram.level === '(PG)') return 'PG';
+        prog = String(studentOrProgram.program || '').trim();
+    } else {
+        prog = String(studentOrProgram).trim();
+        if (!prog) return '';
+        if (prog === 'UG' || prog === '(UG)') return 'UG';
+        if (prog === 'PG' || prog === '(PG)') return 'PG';
+    }
+    if (/^\(UG\)\b/i.test(prog)) return 'UG';
+    if (/^\(PG\)\b/i.test(prog)) return 'PG';
+    const cleanProg = prog.replace(/^\((?:UG|PG)\)\s*/i, '');
+    const primarySegment = cleanProg.split('/')[0].trim();
+    if (/^(graduate|postgraduate|diploma|phd|master|msc|mba|pg)\b/i.test(primarySegment)) {
+        return 'PG';
+    }
+    if (/^(undergraduate|undergrad|bachelor|ug)\b/i.test(primarySegment)) {
+        return 'UG';
+    }
+    return /\b(undergraduate|undergrad|bachelor|ug)\b/i.test(cleanProg) ? 'UG' : 'PG';
+}
+
+/**
+ * Returns the parenthesized student level label: '(UG)' or '(PG)' (or '' if unknown).
+ */
+export function formatStudentLevelTag(studentOrProgram) {
+    const level = (studentOrProgram === 'UG' || studentOrProgram === 'PG')
+        ? studentOrProgram
+        : getStudentProgramLevel(studentOrProgram);
+    return level ? `(${level})` : '';
+}
+
+/**
+ * Ensures a student program string starts with its '(UG)' or '(PG)' label without double-prefixing.
+ */
+export function ensureProgramHasLevelPrefix(programStr) {
+    const raw = String(programStr || '').trim();
+    const clean = raw.replace(/^\((?:UG|PG)\)\s*/i, '').trim();
+    const level = getStudentProgramLevel({ program: clean });
+    const tag = `(${level || 'PG'})`;
+    return clean ? `${tag} ${clean}` : tag;
+}
+
+/**
  * Normalizes a phone number into a canonical 10-digit lookup key.
  * Rejects dummy/placeholder numbers (0000000000, 1111111111, 1234567890, etc.).
  * When strictMobile=true (used for free-text student_id / custom_input fields), requires

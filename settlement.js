@@ -861,6 +861,9 @@ class SettlementProcessor {
             "Status": r.status,
             "Bank": r.bank || '',
             "Student ID": r.student_id || '',
+            "Level": (window.app && typeof window.app.getStudentLevelLabelBySid === 'function')
+                ? window.app.getStudentLevelLabelBySid(r.student_id)
+                : '',
             "System Amount (EGP)": Number(r.sys_amount || 0),
             "Settlement Amount (EGP)": Number(r.stl_amount || 0),
             "Variance (Stl - Sys)": Number(r.variance ?? (Number(r.stl_amount || 0) - Number(r.sys_amount || 0))),

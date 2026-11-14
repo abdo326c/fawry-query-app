@@ -23,6 +23,9 @@ import {
     isSameDaySettlementBank,
     resolveErpJournalDate,
     normalizeStudentIdValue,
+    getStudentProgramLevel,
+    formatStudentLevelTag,
+    ensureProgramHasLevelPrefix,
     normalizePhoneKey,
     buildStudentLookupIndex,
     matchTransactionToStudent
@@ -4542,6 +4545,116 @@ class App {
         return query;
     }
 
+    rebuildStudentMasterMap(students = []) {
+        const map = new Map();
+        for (const s of (students || [])) {
+            if (!s || !s.student_id) continue;
+            const rawSid = String(s.student_id).trim();
+            if (!rawSid) continue;
+            map.set(rawSid, s);
+            map.set(rawSid.toUpperCase(), s);
+            const normSid = this.normalizeStudentId ? this.normalizeStudentId(rawSid) : normalizeStudentIdValue(rawSid);
+            if (normSid) {
+                map.set(normSid, s);
+                map.set(normSid.toUpperCase(), s);
+                if (/^\d+$/.test(normSid) && normSid.length < 9) {
+                    map.set(normSid.padStart(9, '0'), s);
+                }
+            }
+        }
+        this.studentMasterByIdMap = map;
+        this._lastMappedStudentsRef = students;
+        this._lastMappedStudentsLen = Array.isArray(students) ? students.length : 0;
+        return map;
+    }
+
+    syncStudentMasterMapFromCache() {
+        const activeArr = (Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0)
+            ? this.allStudentsData
+            : (Array.isArray(this.allStudents) && this.allStudents.length > 0 ? this.allStudents : null);
+        if (activeArr && (this._lastMappedStudentsRef !== activeArr || this._lastMappedStudentsLen !== activeArr.length || !this.studentMasterByIdMap)) {
+            this.rebuildStudentMasterMap(activeArr);
+        }
+        if (!this.studentMasterByIdMap) {
+            this.studentMasterByIdMap = new Map();
+        }
+        return this.studentMasterByIdMap;
+    }
+
+    async ensureStudentLevelMap() {
+        this.syncStudentMasterMapFromCache();
+        if (this.studentMasterByIdMap && this.studentMasterByIdMap.size > 0) {
+            return this.studentMasterByIdMap;
+        }
+        try {
+            const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, program, mobile', null, 'student_id');
+            if (Array.isArray(rows) && rows.length > 0) {
+                if (!this.allStudents || this.allStudents.length === 0) {
+                    this.allStudents = rows;
+                }
+                this.rebuildStudentMasterMap(rows);
+            }
+        } catch (_e) {
+            // Ignore when offline or unseeded
+        }
+        return this.studentMasterByIdMap;
+    }
+
+    lookupStudentBySid(sid) {
+        if (sid === null || sid === undefined) return null;
+        const raw = String(sid).trim();
+        if (!raw || raw === 'Empty' || raw === 'Missing' || raw === 'Missing ID') return null;
+        const map = this.syncStudentMasterMapFromCache();
+        if (map.size === 0) return null;
+        const direct = map.get(raw) || map.get(raw.toUpperCase());
+        if (direct) return direct;
+        const norm = this.normalizeStudentId ? this.normalizeStudentId(raw) : normalizeStudentIdValue(raw);
+        if (norm) {
+            const byNorm = map.get(norm) || map.get(norm.toUpperCase());
+            if (byNorm) return byNorm;
+            if (/^\d+$/.test(norm) && norm.length < 9) {
+                const byPad = map.get(norm.padStart(9, '0'));
+                if (byPad) return byPad;
+            }
+        }
+        return null;
+    }
+
+    getStudentLevelBySid(sid) {
+        const student = this.lookupStudentBySid(sid);
+        if (student) return getStudentProgramLevel(student);
+        const raw = String(sid || '').trim();
+        if (/^dip\d+/i.test(raw)) return 'PG';
+        return '';
+    }
+
+    getStudentLevelLabelBySid(sid) {
+        return formatStudentLevelTag(this.getStudentLevelBySid(sid));
+    }
+
+    getTransactionStudentLevel(tx) {
+        if (!tx) return '';
+        if (tx.student_id) {
+            const bySid = this.getStudentLevelBySid(tx.student_id);
+            if (bySid) return bySid;
+        }
+        if (tx.program) {
+            return getStudentProgramLevel(tx.program);
+        }
+        return '';
+    }
+
+    renderStudentLevelBadge(levelOrStudent) {
+        const level = (levelOrStudent === 'UG' || levelOrStudent === 'PG')
+            ? levelOrStudent
+            : getStudentProgramLevel(levelOrStudent);
+        if (!level) return '';
+        if (level === 'UG') {
+            return `<span class="badge badge-level-ug" style="font-size: 0.68rem; padding: 0.08rem 0.38rem; border-radius: 4px; font-weight: 700; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); margin-left: 0.35rem; vertical-align: middle;" title="Undergraduate Program">(UG)</span>`;
+        }
+        return `<span class="badge badge-level-pg" style="font-size: 0.68rem; padding: 0.08rem 0.38rem; border-radius: 4px; font-weight: 700; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); margin-left: 0.35rem; vertical-align: middle;" title="Postgraduate Program">(PG)</span>`;
+    }
+
     initExport() {
         document.getElementById('btn-export').addEventListener('click', async () => {
             const btn = document.getElementById('btn-export');
@@ -4550,6 +4663,7 @@ class App {
             btn.disabled = true;
 
             try {
+                await this.ensureStudentLevelMap();
                 const exportCols = 'reference_number, payment_date, student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
                 const pageSize = 1000;
                 const fetchExportPage = async (from) => {
@@ -4603,11 +4717,13 @@ class App {
                 // Format exactly like the original Power Query Excel (strictly date-only, no time component)
                 const formattedData = allData.map(t => {
                     const pDateStr = toDateOnly(t.payment_date);
+                    const levelTag = formatStudentLevelTag(this.getTransactionStudentLevel(t));
 
                     return {
                         "Reference Number": t.reference_number,
                         "Payment Date": pDateStr,
                         "Student ID": t.student_id,
+                        "Level": levelTag,
                         "Customer Mobile Number": t.customer_mobile,
                         "Total Amount Plus Fees": t.total_amount,
                         "Net Amount": t.net_amount,
@@ -4725,10 +4841,13 @@ class App {
         const sortCol = this.txSortCol || 'payment_date';
         const sortAsc = Boolean(this.txSortAsc);
 
-        const { data, count: fetchedCount, error } = await query
-            .order(sortCol, { ascending: sortAsc })
-            .order('id', { ascending: sortAsc })
-            .range(fromRange, toRange);
+        const [{ data, count: fetchedCount, error }] = await Promise.all([
+            query
+                .order(sortCol, { ascending: sortAsc })
+                .order('id', { ascending: sortAsc })
+                .range(fromRange, toRange),
+            this.ensureStudentLevelMap()
+        ]);
 
         // A newer request was started while this one was running – ignore this (stale) result
         if (requestId !== this.txRequestId) return;
@@ -4802,11 +4921,13 @@ class App {
                     ? `<button type="button" class="btn btn-outline btn-sm" data-quick-map-item="${escapeHTML(origItem)}" title="Map '${escapeHTML(origItem)}'" style="padding: 0.12rem 0.45rem; font-size: 0.72rem; color: var(--warning); border-color: rgba(245, 158, 11, 0.4);">+ Map</button>`
                     : '-');
 
+            const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(t));
+
             return `
                 <tr data-tx-row-idx="${idx}" style="cursor: pointer;" title="Click to inspect transaction details">
                     <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date))}</td>
-                    <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong></td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong>${stuLevelBadge}</td>
                     <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 200px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.item_name)}</td>
                     <td style="white-space: nowrap;">${mappingCell}</td>
@@ -4954,7 +5075,7 @@ class App {
                 <div class="glass-card" style="padding: 0.85rem; margin: 0;">
                     <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Student &amp; Customer</h4>
                     <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem;">
-                        <div>Student ID: <strong>${escapeHTML(tx.student_id || 'Empty')}</strong></div>
+                        <div>Student ID: <strong>${escapeHTML(tx.student_id || 'Empty')}</strong>${this.renderStudentLevelBadge(this.getTransactionStudentLevel(tx))}</div>
                         <div id="tx-detail-student-lookup" style="color: var(--text-muted); font-size: 0.8rem;">Looking up Student Master...</div>
                         <div>Customer Mobile: <strong>${escapeHTML(tx.customer_mobile || '-')}</strong></div>
                         <div>Payment Date: <strong>${escapeHTML(toDateOnly(tx.payment_date) || '-')}</strong></div>
@@ -5029,20 +5150,28 @@ class App {
             if (!tx.student_id || tx.student_id === 'Empty') {
                 lookupEl.textContent = 'No Student ID on transaction';
             } else {
-                try {
-                    const { data: st } = await supabase
-                        .from('student_master')
-                        .select('full_name, college, program')
-                        .eq('student_id', String(tx.student_id).trim())
-                        .maybeSingle();
-                    if (st) {
-                        const colProg = [st.college, st.program].filter(Boolean).join(' • ');
-                        lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong>${escapeHTML(st.full_name || 'N/A')}</strong>${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
-                    } else {
-                        lookupEl.textContent = 'Student ID not found in Student Master';
+                const cachedSt = this.lookupStudentBySid(tx.student_id);
+                if (cachedSt) {
+                    const colProg = [cachedSt.college, cachedSt.program].filter(Boolean).join(' • ');
+                    const lvlBadge = this.renderStudentLevelBadge(getStudentProgramLevel(cachedSt));
+                    lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong>${escapeHTML(cachedSt.full_name || cachedSt.arabic_name || 'N/A')}</strong>${lvlBadge}${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                } else {
+                    try {
+                        const { data: st } = await supabase
+                            .from('student_master')
+                            .select('full_name, college, program')
+                            .eq('student_id', String(tx.student_id).trim())
+                            .maybeSingle();
+                        if (st) {
+                            const colProg = [st.college, st.program].filter(Boolean).join(' • ');
+                            const lvlBadge = this.renderStudentLevelBadge(getStudentProgramLevel(st));
+                            lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong>${escapeHTML(st.full_name || 'N/A')}</strong>${lvlBadge}${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                        } else {
+                            lookupEl.textContent = 'Student ID not found in Student Master';
+                        }
+                    } catch (e) {
+                        lookupEl.textContent = '';
                     }
-                } catch (e) {
-                    lookupEl.textContent = '';
                 }
             }
         }
@@ -5853,6 +5982,10 @@ class App {
             });
         }
 
+        document.getElementById('btn-label-existing-students')?.addEventListener('click', () => {
+            this.labelExistingStudentsInDatabase({ silent: false });
+        });
+
         document.getElementById('btn-export-students')?.addEventListener('click', async () => {
             try {
                 Toast.show("Preparing export...", "info");
@@ -5868,6 +6001,7 @@ class App {
 
                 const rows = (exportSource || []).map(s => ({
                     'Student ID': s.student_id || '',
+                    'Level': formatStudentLevelTag(getStudentProgramLevel(s)),
                     'Full Name': s.full_name || '',
                     'Arabic Name': s.arabic_name || '',
                     'Email': s.email || '',
@@ -5882,7 +6016,7 @@ class App {
 
                 const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(rows));
                 ws['!cols'] = [
-                    { wch: 14 }, { wch: 28 }, { wch: 26 }, { wch: 28 },
+                    { wch: 14 }, { wch: 10 }, { wch: 28 }, { wch: 26 }, { wch: 28 },
                     { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 24 },
                     { wch: 24 }, { wch: 16 }, { wch: 16 }
                 ];
@@ -6030,14 +6164,14 @@ class App {
                 e.preventDefault();
                 dropzone.style.borderColor = 'var(--border-color)';
                 if (e.dataTransfer.files.length) {
-                    this.handleStudentImport(e.dataTransfer.files[0]);
+                    this.handleStudentImport(Array.from(e.dataTransfer.files));
                 }
             });
             fileInput.addEventListener('change', (e) => {
                 if (e.target.files.length) {
-                    const f = e.target.files[0];
-                    e.target.value = ''; // allow re-selecting the same file
-                    this.handleStudentImport(f);
+                    const files = Array.from(e.target.files);
+                    e.target.value = ''; // allow re-selecting the same file(s)
+                    this.handleStudentImport(files);
                 }
             });
         }
@@ -6089,6 +6223,7 @@ class App {
                     "Current Status": tx.original_status,
                     "Confidence Tier": tierLabels[tx.confidenceTier] || (tx.proposedStudent ? 'Matched' : 'Unmatched'),
                     "Proposed Fix (Student ID)": tx.proposedStudent ? tx.proposedStudent.student_id : 'No Match Found',
+                    "Level": tx.proposedStudent ? formatStudentLevelTag(getStudentProgramLevel(tx.proposedStudent)) : '',
                     "Proposed Fix (Student Name)": tx.proposedStudent ? tx.proposedStudent.full_name : '',
                     "Match Reason": tx.matchReason || '',
                     "Item Name": tx.original_item,
@@ -6102,7 +6237,7 @@ class App {
                     const ws = XLSX.utils.json_to_sheet(safeExportRows);
                     ws['!cols'] = [
                         { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 24 },
-                        { wch: 26 }, { wch: 22 }, { wch: 30 }, { wch: 36 },
+                        { wch: 26 }, { wch: 22 }, { wch: 10 }, { wch: 30 }, { wch: 36 },
                         { wch: 28 }, { wch: 22 }, { wch: 22 }, { wch: 12 }, { wch: 14 }
                     ];
                     const wb = XLSX.utils.book_new();
@@ -6503,6 +6638,96 @@ class App {
         return s;
     }
 
+    async labelExistingStudentsInDatabase({ silent = false } = {}) {
+        if (!this.hasRole('operator')) {
+            if (!silent) this.requireRole('operator', 'label students in database');
+            return { updated: 0, ugCount: 0, pgCount: 0 };
+        }
+        const btn = document.getElementById('btn-label-existing-students');
+        const oldHtml = btn ? btn.innerHTML : '';
+        let loadingToast = null;
+        if (!silent) {
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Labeling...';
+                if (window.lucide) lucide.createIcons();
+            }
+            if (window.Toast?.showLoading) {
+                loadingToast = window.Toast.showLoading('Scanning & labeling existing students with (UG) / (PG)...');
+            }
+        }
+        try {
+            const allRows = (this.allStudentsData && this.allStudentsData.length > 0)
+                ? this.allStudentsData
+                : await fetchAll('student_master', '*', null, 'student_id');
+
+            let ugCount = 0;
+            let pgCount = 0;
+            const rowsToUpdate = [];
+
+            for (const s of (allRows || [])) {
+                const lvl = getStudentProgramLevel(s) || 'PG';
+                if (lvl === 'UG') ugCount++;
+                else pgCount++;
+
+                const newProg = ensureProgramHasLevelPrefix(s.program);
+                if (String(s.program || '').trim() !== newProg) {
+                    s.program = newProg;
+                    this.indexStudentRecord(s);
+                    rowsToUpdate.push({
+                        student_id: s.student_id,
+                        full_name: s.full_name ?? null,
+                        arabic_name: s.arabic_name ?? null,
+                        national_id: s.national_id ?? null,
+                        email: s.email ?? null,
+                        mobile: s.mobile ?? null,
+                        guardian_name: s.guardian_name ?? null,
+                        guardian_mobile: s.guardian_mobile ?? null,
+                        college: s.college ?? null,
+                        program: newProg,
+                        source: s.source ?? null
+                    });
+                }
+            }
+
+            if (rowsToUpdate.length > 0) {
+                const upsertTasks = [];
+                for (let i = 0; i < rowsToUpdate.length; i += 1000) {
+                    const batch = rowsToUpdate.slice(i, i + 1000);
+                    upsertTasks.push(async () => {
+                        const { error } = await supabase.from('student_master').upsert(batch, { onConflict: 'student_id' });
+                        if (error) throw error;
+                    });
+                }
+                await runConcurrent(upsertTasks, 4);
+            }
+
+            this.rebuildStudentMasterMap(allRows || []);
+            if (document.getElementById('view-student-master')?.classList.contains('active')) {
+                this.renderStudentsPage();
+            }
+
+            if (loadingToast) loadingToast.dismiss();
+            if (!silent) {
+                Toast.show(
+                    `Labeled ${(allRows || []).length.toLocaleString()} students (${ugCount.toLocaleString()} UG, ${pgCount.toLocaleString()} PG — ${rowsToUpdate.length.toLocaleString()} updated in DB).`,
+                    'success'
+                );
+            }
+            return { updated: rowsToUpdate.length, ugCount, pgCount, total: (allRows || []).length };
+        } catch (err) {
+            if (loadingToast) loadingToast.dismiss();
+            if (!silent) Toast.show('Error labeling students: ' + err.message, 'error');
+            throw err;
+        } finally {
+            if (!silent && btn) {
+                btn.disabled = false;
+                btn.innerHTML = oldHtml;
+                if (window.lucide) lucide.createIcons();
+            }
+        }
+    }
+
     mergeStudentRecord(existing, incoming) {
         if (!existing) return { ...incoming };
         const pickLongerName = (a, b) => {
@@ -6530,46 +6755,27 @@ class App {
         };
     }
 
-    async handleStudentImport(file) {
+    async handleStudentImport(fileOrFiles) {
+        const files = Array.isArray(fileOrFiles)
+            ? fileOrFiles
+            : (fileOrFiles && typeof fileOrFiles.length === 'number' && !(fileOrFiles instanceof Blob))
+                ? Array.from(fileOrFiles)
+                : (fileOrFiles ? [fileOrFiles] : []);
+        if (files.length === 0) return;
+
+        const batchFileName = files.map(f => f.name).join(', ');
         const status = document.getElementById('student-upload-status');
         status.style.display = 'block';
         status.className = 'alert alert-info';
-        status.innerHTML = `<i data-lucide="loader" class="spin"></i> Parsing Excel file...`;
+        status.innerHTML = `<i data-lucide="loader" class="spin"></i> Parsing ${files.length > 1 ? `${files.length} Excel files` : 'Excel file'}...`;
         if (window.lucide) lucide.createIcons();
 
         try {
-            const data = await file.arrayBuffer();
-            const workbook = XLSX.read(data, { type: 'array' });
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: null });
-            
-            if (!rows || rows.length === 0) throw new Error("File is empty.");
-
-            // Scan the first 10 rows to find the header row containing 'Student ID' or 'PEOPLE_ID1'
-            let headerRowIdx = -1;
-            for (let i = 0; i < Math.min(10, rows.length); i++) {
-                const rowCells = (rows[i] || []).map(c => c != null ? String(c).trim() : '');
-                if (rowCells.includes('Student ID') || rowCells.includes('PEOPLE_ID1')) {
-                    headerRowIdx = i;
-                    break;
-                }
-            }
-            if (headerRowIdx === -1) {
-                throw new Error("Unrecognized Excel format. Expected 'Student ID' or 'PEOPLE_ID1' column.");
-            }
-
-            const headers = rows[headerRowIdx];
-            const dataRows = rows.slice(headerRowIdx + 1);
-
-            const headerMap = {};
-            headers.forEach((h, i) => { if (h != null && String(h).trim() !== '') headerMap[String(h).trim()] = i; });
-
-            status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing and normalizing student records...`;
-
             const cleanText = (val) => {
                 if (val === null || val === undefined) return null;
                 const s = String(val).replace(/\*+$/g, '').replace(/\s+/g, ' ').trim();
-                if (!s || ['N/A', 'NA', 'NONE', 'NULL', '-'].includes(s.toUpperCase())) return null;
+                if (!s || ['N/A', 'NA', 'NONE', 'NULL', '-', '.', '0', 'NO', 'NO PASSPORT', 'لا يوجد'].includes(s.toUpperCase())) return null;
+                if (s.startsWith('=')) return null; // Ignore un-evaluated formula strings like =D2&" "&E2
                 return s;
             };
 
@@ -6588,71 +6794,176 @@ class App {
             const cleanNationalId = (val, rawSid, normSid) => {
                 const txt = cleanText(val);
                 if (!txt) return null;
-                // Ignore dummy National ID values in StudentDetails that just repeat the 6-digit Student ID
+                // Ignore dummy National ID / Passport values that repeat the Student ID, are too short, or are Excel float-truncated (ending in 6+ zeros)
                 if (txt === rawSid || txt === normSid || txt.length < 7) return null;
+                if (/^\d{8}0{6,}$/.test(txt)) return null;
+                if (new Set(txt.replace(/[\s\-]/g, '').split('')).size < 3) return null;
                 return txt;
             };
 
             const recordsMap = new Map();
             const paddedLegacyIds = new Set();
 
-            for (const row of dataRows) {
-                if (!row || row.length === 0) continue;
+            for (const file of files) {
+                const data = await file.arrayBuffer();
+                const workbook = XLSX.read(data, { type: 'array' });
+                let parsedAnySheet = false;
 
-                let rawSid, student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
+                for (const sheetName of workbook.SheetNames) {
+                    const sheet = workbook.Sheets[sheetName];
+                    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+                    if (!rows || rows.length === 0) continue;
 
-                if ('PEOPLE_ID1' in headerMap) {
-                    rawSid = String(row[headerMap['PEOPLE_ID1']] || '').trim();
-                    student_id = this.normalizeStudentId(rawSid);
-                    if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
-
-                    const first = cleanText(row[headerMap['FIRST_NAME1']]);
-                    const middle = cleanText(row[headerMap['MIDDLE_NAME1']]);
-                    const last = cleanText(row[headerMap['LAST_NAME1']]);
-                    const rawFull = cleanText(row[headerMap['Full name']]);
-                    const combinedParts = [first, middle, last].filter(Boolean).join(' ');
-                    if (rawFull && last && !rawFull.toLowerCase().includes(last.toLowerCase())) {
-                        full_name = `${rawFull} ${last}`.replace(/\s+/g, ' ').trim();
-                    } else {
-                        full_name = combinedParts || rawFull || first || null;
+                    // Scan the first 10 rows to find the header row containing 'Student ID', 'PEOPLE_ID1', or 'People ID'
+                    let headerRowIdx = -1;
+                    for (let i = 0; i < Math.min(10, rows.length); i++) {
+                        const rowCells = (rows[i] || []).map(c => c != null ? String(c).trim() : '');
+                        if (rowCells.includes('Student ID') || rowCells.includes('PEOPLE_ID1') || rowCells.includes('People ID')) {
+                            headerRowIdx = i;
+                            break;
+                        }
                     }
+                    if (headerRowIdx === -1) continue;
+                    parsedAnySheet = true;
 
-                    arabic_name = cleanText(row[headerMap['ARABICNAME']]);
-                    national_id = cleanNationalId(row[headerMap['GOVERNMENT_ID1']], rawSid, student_id) || cleanText(row[headerMap['PASSPORT_NUMBER1']]);
-                    email = cleanText(row[headerMap['Email1']]) || cleanText(row[headerMap['personalEmail']]);
-                    mobile = cleanPhone(row[headerMap['PhoneNumber1']]);
-                    guardian_name = cleanText(row[headerMap['Guardian_NAME']]);
-                    guardian_mobile = cleanPhone(row[headerMap['Guardian_Mobile']]);
-                    college = cleanText(row[headerMap['University1']]) || cleanText(row[headerMap['CURRICULUM1']]);
-                    const progParts = [cleanText(row[headerMap['PROGRAM1']]), cleanText(row[headerMap['DEGREE1']]), cleanText(row[headerMap['CURRICULUM1']])].filter(Boolean);
-                    program = [...new Set(progParts)].join(' / ') || null;
-                    source = 'ApplicantReport';
-                } else if ('Student ID' in headerMap) {
-                    rawSid = String(row[headerMap['Student ID']] || '').trim();
-                    student_id = this.normalizeStudentId(rawSid);
-                    if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
+                    const headers = rows[headerRowIdx];
+                    const dataRows = rows.slice(headerRowIdx + 1);
 
-                    full_name = cleanText(row[headerMap['Student Name']]);
-                    arabic_name = null;
-                    national_id = cleanNationalId(row[headerMap['National ID']], rawSid, student_id);
-                    email = cleanText(row[headerMap['Email']]);
-                    mobile = cleanPhone(row[headerMap['Mobile Phone Number']]) || cleanPhone(row[headerMap['Home Phone Number']]);
-                    guardian_name = null;
-                    guardian_mobile = null;
-                    college = cleanText(row[headerMap['College']]);
-                    program = cleanText(row[headerMap['Program']]);
-                    source = 'StudentDetails';
+                    const headerMap = {};
+                    headers.forEach((h, i) => { if (h != null && String(h).trim() !== '') headerMap[String(h).trim()] = i; });
+
+                    status.innerHTML = `<i data-lucide="loader" class="spin"></i> Preparing and normalizing student records (${escapeHTML(file.name)})...`;
+
+                    let lastRawSid = '';
+                    let lastStudentId = '';
+
+                    for (const row of dataRows) {
+                        if (!row || row.length === 0) continue;
+
+                        let rawSid, student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source;
+
+                        if ('PEOPLE_ID1' in headerMap || 'People ID' in headerMap) {
+                            const pidCol = 'PEOPLE_ID1' in headerMap ? 'PEOPLE_ID1' : 'People ID';
+                            const cellSid = row[headerMap[pidCol]] != null ? String(row[headerMap[pidCol]]).trim() : '';
+                            if (cellSid) {
+                                rawSid = cellSid;
+                                student_id = this.normalizeStudentId(rawSid);
+                                lastRawSid = rawSid;
+                                lastStudentId = student_id;
+                            } else {
+                                // Continuation row (e.g. Father / Mother guardian entry for the preceding applicant)
+                                rawSid = lastRawSid;
+                                student_id = lastStudentId;
+                            }
+                            if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
+
+                            const first = cleanText(row[headerMap['FIRST_NAME1'] ?? headerMap['First Name']]);
+                            const middle = cleanText(row[headerMap['MIDDLE_NAME1'] ?? headerMap['Middle Name']]);
+                            const last = cleanText(row[headerMap['LAST_NAME1'] ?? headerMap['Last Name']]);
+                            const rawFull = cleanText(row[headerMap['Full name']]);
+                            const combinedParts = [first, middle, last].filter(Boolean).join(' ');
+                            if (rawFull && last && !rawFull.toLowerCase().includes(last.toLowerCase())) {
+                                full_name = `${rawFull} ${last}`.replace(/\s+/g, ' ').trim();
+                            } else {
+                                full_name = combinedParts || rawFull || first || null;
+                            }
+
+                            arabic_name = cleanText(row[headerMap['ARABICNAME'] ?? headerMap['Arabic Name']]);
+                            national_id = cleanNationalId(row[headerMap['GOVERNMENT_ID1'] ?? headerMap['Government Id']], rawSid, student_id)
+                                || cleanNationalId(row[headerMap['PASSPORT_NUMBER1'] ?? headerMap['Passport Number']], rawSid, student_id);
+                            email = cleanText(row[headerMap['Email1'] ?? headerMap['University Email']])
+                                || cleanText(row[headerMap['personalEmail'] ?? headerMap['Personal Email']]);
+                            mobile = cleanPhone(row[headerMap['PhoneNumber1'] ?? headerMap['Phone Number']]);
+                            const rel = cleanText(row[headerMap['Guardian_Relation'] ?? headerMap['Parent Relation']]);
+                            const rawGName = cleanText(row[headerMap['Guardian_NAME'] ?? headerMap['Parent Name']]);
+                            const rawGMob = cleanPhone(row[headerMap['Guardian_Mobile'] ?? headerMap['Parent Mobile']]);
+
+                            // Prioritize Father / Mother guardian info over 'Other' (which often just repeats the student's own name with no mobile)
+                            const existingRec = student_id ? recordsMap.get(student_id) : null;
+                            const isPrimaryParent = rel && /^(father|mother)$/i.test(rel);
+                            if (existingRec && existingRec.guardian_mobile && !rawGMob) {
+                                guardian_name = existingRec.guardian_name;
+                                guardian_mobile = existingRec.guardian_mobile;
+                            } else if (existingRec && existingRec.guardian_name && !isPrimaryParent && existingRec._isPrimaryParent) {
+                                guardian_name = existingRec.guardian_name;
+                                guardian_mobile = existingRec.guardian_mobile || rawGMob;
+                            } else {
+                                guardian_name = rawGName;
+                                guardian_mobile = rawGMob;
+                            }
+
+                            college = cleanText(row[headerMap['University1'] ?? headerMap['University']])
+                                || cleanText(row[headerMap['CURRICULUM1'] ?? headerMap['Curriculum']]);
+                            const progParts = [
+                                cleanText(row[headerMap['PROGRAM1'] ?? headerMap['Program']]),
+                                cleanText(row[headerMap['DEGREE1'] ?? headerMap['Degree']]),
+                                cleanText(row[headerMap['CURRICULUM1'] ?? headerMap['Curriculum']])
+                            ].filter(Boolean);
+                            program = [...new Set(progParts)].join(' / ') || null;
+                            source = 'ApplicantReport';
+
+                            if (student_id) {
+                                const incoming = {
+                                    student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
+                                };
+                                const merged = this.mergeStudentRecord(existingRec, incoming);
+                                if (isPrimaryParent && (rawGName || rawGMob)) merged._isPrimaryParent = true;
+                                else if (existingRec?._isPrimaryParent) merged._isPrimaryParent = true;
+                                recordsMap.set(student_id, merged);
+                            }
+                            continue;
+                        } else if ('Student ID' in headerMap && 'Full Name' in headerMap) {
+                            // Exported / Master Combined format (has all 11 student_master columns)
+                            rawSid = String(row[headerMap['Student ID']] || '').trim();
+                            student_id = this.normalizeStudentId(rawSid);
+                            if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
+
+                            full_name = cleanText(row[headerMap['Full Name']]);
+                            arabic_name = cleanText(row[headerMap['Arabic Name']]);
+                            national_id = cleanNationalId(row[headerMap['National ID']], rawSid, student_id);
+                            email = cleanText(row[headerMap['Email']]);
+                            mobile = cleanPhone(row[headerMap['Mobile']]);
+                            guardian_name = cleanText(row[headerMap['Guardian Name']]);
+                            guardian_mobile = cleanPhone(row[headerMap['Guardian Mobile']]);
+                            college = cleanText(row[headerMap['College']]);
+                            program = cleanText(row[headerMap['Program']]);
+                            source = cleanText(row[headerMap['Source']]) || 'Merged';
+                        } else if ('Student ID' in headerMap) {
+                            rawSid = String(row[headerMap['Student ID']] || '').trim();
+                            student_id = this.normalizeStudentId(rawSid);
+                            if (rawSid && rawSid !== student_id) paddedLegacyIds.add(rawSid);
+
+                            full_name = cleanText(row[headerMap['Student Name']]);
+                            arabic_name = null;
+                            national_id = cleanNationalId(row[headerMap['National ID']], rawSid, student_id);
+                            email = cleanText(row[headerMap['Email']]);
+                            mobile = cleanPhone(row[headerMap['Mobile Phone Number']]) || cleanPhone(row[headerMap['Home Phone Number']]);
+                            guardian_name = null;
+                            guardian_mobile = null;
+                            college = cleanText(row[headerMap['College']]);
+                            program = cleanText(row[headerMap['Program']]);
+                            source = 'StudentDetails';
+                        }
+
+                        if (student_id) {
+                            const incoming = {
+                                student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
+                            };
+                            recordsMap.set(student_id, this.mergeStudentRecord(recordsMap.get(student_id), incoming));
+                        }
+                    }
                 }
 
-                if (student_id) {
-                    const incoming = {
-                        student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source
-                    };
-                    recordsMap.set(student_id, this.mergeStudentRecord(recordsMap.get(student_id), incoming));
+                if (!parsedAnySheet) {
+                    throw new Error(`Unrecognized Excel format in "${file.name}". Expected 'Student ID', 'People ID', or 'PEOPLE_ID1' column.`);
                 }
             }
 
-            const records = Array.from(recordsMap.values());
+            const records = Array.from(recordsMap.values()).map(r => {
+                const copy = { ...r };
+                delete copy._isPrimaryParent;
+                return copy;
+            });
 
             // Fetch existing student_master rows (both normalized IDs and any 0-padded legacy IDs) so we merge instead of wiping fields
             status.innerHTML = `<i data-lucide="loader" class="spin"></i> Merging with existing database records...`;
@@ -6707,7 +7018,7 @@ class App {
             if (this.currentUser) {
                 await supabase.from('import_batches').insert({
                     user_email: this.currentUser.email,
-                    file_name: file.name,
+                    file_name: batchFileName,
                     status: 'success',
                     records_processed: mergedRecords.length,
                     records_inserted: insertedCount,
@@ -6716,7 +7027,7 @@ class App {
             }
 
             status.className = 'alert alert-success';
-            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length} students!`;
+            status.innerHTML = `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length.toLocaleString()} students!`;
             if (window.lucide) lucide.createIcons();
             await this.loadStudents({ forceReload: true });
 
@@ -6728,7 +7039,7 @@ class App {
             if (this.currentUser) {
                 await supabase.from('import_batches').insert({
                     user_email: this.currentUser.email,
-                    file_name: file.name,
+                    file_name: batchFileName,
                     status: 'failed',
                     records_processed: 0,
                     records_inserted: 0,
@@ -7166,7 +7477,7 @@ class App {
                         <td>
                             <span class="status-badge valid-id" title="${escapeHTML(proposal.matchReason)}" ${badgeStyle}>
                                 Matched: ${escapeHTML(proposal.proposedStudent.student_id)} (${tierTag})
-                            </span>
+                            </span>${this.renderStudentLevelBadge(getStudentProgramLevel(proposal.proposedStudent))}
                             <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHTML(proposal.proposedStudent.full_name)}</div>
                         </td>
                         <td style="white-space: normal; word-wrap: break-word; max-width: 220px;">
@@ -8328,6 +8639,7 @@ class App {
         if (refresh || !this.erpBaseData || this.erpBaseKey !== baseKey) {
             let baseData = [];
             try {
+                await this.ensureStudentLevelMap();
                 const includeFawry = bank !== DEFAULT_FOREIGN_BANK;
                 const includeForeign = !bank || bank === DEFAULT_FOREIGN_BANK;
 
@@ -8520,13 +8832,14 @@ class App {
                 tr.style.background = 'rgba(239, 68, 68, 0.04)';
             }
 
+            const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(row));
             const accountCellHtml = isValid
                 ? `<div>
-                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>
+                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>${stuLevelBadge}
                         ${isExempt ? `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">Exempt (Dip &amp; Workshop)</div>` : ''}
                    </div>`
                 : `<div>
-                        <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(paddedAccount || 'Missing ID')}</span>
+                        <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); font-family: monospace; font-weight: 700;">${escapeHTML(paddedAccount || 'Missing ID')}</span>${stuLevelBadge}
                         <div style="font-size: 0.72rem; color: var(--danger); margin-top: 2px;">${escapeHTML(row.id_status)}</div>
                    </div>`;
 
@@ -9172,9 +9485,13 @@ class App {
         const sid = String(s.student_id || '').toLowerCase();
         s._normSid = this.normalizeStudentId(sid).toLowerCase();
         s._sourceLower = String(s.source || '').toLowerCase();
+        s._level = getStudentProgramLevel(s);
+        s._levelTag = formatStudentLevelTag(s._level);
         s._searchHaystack = [
             sid,
             s._normSid,
+            s._level,
+            s._levelTag,
             s.full_name,
             s.arabic_name,
             s.email,
@@ -9204,7 +9521,15 @@ class App {
                 );
                 this.allStudentsData = (data || []).map(s => this.indexStudentRecord(s));
                 this.allStudents = this.allStudentsData;
+                this.rebuildStudentMasterMap(this.allStudentsData);
                 this.updateStudentsStatsAndDropdowns();
+
+                if (
+                    this.hasRole('operator') &&
+                    this.allStudentsData.some(s => !/^\((?:UG|PG)\)\b/i.test(String(s.program || '').trim()))
+                ) {
+                    this.labelExistingStudentsInDatabase({ silent: true }).catch(() => {});
+                }
             }
             this.markTabLoaded('student-master');
 
@@ -9313,11 +9638,13 @@ class App {
         const startIdx = (this.studentsCurrentPage - 1) * pageSize;
         const pageItems = data.slice(startIdx, startIdx + pageSize);
 
-        tbody.innerHTML = pageItems.map(s => `
+        tbody.innerHTML = pageItems.map(s => {
+            const levelBadge = this.renderStudentLevelBadge(getStudentProgramLevel(s));
+            return `
             <tr class="student-row" style="cursor: pointer;" data-sid="${escapeHTML(s.student_id)}">
                 <td style="white-space: nowrap;">
                     <div style="display: inline-flex; align-items: center; gap: 0.45rem;">
-                        <strong style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.92rem; color: var(--text-main);">${escapeHTML(s.student_id)}</strong>
+                        <strong style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.92rem; color: var(--text-main);">${escapeHTML(s.student_id)}</strong>${levelBadge}
                         <button type="button" class="btn-icon copyable-student-id" data-copy-sid="${escapeHTML(s.student_id)}" title="Copy Student ID" style="padding: 2px; width: 22px; height: 22px; opacity: 0.7; border-radius: 4px;">
                             <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
                         </button>
@@ -9329,7 +9656,8 @@ class App {
                 <td>${escapeHTML(s.college)}</td>
                 <td>${escapeHTML(s.program)}</td>
             </tr>
-        `).join('');
+        `;
+        }).join('');
         if (window.lucide) lucide.createIcons({ root: tbody });
 
         if (paginationEl) {
@@ -9573,6 +9901,7 @@ class App {
                             <div style="flex: 1; min-width: 220px;">
                                 <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
                                     <h2 style="margin: 0; font-size: 1.4rem; font-weight: 700; color: var(--text-main); letter-spacing: -0.01em;">${escapeHTML(name)}</h2>
+                                    ${this.renderStudentLevelBadge(st ? getStudentProgramLevel(st) : this.getStudentLevelBySid(sid))}
                                     <span class="badge" style="background: rgba(16,185,129,0.14); color: #10b981; font-size: 0.73rem; border: 1px solid rgba(16,185,129,0.28);">${escapeHTML(src)}</span>
                                 </div>
                                 ${arabicName ? `<div style="font-size: 0.96rem; color: var(--text-secondary); margin-top: 0.2rem; font-weight: 500;" dir="auto">${escapeHTML(arabicName)}</div>` : ''}
@@ -9850,11 +10179,13 @@ class App {
         const st = this.currentProfileStudent || {};
         const txs = this.currentProfileTransactions || [];
         const sid = this.currentProfileSid;
+        const studentLevelTag = formatStudentLevelTag(st.student_id || st.program !== undefined ? getStudentProgramLevel(st) : this.getStudentLevelBySid(sid));
 
         const ledgerRows = txs.map(t => ({
             'Payment Date': toDateOnly(t.payment_date) || '',
             'Reference Number': t.reference_number || '',
             'Student ID': t.student_id || sid,
+            'Level': studentLevelTag || formatStudentLevelTag(this.getTransactionStudentLevel(t)),
             'Student Name': t.full_name || st.full_name || '',
             'Item Name': t.item_name || '',
             'Mapping': t.mapping || 'Unmapped',
@@ -9887,6 +10218,7 @@ class App {
 
         const profileRows = [
             { 'Field': 'Student ID', 'Value': sid },
+            { 'Field': 'Level', 'Value': studentLevelTag || '-' },
             { 'Field': 'Full Name', 'Value': st.full_name || '-' },
             { 'Field': 'Arabic Name', 'Value': st.arabic_name || '-' },
             { 'Field': 'College', 'Value': st.college || '-' },
@@ -10809,7 +11141,7 @@ class App {
             return `
                 <tr>
                     <td>
-                        <a href="#" class="dp-student-link" data-sid="${escapeHTML(c.student_id)}" style="font-family: monospace; font-weight: 700; color: var(--primary); text-decoration: none;">${escapeHTML(c.student_id)}</a>
+                        <a href="#" class="dp-student-link" data-sid="${escapeHTML(c.student_id)}" style="font-family: monospace; font-weight: 700; color: var(--primary); text-decoration: none;">${escapeHTML(c.student_id)}</a>${this.renderStudentLevelBadge(this.getStudentLevelBySid(c.student_id))}
                         <div style="font-size: 0.78rem; color: var(--text-muted);">${escapeHTML(c.student_name || 'N/A')}</div>
                     </td>
                     <td>
@@ -10867,6 +11199,7 @@ class App {
                 : (c.first_date && c.last_date ? Math.max(0, Math.round((new Date(c.last_date) - new Date(c.first_date)) / 86400000)) : 0);
             return {
                 'Student ID': c.student_id || '',
+                'Level': this.getStudentLevelLabelBySid(c.student_id),
                 'Student Name': c.student_name || '',
                 'Item Name': c.item_name || '',
                 'Mapping Category': c.mapping || 'Tuition',
@@ -11547,15 +11880,20 @@ class App {
     }
 
     async ensureStudentsLoadedForForeign() {
-        if (Array.isArray(this.allStudents) && this.allStudents.length > 0) return this.allStudents;
+        if (Array.isArray(this.allStudents) && this.allStudents.length > 0) {
+            this.rebuildStudentMasterMap(this.allStudents);
+            return this.allStudents;
+        }
         if (Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
             this.allStudents = this.allStudentsData;
+            this.rebuildStudentMasterMap(this.allStudents);
             return this.allStudents;
         }
         try {
-            const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, mobile', null, 'student_id');
+            const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, program, mobile', null, 'student_id');
             if (Array.isArray(rows) && rows.length > 0) {
                 this.allStudents = rows;
+                this.rebuildStudentMasterMap(rows);
             }
         } catch (_e) {
             // ignore if offline or empty
@@ -11564,6 +11902,7 @@ class App {
     }
 
     async loadForeignTransactions() {
+        await this.ensureStudentLevelMap();
         try {
             const data = await fetchAll('foreign_transactions', '*', null, 'value_date');
             if (Array.isArray(data)) {
@@ -11811,12 +12150,13 @@ class App {
             const statusBadge = isValid
                 ? `<span class="badge valid">Valid</span>`
                 : `<span class="badge missing">${escapeHTML(d.id_status || 'Missing ID')}</span>`;
+            const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(d));
 
             return `
                 <tr>
                     <td style="white-space: nowrap;"><strong>${escapeHTML(d.reference_number)}</strong></td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(d.value_date || d.payment_date || '-'))}</td>
-                    <td style="font-weight: 700;">${escapeHTML(d.student_id || '')}</td>
+                    <td style="font-weight: 700;">${escapeHTML(d.student_id || '')}${stuLevelBadge}</td>
                     <td style="white-space: nowrap;">${escapeHTML(currency)} ${escapeHTML(formatMoney(d.amount))}</td>
                     <td style="font-size: 0.78rem; max-width: 280px; color: var(--text-secondary);" title="${escapeHTML(d.description || '')}">
                         ${escapeHTML(d.description || '-')}
@@ -11966,12 +12306,13 @@ class App {
             const { statusClass, statusText, shortStatus } = formatIdStatusMeta(t, { defaultStatus: 'Missing ID' });
 
             const rowCurrency = t.currency || currency;
+            const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(t));
 
             return `
                 <tr class="foreign-tx-row" data-idx="${idx}" style="cursor: pointer;" title="Click to inspect full transaction details">
                     <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.value_date || t.payment_date || t.transaction_date))}</td>
-                    <td style="white-space: normal; word-wrap: break-word; max-width: 150px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id || '')}</strong></td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id || '')}</strong>${stuLevelBadge}</td>
                     <td style="white-space: nowrap;">${escapeHTML(rowCurrency)} ${formatMoney(t.amount ?? t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 260px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.description || t.item_name || '')}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.mapping || DEFAULT_FOREIGN_MAPPING)}</td>
@@ -12044,7 +12385,7 @@ class App {
                 <div class="glass-card" style="padding: 0.85rem; margin: 0;">
                     <h4 style="margin: 0 0 0.5rem 0; font-size: 0.82rem; color: var(--text-muted); text-transform: uppercase;">Student &amp; Depositor</h4>
                     <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem;">
-                        <div>Student ID: <strong>${escapeHTML(row.student_id || 'Missing')}</strong></div>
+                        <div>Student ID: <strong>${escapeHTML(row.student_id || 'Missing')}</strong>${this.renderStudentLevelBadge(this.getTransactionStudentLevel(row))}</div>
                         <div id="tx-detail-student-lookup" style="color: var(--text-muted); font-size: 0.8rem;">Looking up Student Master...</div>
                         <div>Extracted Student Name: <strong dir="auto">${escapeHTML(row.extracted_name || '-')}</strong></div>
                         <div>Depositor / Handler: <strong dir="auto">${escapeHTML(row.handler_name || '-')}</strong></div>
@@ -12113,11 +12454,12 @@ class App {
                     ? `Matched Name: ${row.matched_student_name}`
                     : 'No Student ID assigned yet';
             } else {
-                const cachedStudent = (this.allStudents || []).find(s => String(s.student_id || '').trim() === sid);
+                const cachedStudent = this.lookupStudentBySid(sid) || (this.allStudents || []).find(s => String(s.student_id || '').trim() === sid);
                 if (cachedStudent) {
                     const colProg = [cachedStudent.college, cachedStudent.program].filter(Boolean).join(' • ');
                     const displayName = cachedStudent.full_name || cachedStudent.arabic_name || 'N/A';
-                    lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong dir="auto">${escapeHTML(displayName)}</strong>${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                    const lvlBadge = this.renderStudentLevelBadge(getStudentProgramLevel(cachedStudent));
+                    lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong dir="auto">${escapeHTML(displayName)}</strong>${lvlBadge}${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
                 } else {
                     try {
                         const { data: st } = await supabase
@@ -12128,7 +12470,8 @@ class App {
                         if (st) {
                             const colProg = [st.college, st.program].filter(Boolean).join(' • ');
                             const displayName = st.full_name || st.arabic_name || 'N/A';
-                            lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong dir="auto">${escapeHTML(displayName)}</strong>${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
+                            const lvlBadge = this.renderStudentLevelBadge(getStudentProgramLevel(st));
+                            lookupEl.innerHTML = `<span style="color: var(--success);">Student: <strong dir="auto">${escapeHTML(displayName)}</strong>${lvlBadge}${colProg ? ` (${escapeHTML(colProg)})` : ''}</span>`;
                         } else {
                             lookupEl.innerHTML = `<span style="color: var(--warning, #f59e0b);">${row.matched_student_name ? `Matched: ${escapeHTML(row.matched_student_name)}` : 'Not found in Student Master'}</span>`;
                         }
@@ -12502,6 +12845,7 @@ class App {
             'Ref Number': r.reference_number || '',
             'Date': toDateOnly(r.value_date || r.payment_date || r.transaction_date),
             'Student ID': r.student_id || '',
+            'Level': formatStudentLevelTag(this.getTransactionStudentLevel(r)),
             'Item Price': Number(r.amount ?? r.item_price) || 0,
             'Currency': r.currency || 'USD',
             'Description': r.description || '',
@@ -12524,11 +12868,12 @@ class App {
             return;
         }
         const tsv = [
-            ['Ref Number', 'Date', 'Student ID', 'Item Price', 'Description', 'Mapping', '2nd Mapping', 'Bank', 'ID Status'].join('\t'),
+            ['Ref Number', 'Date', 'Student ID', 'Level', 'Item Price', 'Description', 'Mapping', '2nd Mapping', 'Bank', 'ID Status'].join('\t'),
             ...rows.map(r => [
                 r.reference_number || '',
                 toDateOnly(r.value_date || r.payment_date || r.transaction_date),
                 r.student_id || '',
+                formatStudentLevelTag(this.getTransactionStudentLevel(r)),
                 formatMoney(r.amount ?? r.item_price),
                 r.description || '',
                 r.mapping || DEFAULT_FOREIGN_MAPPING,

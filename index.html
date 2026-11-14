@@ -1307,6 +1307,9 @@
                     <div class="header">
                         <h1>Students Details</h1>
                         <div class="header-actions">
+                            <button class="btn btn-outline" id="btn-label-existing-students" title="Automatically label all existing students in the database with (UG) or (PG) according to their program">
+                                <i data-lucide="tag"></i> Label (UG/PG)
+                            </button>
                             <button class="btn btn-outline" id="btn-export-students">
                                 <i data-lucide="download"></i> Export Master List
                             </button>
@@ -1356,9 +1359,9 @@
                         </div>
                         <div class="upload-zone" id="student-upload-zone" style="padding: 1.75rem;">
                             <i data-lucide="file-spreadsheet" class="upload-icon"></i>
-                            <h3>Drop Excel file here or click to upload</h3>
-                            <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports .xlsx files only</p>
-                            <input type="file" id="student-file-input" accept=".xlsx" class="hidden-input">
+                            <h3>Drop Excel file(s) here or click to upload</h3>
+                            <p style="color: var(--text-muted); margin-top: 0.5rem;">Supports one or multiple .xlsx files (ApplicantReport, StudentDetails, or Master Exports)</p>
+                            <input type="file" id="student-file-input" accept=".xlsx" multiple class="hidden-input">
                         </div>
                         <div id="student-upload-status" class="alert" style="display: none; margin-top: 1rem;"></div>
                     </div>
