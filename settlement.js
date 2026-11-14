@@ -816,13 +816,17 @@ class SettlementProcessor {
                 tableContainer.appendChild(pager);
             }
             if (total > pageSize) {
+                const jumpHtml = window.fawryPageJump
+                    ? window.fawryPageJump.renderHtml('stl', totalPages)
+                    : `<div style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.35rem;"><input type="number" id="stl-jump-page" class="input-text page-jump-input" min="1" max="${totalPages}" placeholder="Page #" aria-label="Go to page" style="width: 74px; padding: 0.28rem 0.45rem; font-size: 0.82rem;"><button type="button" id="btn-stl-jump-page" class="btn btn-outline btn-sm" style="padding: 0.3rem 0.55rem;">Go</button></div>`;
                 pager.style.display = 'flex';
                 pager.innerHTML = `
                     <span style="font-size: 0.85rem; color: var(--text-muted);">Showing ${startIdx + 1}–${Math.min(startIdx + pageSize, total)} of ${total.toLocaleString()} references</span>
-                    <div style="display: flex; gap: 1rem; align-items: center;">
+                    <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
                         <button class="btn btn-outline" id="btn-stl-prev" ${this.currentPage === 1 ? 'disabled' : ''}>Prev</button>
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Page ${this.currentPage} of ${totalPages}</span>
                         <button class="btn btn-outline" id="btn-stl-next" ${this.currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+                        ${jumpHtml}
                     </div>
                 `;
                 pager.querySelector('#btn-stl-prev')?.addEventListener('click', () => {
@@ -831,6 +835,23 @@ class SettlementProcessor {
                 pager.querySelector('#btn-stl-next')?.addEventListener('click', () => {
                     if (this.currentPage < totalPages) { this.currentPage++; this.renderResults(); }
                 });
+                if (window.fawryPageJump) {
+                    window.fawryPageJump.bind('stl', totalPages, (target) => {
+                        this.currentPage = target;
+                        this.renderResults();
+                    }, pager);
+                } else {
+                    const jumpInput = pager.querySelector('#stl-jump-page');
+                    const jumpBtn = pager.querySelector('#btn-stl-jump-page');
+                    const doJump = () => {
+                        const t = parseInt(jumpInput?.value, 10);
+                        if (!t || t < 1 || t > totalPages) return;
+                        this.currentPage = t;
+                        this.renderResults();
+                    };
+                    jumpBtn?.addEventListener('click', doJump);
+                    jumpInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doJump(); } });
+                }
             } else {
                 pager.style.display = 'none';
             }

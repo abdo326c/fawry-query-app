@@ -313,6 +313,7 @@ class App {
         this.initModals();
         this.initBulkUploads();
         this.initFilters();
+        this.initPageJumpHelpers();
         this.initPagination();
         this.initExport();
         this.initReapply();
@@ -1038,7 +1039,7 @@ class App {
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
-                            await loadScriptOnce('./settlement.js?v=2.5.1');
+                            await loadScriptOnce('./settlement.js?v=2.5.2');
                         }
                         if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
                             window.settlementApp = new window.SettlementProcessor(supabase);
@@ -4436,6 +4437,41 @@ class App {
         });
     }
 
+    initPageJumpHelpers() {
+        const helper = {
+            renderHtml: (prefix, totalPages = 1) => `
+                <div style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.35rem;">
+                    <input type="number" id="${prefix}-jump-page" class="input-text page-jump-input" min="1" max="${Math.max(1, totalPages)}" placeholder="Page #" aria-label="Go to page" style="width: 74px; padding: 0.28rem 0.45rem; font-size: 0.82rem;">
+                    <button type="button" id="btn-${prefix}-jump-page" class="btn btn-outline btn-sm" style="padding: 0.3rem 0.55rem;">Go</button>
+                </div>
+            `,
+            bind: (prefix, getMaxPage, onJump, root = document) => {
+                const input = root.querySelector(`#${prefix}-jump-page`);
+                const btn = root.querySelector(`#btn-${prefix}-jump-page`);
+                if (!input || !btn) return;
+                const execute = () => {
+                    const maxPage = Math.max(1, Number(typeof getMaxPage === 'function' ? getMaxPage() : getMaxPage) || 1);
+                    const target = parseInt(input.value, 10);
+                    if (!target || target < 1 || target > maxPage) {
+                        Toast.show(`Enter a page number between 1 and ${maxPage}`, 'warning');
+                        return;
+                    }
+                    input.value = '';
+                    onJump(target);
+                };
+                btn.addEventListener('click', execute);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        execute();
+                    }
+                });
+            }
+        };
+        this.pageJump = helper;
+        window.fawryPageJump = helper;
+    }
+
     initPagination() {
         document.getElementById('btn-prev').addEventListener('click', () => {
             if (this.currentPage > 1) {
@@ -4458,25 +4494,9 @@ class App {
             });
         }
 
-        const jumpToPage = () => {
-            const input = document.getElementById('tx-jump-page');
-            if (!input) return;
-            const target = parseInt(input.value, 10);
-            const maxPage = this.txTotalPages || 1;
-            if (!target || target < 1 || target > maxPage) {
-                Toast.show(`Enter a page number between 1 and ${maxPage}`, 'warning');
-                return;
-            }
+        this.pageJump.bind('tx', () => this.txTotalPages || 1, (target) => {
             this.currentPage = target;
-            input.value = '';
             this.loadTransactions();
-        };
-        document.getElementById('btn-tx-jump-page')?.addEventListener('click', jumpToPage);
-        document.getElementById('tx-jump-page')?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                jumpToPage();
-            }
         });
     }
 
@@ -5431,10 +5451,11 @@ class App {
                 }
                 pager.innerHTML = `
                     <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, filteredData.length)} of ${filteredData.length} mappings</span>
-                    <div class="pagination-controls">
+                    <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn btn-icon" id="btn-mappings-prev" ${this.mappingsPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
                         <span>Page ${this.mappingsPage} of ${totalPages}</span>
                         <button class="btn btn-icon" id="btn-mappings-next" ${this.mappingsPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                        ${this.pageJump.renderHtml('mappings', totalPages)}
                     </div>
                 `;
                 pager.querySelector('#btn-mappings-prev')?.addEventListener('click', () => {
@@ -5449,6 +5470,10 @@ class App {
                         this.renderMappingsPage();
                     }
                 });
+                this.pageJump.bind('mappings', totalPages, (target) => {
+                    this.mappingsPage = target;
+                    this.renderMappingsPage();
+                }, pager);
             }
         }
         renderIcons(document.getElementById('view-mappings'));
@@ -5883,10 +5908,11 @@ class App {
                 }
                 pager.innerHTML = `
                     <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, filteredData.length)} of ${filteredData.length} fixes</span>
-                    <div class="pagination-controls">
+                    <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn btn-icon" id="btn-fixes-prev" ${this.fixesPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
                         <span>Page ${this.fixesPage} of ${totalPages}</span>
                         <button class="btn btn-icon" id="btn-fixes-next" ${this.fixesPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                        ${this.pageJump.renderHtml('fixes', totalPages)}
                     </div>
                 `;
                 pager.querySelector('#btn-fixes-prev')?.addEventListener('click', () => {
@@ -5901,6 +5927,10 @@ class App {
                         this.renderFixesPage();
                     }
                 });
+                this.pageJump.bind('fixes', totalPages, (target) => {
+                    this.fixesPage = target;
+                    this.renderFixesPage();
+                }, pager);
             }
         }
         renderIcons(document.getElementById('view-fixes'));
@@ -7555,10 +7585,11 @@ class App {
                 }
                 pager.innerHTML = `
                     <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, filteredProposals.length)} of ${filteredProposals.length} rows</span>
-                    <div class="pagination-controls">
+                    <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn btn-icon" id="btn-automatch-prev" ${this.automatchPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
                         <span>Page ${this.automatchPage} of ${totalPages}</span>
                         <button class="btn btn-icon" id="btn-automatch-next" ${this.automatchPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                        ${this.pageJump.renderHtml('automatch', totalPages)}
                     </div>
                 `;
                 pager.querySelector('#btn-automatch-prev')?.addEventListener('click', () => {
@@ -7573,6 +7604,10 @@ class App {
                         this.renderAutoMatcherPage();
                     }
                 });
+                this.pageJump.bind('automatch', totalPages, (target) => {
+                    this.automatchPage = target;
+                    this.renderAutoMatcherPage();
+                }, pager);
             }
         }
         renderIcons(document.getElementById('view-automatcher'));
@@ -8045,6 +8080,10 @@ class App {
             this.paymentLinksPage++;
             this.renderPaymentLinksPage();
         });
+        this.pageJump.bind('links', () => this.paymentLinksTotalPages || 1, (target) => {
+            this.paymentLinksPage = target;
+            this.renderPaymentLinksPage();
+        });
     }
 
     openPaymentLinkModal(link = null, isDuplicate = false) {
@@ -8359,11 +8398,14 @@ class App {
             });
         });
 
+        this.paymentLinksTotalPages = totalPages;
         if (pageInfo) {
             pageInfo.innerHTML = `Showing <strong>${(startIdx + 1).toLocaleString()}</strong>–<strong>${Math.min(startIdx + pageSize, total).toLocaleString()}</strong> of <strong>${total.toLocaleString()}</strong> links (Page ${this.paymentLinksPage} of ${totalPages})`;
         }
         if (btnPrev) btnPrev.disabled = this.paymentLinksPage <= 1;
         if (btnNext) btnNext.disabled = this.paymentLinksPage >= totalPages;
+        const linksJumpInput = document.getElementById('links-jump-page');
+        if (linksJumpInput) linksJumpInput.max = String(totalPages);
 
         renderIcons(document.getElementById('view-payment-links'));
     }
@@ -8988,10 +9030,11 @@ class App {
                 }
                 pager.innerHTML = `
                     <span class="text-muted">Showing ${startIdx + 1}-${Math.min(startIdx + pageSize, rows.length)} of ${rows.length.toLocaleString()} lines</span>
-                    <div class="pagination-controls">
+                    <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn btn-icon" id="btn-erp-prev" ${this.erpPage <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button>
                         <span>Page ${this.erpPage} of ${totalPages}</span>
                         <button class="btn btn-icon" id="btn-erp-next" ${this.erpPage >= totalPages ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button>
+                        ${this.pageJump.renderHtml('erp', totalPages)}
                     </div>
                 `;
                 pager.querySelector('#btn-erp-prev')?.addEventListener('click', () => {
@@ -9006,6 +9049,10 @@ class App {
                         this.renderErpPreview();
                     }
                 });
+                this.pageJump.bind('erp', totalPages, (target) => {
+                    this.erpPage = target;
+                    this.renderErpPreview();
+                }, pager);
                 if (window.lucide) lucide.createIcons({ root: pager });
             }
         }
@@ -9665,10 +9712,11 @@ class App {
                 <div class="pagination-info" style="font-size: 0.85rem; color: var(--text-muted);">
                     Showing <strong>${(startIdx + 1).toLocaleString()}</strong>–<strong>${Math.min(startIdx + pageSize, total).toLocaleString()}</strong> of <strong>${total.toLocaleString()}</strong> students
                 </div>
-                <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem;">
+                <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                     <button class="btn btn-secondary btn-sm" id="students-prev-page" ${this.studentsCurrentPage <= 1 ? 'disabled' : ''}>Previous</button>
                     <span style="font-size: 0.85rem; color: var(--text-secondary);">Page <strong>${this.studentsCurrentPage}</strong> of <strong>${totalPages}</strong></span>
                     <button class="btn btn-secondary btn-sm" id="students-next-page" ${this.studentsCurrentPage >= totalPages ? 'disabled' : ''}>Next</button>
+                    ${this.pageJump.renderHtml('students', totalPages)}
                 </div>
             `;
             document.getElementById('students-prev-page')?.addEventListener('click', () => {
@@ -9683,6 +9731,10 @@ class App {
                     this.renderStudentsPage();
                 }
             });
+            this.pageJump.bind('students', totalPages, (target) => {
+                this.studentsCurrentPage = target;
+                this.renderStudentsPage();
+            }, paginationEl);
         }
     }
 
@@ -11801,6 +11853,10 @@ class App {
                 this.renderForeignTransactionsTable();
             }
         });
+        this.pageJump.bind('foreign', () => Math.max(1, Math.ceil(this.filteredForeignTransactions.length / this.foreignPageSize)), (target) => {
+            this.foreignPage = target;
+            this.renderForeignTransactionsTable();
+        });
 
         // Action Buttons: Detect Duplicates, Double Payments, Auto-Match Names, Export ERP, Copy Email, Export Excel
         document.getElementById('btn-foreign-detect-duplicates')?.addEventListener('click', () => {
@@ -12301,6 +12357,8 @@ class App {
         const nextBtn = document.getElementById('foreign-btn-next');
         if (prevBtn) prevBtn.disabled = this.foreignPage <= 1;
         if (nextBtn) nextBtn.disabled = this.foreignPage >= totalPages;
+        const fxJumpInput = document.getElementById('foreign-jump-page');
+        if (fxJumpInput) fxJumpInput.max = String(totalPages);
 
         tbody.innerHTML = pageRows.map((t, idx) => {
             const { statusClass, statusText, shortStatus } = formatIdStatusMeta(t, { defaultStatus: 'Missing ID' });

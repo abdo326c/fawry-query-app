@@ -842,6 +842,10 @@
                             <button type="button" id="foreign-btn-prev" class="btn btn-outline" disabled><i data-lucide="chevron-left"></i> Prev</button>
                             <span id="foreign-page-info">Page 1 of 1</span>
                             <button type="button" id="foreign-btn-next" class="btn btn-outline" disabled>Next <i data-lucide="chevron-right"></i></button>
+                            <div style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.25rem;">
+                                <input type="number" id="foreign-jump-page" class="input-text page-jump-input" min="1" placeholder="Page #" aria-label="Go to page" style="width: 74px; padding: 0.28rem 0.45rem; font-size: 0.82rem;">
+                                <button type="button" id="btn-foreign-jump-page" class="btn btn-outline btn-sm" style="padding: 0.3rem 0.55rem;">Go</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1761,9 +1765,13 @@
                 </table>
                 <div class="pagination" id="links-pagination-bar">
                     <span id="links-page-info" class="text-muted" style="font-size: 0.85rem;">Page 1</span>
-                    <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem;">
+                    <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn btn-outline btn-sm" id="btn-links-prev" disabled>Previous</button>
                         <button class="btn btn-outline btn-sm" id="btn-links-next" disabled>Next</button>
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.25rem;">
+                            <input type="number" id="links-jump-page" class="input-text page-jump-input" min="1" placeholder="Page #" aria-label="Go to page" style="width: 74px; padding: 0.28rem 0.45rem; font-size: 0.82rem;">
+                            <button type="button" id="btn-links-jump-page" class="btn btn-outline btn-sm" style="padding: 0.3rem 0.55rem;">Go</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2341,7 +2349,7 @@
         </div>
     </div>
     
-    <script type="module" src="app.js?v=2.6.0"></script>
+    <script type="module" src="app.js?v=2.6.1"></script>
     <script defer src="ui-chrome.js?v=1.0.0"></script>
 <!-- Re-apply Rules Preview Modal -->
     <div id="modal-reapply-preview" class="modal hidden">

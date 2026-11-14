@@ -1372,4 +1372,65 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             supabase.from = origFrom;
         }
     }
+
+    // 17. Go-to-Page jump controls work across paginated tables (Students, BM Transactions, Payment Links)
+    {
+        // Students pagination jump (e.g., jump to page 2 out of 3)
+        window.app.studentsPageSize = 2;
+        window.app.filteredStudentsData = Array.from({ length: 5 }, (_, i) => ({
+            student_id: `2026000${i + 1}`,
+            full_name: `Student ${i + 1}`,
+            program: '(UG) Undergraduate'
+        }));
+        window.app.studentsCurrentPage = 1;
+        window.app.renderStudentsPage();
+        const stuJumpInput = document.getElementById('students-jump-page');
+        const stuJumpBtn = document.getElementById('btn-students-jump-page');
+        expect(stuJumpInput).not.toBeNull();
+        expect(stuJumpBtn).not.toBeNull();
+        stuJumpInput.value = '3';
+        stuJumpBtn.click();
+        expect(window.app.studentsCurrentPage).toBe(3);
+        expect(document.getElementById('students-table-body')?.textContent).toContain('20260005');
+
+        // BM / Foreign Transactions jump
+        window.app.foreignPageSize = 2;
+        window.app.filteredForeignTransactions = Array.from({ length: 5 }, (_, i) => ({
+            reference_number: `FX_JUMP_${i + 1}`,
+            value_date: '2026-11-12',
+            student_id: '20260001',
+            amount: 100,
+            currency: 'USD',
+            description: 'Tuition',
+            id_status: 'Valid'
+        }));
+        window.app.foreignPage = 1;
+        window.app.renderForeignTransactionsTable();
+        const fxJumpInput = document.getElementById('foreign-jump-page');
+        const fxJumpBtn = document.getElementById('btn-foreign-jump-page');
+        expect(fxJumpInput).not.toBeNull();
+        expect(fxJumpBtn).not.toBeNull();
+        fxJumpInput.value = '2';
+        fxJumpBtn.click();
+        expect(window.app.foreignPage).toBe(2);
+        expect(document.getElementById('foreign-page-info')?.textContent).toBe('Page 2 of 3');
+
+        // Payment Links jump via Enter key
+        window.app.filteredPaymentLinks = Array.from({ length: 30 }, (_, i) => ({
+            id: `pl-jump-${i + 1}`,
+            name: `Link ${i + 1}`,
+            amount: 500,
+            invoice_number: `INV${i + 1}`,
+            creation_date: '2026-08-18',
+            expiry_date: '2099-05-31',
+            invoice_link: `https://fawry.com/pay/INV${i + 1}`
+        }));
+        window.app.paymentLinksPage = 1;
+        window.app.renderPaymentLinksPage();
+        const linksJumpInput = document.getElementById('links-jump-page');
+        expect(linksJumpInput).not.toBeNull();
+        linksJumpInput.value = '2';
+        linksJumpInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+        expect(window.app.paymentLinksPage).toBe(2);
+    }
 });
