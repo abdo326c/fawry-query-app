@@ -1,13 +1,13 @@
-const CACHE_NAME = 'fawry-app-cache-v37';
+const CACHE_NAME = 'fawry-app-cache-v38';
 const urlsToCache = [
   './',
   './index.html',
   './styles.css?v=3.0.7',
-  './app.js?v=2.5.9',
+  './app.js?v=2.6.0',
   './ui-chrome.js?v=1.0.0',
-  './rules.js',
+  './rules.js?v=2.6.0',
   './csv-processor.js',
-  './settlement.js?v=2.5.0',
+  './settlement.js?v=2.5.1',
   './foreign-transactions.js',
   './fx-rates.js',
   './supabase.js',
@@ -50,9 +50,12 @@ self.addEventListener('fetch', event => {
 
   const isHtmlNav = event.request.mode === 'navigate' ||
     (event.request.headers.get('accept') || '').includes('text/html');
+  const reqObjUrl = new URL(reqUrl);
+  const isSameOriginCode = reqObjUrl.origin === self.location.origin &&
+    /\.(?:js|css)$/i.test(reqObjUrl.pathname);
 
-  // Network-first for HTML documents so app structure/CSP updates immediately
-  if (isHtmlNav) {
+  // Network-first for HTML documents and local JS/CSS so code updates apply immediately on reload
+  if (isHtmlNav || isSameOriginCode) {
     event.respondWith(
       fetch(event.request)
         .then(fetchRes => {

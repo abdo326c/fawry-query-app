@@ -29,7 +29,7 @@ import {
     normalizePhoneKey,
     buildStudentLookupIndex,
     matchTransactionToStudent
-} from './rules.js';
+} from './rules.js?v=2.6.0';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -1038,7 +1038,7 @@ class App {
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
-                            await loadScriptOnce('./settlement.js?v=2.5.0');
+                            await loadScriptOnce('./settlement.js?v=2.5.1');
                         }
                         if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
                             window.settlementApp = new window.SettlementProcessor(supabase);
