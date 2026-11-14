@@ -19,11 +19,10 @@ BEGIN
   WITH upd_ug AS (
     UPDATE public.student_master
     SET
-      program = '(UG) ' || REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((?:UG|PG)\)\s*', '', 'i'),
-      updated_at = NOW()
+      program = '(UG) ' || REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((UG|PG)\)\s*', '', 'i')
     WHERE
-      REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((?:UG|PG)\)\s*', '', 'i') ~* '^(undergraduate|undergrad|bachelor|ug)\M'
-      AND COALESCE(program, '') !~ '^\(UG\)\s'
+      REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((UG|PG)\)\s*', '', 'i') ~* '^(undergraduate|undergrad|bachelor|ug)(\s|/|$)'
+      AND COALESCE(program, '') !~ '^\(UG\)(\s|$)'
     RETURNING 1
   )
   SELECT COUNT(*) INTO v_ug_updated FROM upd_ug;
@@ -33,12 +32,11 @@ BEGIN
     UPDATE public.student_master
     SET
       program = CASE
-        WHEN BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((?:UG|PG)\)\s*', '', 'i')) = '' THEN '(PG)'
-        ELSE '(PG) ' || BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((?:UG|PG)\)\s*', '', 'i'))
-      END,
-      updated_at = NOW()
+        WHEN BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((UG|PG)\)\s*', '', 'i')) = '' THEN '(PG)'
+        ELSE '(PG) ' || BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((UG|PG)\)\s*', '', 'i'))
+      END
     WHERE
-      REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((?:UG|PG)\)\s*', '', 'i') !~* '^(undergraduate|undergrad|bachelor|ug)\M'
+      REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((UG|PG)\)\s*', '', 'i') !~* '^(undergraduate|undergrad|bachelor|ug)(\s|/|$)'
       AND COALESCE(program, '') !~ '^\(PG\)(\s|$)'
     RETURNING 1
   )
@@ -59,11 +57,10 @@ GRANT EXECUTE ON FUNCTION public.label_existing_students_ug_pg() TO authenticate
 UPDATE public.student_master
 SET
   program = CASE
-    WHEN REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((?:UG|PG)\)\s*', '', 'i') ~* '^(undergraduate|undergrad|bachelor|ug)\M'
-      THEN '(UG) ' || BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((?:UG|PG)\)\s*', '', 'i'))
-    WHEN BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((?:UG|PG)\)\s*', '', 'i')) = ''
+    WHEN REGEXP_REPLACE(BTRIM(COALESCE(program, '')), '^\((UG|PG)\)\s*', '', 'i') ~* '^(undergraduate|undergrad|bachelor|ug)(\s|/|$)'
+      THEN '(UG) ' || BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((UG|PG)\)\s*', '', 'i'))
+    WHEN BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((UG|PG)\)\s*', '', 'i')) = ''
       THEN '(PG)'
-    ELSE '(PG) ' || BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((?:UG|PG)\)\s*', '', 'i'))
-  END,
-  updated_at = NOW()
-WHERE COALESCE(program, '') !~ '^\((?:UG|PG)\)(\s|$)';
+    ELSE '(PG) ' || BTRIM(REGEXP_REPLACE(COALESCE(program, ''), '^\((UG|PG)\)\s*', '', 'i'))
+  END
+WHERE COALESCE(program, '') !~ '^\((UG|PG)\)(\s|$)';
