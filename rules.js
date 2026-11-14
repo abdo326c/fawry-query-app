@@ -248,7 +248,7 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
 
     const allData = firstPage.slice();
     let from = PAGE_SIZE;
-    const BATCH_PAGES = 5;
+    const BATCH_PAGES = 8;
 
     while (true) {
         const batchPromises = [];
@@ -277,7 +277,7 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
 /**
  * Fetch every row whose `column` is in `values`, chunking the IN list and paginating each chunk in parallel.
  */
-export async function fetchByIn(table, selectCols, column, values, orderByCol = 'id', chunkSize = 250, concurrency = 6) {
+export async function fetchByIn(table, selectCols, column, values, orderByCol = 'id', chunkSize = 350, concurrency = 8) {
     const unique = [...new Set((values || []).filter(v => v !== null && v !== undefined && v !== '').map(String))];
     if (unique.length === 0) return [];
 
@@ -547,6 +547,11 @@ export function escapeHTML(str) {
         .replace(/'/g, '&#039;');
 }
 
+const ARABIC_PRESENTATION_RE = /[\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const _dateOnlyCache = new Map();
+const _excelSerialCache = new Map();
+const _settlementDateCache = new Map();
+
 /**
  * Neutralizes CSV / Excel formula injection in a cell value.
  * Strings beginning with '=', '+', '-', '@', tab, or CR (except plain negative numbers)
@@ -554,8 +559,13 @@ export function escapeHTML(str) {
  */
 export function sanitizeExcelValue(val) {
     if (typeof val !== 'string' || val.length === 0) return val;
-    const normalized = /[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(val) ? val.normalize('NFKC') : val;
-    const trimmed = normalized.trimStart();
+    const normalized = ARABIC_PRESENTATION_RE.test(val) ? val.normalize('NFKC') : val;
+    const c0 = normalized.charCodeAt(0);
+    // Fast-path: common safe leading chars ('0'-'9', 'A'-'Z', 'a'-'z', '(') need no trimStart or regex
+    if ((c0 >= 48 && c0 <= 57) || (c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122) || c0 === 40) {
+        return normalized;
+    }
+    const trimmed = c0 <= 32 || c0 >= 160 ? normalized.trimStart() : normalized;
     if (!trimmed) return normalized;
     const first = trimmed[0];
     if (first === '=' || first === '+' || first === '@' || first === '\t' || first === '\r') {
@@ -572,17 +582,31 @@ export function sanitizeExcelValue(val) {
  */
 export function sanitizeExcelRows(rows) {
     if (!Array.isArray(rows)) return [];
-    return rows.map(row => {
+    const len = rows.length;
+    const out = new Array(len);
+    for (let i = 0; i < len; i++) {
+        const row = rows[i];
         if (Array.isArray(row)) {
-            return row.map(v => sanitizeExcelValue(v));
+            const rLen = row.length;
+            const copy = new Array(rLen);
+            for (let j = 0; j < rLen; j++) copy[j] = sanitizeExcelValue(row[j]);
+            out[i] = copy;
+            continue;
         }
-        if (!row || typeof row !== 'object') return row;
+        if (!row || typeof row !== 'object') {
+            out[i] = row;
+            continue;
+        }
         const clean = {};
-        for (const [k, v] of Object.entries(row)) {
-            clean[k] = sanitizeExcelValue(v);
+        for (const k in row) {
+            if (Object.prototype.hasOwnProperty.call(row, k)) {
+                const v = row[k];
+                clean[k] = typeof v === 'string' ? sanitizeExcelValue(v) : v;
+            }
         }
-        return clean;
-    });
+        out[i] = clean;
+    }
+    return out;
 }
 
 /**
@@ -591,6 +615,14 @@ export function sanitizeExcelRows(rows) {
  */
 export function toDateOnly(val) {
     if (val === null || val === undefined || val === '') return null;
+    if (typeof val === 'string') {
+        const cached = _dateOnlyCache.get(val);
+        if (cached !== undefined) return cached;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+            if (_dateOnlyCache.size < 4096) _dateOnlyCache.set(val, val);
+            return val;
+        }
+    }
     if (val instanceof Date && !isNaN(val.getTime())) {
         const y = val.getFullYear();
         const m = String(val.getMonth() + 1).padStart(2, '0');
@@ -605,6 +637,7 @@ export function toDateOnly(val) {
     const str = String(val).trim();
     if (!str) return null;
     const datePart = str.split(/[T ]/)[0];
+    let result = datePart;
     let m = datePart.match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})$/);
     if (m) {
         const year = m[1];
@@ -612,18 +645,22 @@ export function toDateOnly(val) {
         const p2 = parseInt(m[3], 10);
         let month = p1, day = p2;
         if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
-        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        result = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    } else {
+        m = datePart.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+        if (m) {
+            const first = parseInt(m[1], 10);
+            const second = parseInt(m[2], 10);
+            const year = m[3];
+            let day = first, month = second;
+            if (second > 12 && first <= 12) { day = second; month = first; }
+            result = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
     }
-    m = datePart.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
-    if (m) {
-        const first = parseInt(m[1], 10);
-        const second = parseInt(m[2], 10);
-        const year = m[3];
-        let day = first, month = second;
-        if (second > 12 && first <= 12) { day = second; month = first; }
-        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    if (typeof val === 'string' && _dateOnlyCache.size < 4096) {
+        _dateOnlyCache.set(val, result);
     }
-    return datePart;
+    return result;
 }
 
 /**
@@ -633,13 +670,17 @@ export function toDateOnly(val) {
 export function dateToExcelSerial(val) {
     const clean = toDateOnly(val);
     if (!clean) return null;
+    const cached = _excelSerialCache.get(clean);
+    if (cached !== undefined) return cached;
     const parts = clean.split('-');
     if (parts.length !== 3) return null;
     const y = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10);
     const d = parseInt(parts[2], 10);
     if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
-    return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+    const serial = Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+    if (_excelSerialCache.size < 4096) _excelSerialCache.set(clean, serial);
+    return serial;
 }
 
 /**
@@ -655,6 +696,8 @@ export function dateToExcelSerial(val) {
 export function calculateSettlementDate(val) {
     const clean = toDateOnly(val);
     if (!clean) return null;
+    const cached = _settlementDateCache.get(clean);
+    if (cached !== undefined) return cached;
     const parts = clean.split('-');
     if (parts.length !== 3) return null;
     const y = parseInt(parts[0], 10);
@@ -672,7 +715,9 @@ export function calculateSettlementDate(val) {
     const sy = utcDate.getUTCFullYear();
     const sm = String(utcDate.getUTCMonth() + 1).padStart(2, '0');
     const sd = String(utcDate.getUTCDate()).padStart(2, '0');
-    return `${sy}-${sm}-${sd}`;
+    const out = `${sy}-${sm}-${sd}`;
+    if (_settlementDateCache.size < 4096) _settlementDateCache.set(clean, out);
+    return out;
 }
 
 /**
@@ -994,25 +1039,36 @@ function tokenEditDistanceLeq1(a, b) {
     return edits <= 1;
 }
 
+const _levRowBuf = new Uint16Array(128);
+
 function tokenSimilarity(a, b) {
     if (!a || !b) return 0;
     if (a === b) return 1;
     if (tokenEditDistanceLeq1(a, b)) return 0.88;
     const la = a.length, lb = b.length;
-    if (Math.abs(la - lb) > 2 || Math.min(la, lb) < 4) return 0;
-    const dp = Array.from({ length: la + 1 }, (_, r) => {
-        const row = new Array(lb + 1);
-        row[0] = r;
-        return row;
-    });
-    for (let c = 0; c <= lb; c++) dp[0][c] = c;
+    if (Math.abs(la - lb) > 2 || Math.min(la, lb) < 4 || lb >= 120) return 0;
+    // Quick char-overlap guard: if start AND end 2-char slices both differ completely, edit distance >= 2
+    if (a[0] !== b[0] && a[la - 1] !== b[lb - 1]) return 0;
+    for (let c = 0; c <= lb; c++) _levRowBuf[c] = c;
     for (let r = 1; r <= la; r++) {
+        let prevDiag = _levRowBuf[0];
+        _levRowBuf[0] = r;
+        const ca = a.charCodeAt(r - 1);
+        let rowMin = r;
         for (let c = 1; c <= lb; c++) {
-            const cost = a[r - 1] === b[c - 1] ? 0 : 1;
-            dp[r][c] = Math.min(dp[r - 1][c] + 1, dp[r][c - 1] + 1, dp[r - 1][c - 1] + cost);
+            const temp = _levRowBuf[c];
+            const cost = ca === b.charCodeAt(c - 1) ? 0 : 1;
+            const del = _levRowBuf[c] + 1;
+            const ins = _levRowBuf[c - 1] + 1;
+            const sub = prevDiag + cost;
+            const val = del < ins ? (del < sub ? del : sub) : (ins < sub ? ins : sub);
+            _levRowBuf[c] = val;
+            prevDiag = temp;
+            if (val < rowMin) rowMin = val;
         }
+        if (rowMin > 2) return 0;
     }
-    const dist = dp[la][lb];
+    const dist = _levRowBuf[lb];
     return Math.max(0, 1 - dist / Math.max(la, lb));
 }
 
@@ -1025,10 +1081,19 @@ function detectCollegeCode(str) {
     return null;
 }
 
+const _studentLookupIndexCache = new WeakMap();
+
 /**
  * Builds a collision-aware lookup index over student_master records.
  */
 export function buildStudentLookupIndex(students = []) {
+    if (Array.isArray(students) && students.length > 0) {
+        const cached = _studentLookupIndexCache.get(students);
+        if (cached && cached._len === students.length) {
+            return cached;
+        }
+    }
+
     const idMap = new Map();
     const emailMap = new Map();
     const nationalIdMap = new Map();
@@ -1037,25 +1102,43 @@ export function buildStudentLookupIndex(students = []) {
     const exactNameMap = new Map();
     const exactGuardianNameMap = new Map();
     const firstTokenIndex = new Map();
+    const firstTokenEdgeIndex = new Map();
     const preparedStudents = [];
 
-    const pushUnique = (map, key, student) => {
+    const pushUnique = (map, key, student, normSid) => {
         if (!key) return;
         let arr = map.get(key);
         if (!arr) {
-            arr = [];
+            arr = [student];
             map.set(key, arr);
+            return;
         }
-        const normSid = normalizeStudentIdValue(student.student_id);
-        if (!arr.some(x => normalizeStudentIdValue(x.student_id) === normSid)) {
-            arr.push(student);
+        for (let i = 0; i < arr.length; i++) {
+            if ((arr[i]._normSidForIdx || normalizeStudentIdValue(arr[i].student_id)) === normSid) return;
+        }
+        arr.push(student);
+    };
+
+    const addEdge = (tok, prep) => {
+        if (!tok || tok.length < 2) return;
+        const k1 = `p:${tok.slice(0, 2)}`;
+        const k2 = `s:${tok.slice(-2)}`;
+        let l1 = firstTokenEdgeIndex.get(k1);
+        if (!l1) { l1 = []; firstTokenEdgeIndex.set(k1, l1); }
+        l1.push(prep);
+        if (k2 !== k1) {
+            let l2 = firstTokenEdgeIndex.get(k2);
+            if (!l2) { l2 = []; firstTokenEdgeIndex.set(k2, l2); }
+            l2.push(prep);
         }
     };
 
     for (const s of (students || [])) {
         if (!s || !s.student_id) continue;
         const rawSid = String(s.student_id).trim();
-        const normSid = normalizeStudentIdValue(rawSid);
+        const normSid = s._normSidForIdx || normalizeStudentIdValue(rawSid);
+        s._normSidForIdx = normSid;
+
         idMap.set(rawSid, s);
         idMap.set(rawSid.toUpperCase(), s);
         if (normSid) {
@@ -1066,31 +1149,35 @@ export function buildStudentLookupIndex(students = []) {
         if (s.email) {
             const em = String(s.email).toLowerCase().trim();
             if (em.includes('@') && em.length >= 6) {
-                pushUnique(emailMap, em, s);
+                pushUnique(emailMap, em, s, normSid);
             }
         }
 
         if (s.national_id) {
-            const nid = normalizeNationalIdKey(s.national_id);
-            if (nid) pushUnique(nationalIdMap, nid, s);
+            const nid = s._nidKey !== undefined ? s._nidKey : (s._nidKey = normalizeNationalIdKey(s.national_id));
+            if (nid) pushUnique(nationalIdMap, nid, s, normSid);
         }
 
-        const directPhone = normalizePhoneKey(s.mobile);
-        if (directPhone) pushUnique(directMobileMap, directPhone, s);
+        const directPhone = s._directPhoneKey !== undefined ? s._directPhoneKey : (s._directPhoneKey = normalizePhoneKey(s.mobile));
+        if (directPhone) pushUnique(directMobileMap, directPhone, s, normSid);
 
-        const guardianPhone = normalizePhoneKey(s.guardian_mobile);
-        if (guardianPhone) pushUnique(guardianMobileMap, guardianPhone, s);
+        const guardianPhone = s._guardianPhoneKey !== undefined ? s._guardianPhoneKey : (s._guardianPhoneKey = normalizePhoneKey(s.guardian_mobile));
+        if (guardianPhone) pushUnique(guardianMobileMap, guardianPhone, s, normSid);
 
-        const normEn = normalizeAutoMatchName(s.full_name || '');
-        const normAr = normalizeAutoMatchName(s.arabic_name || '');
-        const normGuardian = normalizeAutoMatchName(s.guardian_name || '');
-        const enTokens = normEn ? normEn.split(' ') : [];
-        const arTokens = normAr ? normAr.split(' ') : [];
-        const guardianTokens = normGuardian ? normGuardian.split(' ') : [];
+        const normEn = s._normEn !== undefined ? s._normEn : (s._normEn = normalizeAutoMatchName(s.full_name || ''));
+        const normAr = s._normAr !== undefined ? s._normAr : (s._normAr = normalizeAutoMatchName(s.arabic_name || ''));
+        const normGuardian = s._normGuardian !== undefined ? s._normGuardian : (s._normGuardian = normalizeAutoMatchName(s.guardian_name || ''));
+        const enTokens = s._enTokens || (s._enTokens = normEn ? normEn.split(' ') : []);
+        const arTokens = s._arTokens || (s._arTokens = normAr ? normAr.split(' ') : []);
+        const guardianTokens = s._guardianTokens || (s._guardianTokens = normGuardian ? normGuardian.split(' ') : []);
+        if (!s._allNameTokenSet) {
+            s._allNameTokenSet = new Set([...enTokens, ...arTokens, ...guardianTokens]);
+        }
+        const collegeCode = s._collegeCode !== undefined ? s._collegeCode : (s._collegeCode = detectCollegeCode(`${s.college || ''} ${s.program || ''}`));
 
-        if (normEn && enTokens.length >= 2) pushUnique(exactNameMap, normEn, s);
-        if (normAr && arTokens.length >= 2) pushUnique(exactNameMap, normAr, s);
-        if (normGuardian && guardianTokens.length >= 3) pushUnique(exactGuardianNameMap, normGuardian, s);
+        if (normEn && enTokens.length >= 2) pushUnique(exactNameMap, normEn, s, normSid);
+        if (normAr && arTokens.length >= 2) pushUnique(exactNameMap, normAr, s, normSid);
+        if (normGuardian && guardianTokens.length >= 3) pushUnique(exactGuardianNameMap, normGuardian, s, normSid);
 
         const prep = {
             student: s,
@@ -1103,7 +1190,7 @@ export function buildStudentLookupIndex(students = []) {
             guardianTokens,
             directPhone,
             guardianPhone,
-            collegeCode: detectCollegeCode(`${s.college || ''} ${s.program || ''}`)
+            collegeCode
         };
         preparedStudents.push(prep);
 
@@ -1111,15 +1198,18 @@ export function buildStudentLookupIndex(students = []) {
             let list = firstTokenIndex.get(enTokens[0]);
             if (!list) { list = []; firstTokenIndex.set(enTokens[0], list); }
             list.push(prep);
+            addEdge(enTokens[0], prep);
         }
         if (arTokens[0]) {
             let list = firstTokenIndex.get(arTokens[0]);
             if (!list) { list = []; firstTokenIndex.set(arTokens[0], list); }
             list.push(prep);
+            addEdge(arTokens[0], prep);
         }
     }
 
-    return {
+    const built = {
+        _len: Array.isArray(students) ? students.length : 0,
         idMap,
         emailMap,
         nationalIdMap,
@@ -1128,8 +1218,44 @@ export function buildStudentLookupIndex(students = []) {
         exactNameMap,
         exactGuardianNameMap,
         firstTokenIndex,
+        firstTokenEdgeIndex,
         preparedStudents
     };
+    if (Array.isArray(students) && students.length > 0) {
+        _studentLookupIndexCache.set(students, built);
+    }
+    return built;
+}
+
+/**
+ * Returns the candidate subset of `preparedStudents` whose first name token is exact or within
+ * fuzzy edit distance of `firstQueryToken`, avoiding a 22,328-row linear scan on non-matching strings.
+ */
+function getFuzzyFirstTokenPool(index, firstQueryToken) {
+    if (!index || !firstQueryToken) return [];
+    // For small test datasets (< 400 students), scanning preparedStudents directly is trivial
+    if (index.preparedStudents.length <= 400) return index.preparedStudents;
+    const edgeMap = index.firstTokenEdgeIndex;
+    if (!edgeMap) return index.firstTokenIndex.get(firstQueryToken) || [];
+
+    const exact = index.firstTokenIndex.get(firstQueryToken);
+    const l1 = firstQueryToken.length >= 2 ? edgeMap.get(`p:${firstQueryToken.slice(0, 2)}`) : null;
+    const l2 = firstQueryToken.length >= 2 ? edgeMap.get(`s:${firstQueryToken.slice(-2)}`) : null;
+    if (!exact && !l1 && !l2) return [];
+
+    const seen = new Set();
+    const pool = [];
+    for (const list of [exact, l1, l2]) {
+        if (!list) continue;
+        for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            if (!seen.has(p)) {
+                seen.add(p);
+                pool.push(p);
+            }
+        }
+    }
+    return pool;
 }
 
 /**
@@ -1149,16 +1275,19 @@ function resolveCandidateGroup(candidates, context) {
         let score = 0;
         const reasons = [];
 
-        const sNameNorm = `${normalizeAutoMatchName(student.full_name || '')} ${normalizeAutoMatchName(student.arabic_name || '')}`.trim();
-        const sTokens = sNameNorm ? sNameNorm.split(/\s+/) : [];
-        if (sTokens.length > 0 && nameTokensSet.size > 0) {
-            if (nameTokensSet.has(sTokens[0])) {
+        const enT = student._enTokens || [];
+        const arT = student._arTokens || [];
+        if ((enT.length > 0 || arT.length > 0) && nameTokensSet.size > 0) {
+            if ((enT[0] && nameTokensSet.has(enT[0])) || (arT[0] && nameTokensSet.has(arT[0]))) {
                 score += 50;
                 reasons.push('First Name');
             }
             let extra = 0;
-            for (let i = 1; i < sTokens.length; i++) {
-                if (nameTokensSet.has(sTokens[i])) extra++;
+            for (let i = 1; i < enT.length; i++) {
+                if (nameTokensSet.has(enT[i])) extra++;
+            }
+            for (let i = 1; i < arT.length; i++) {
+                if (nameTokensSet.has(arT[i])) extra++;
             }
             if (extra > 0) {
                 score += extra * 25;
@@ -1172,14 +1301,14 @@ function resolveCandidateGroup(candidates, context) {
             reasons.push('Email');
         }
 
-        const p1 = normalizePhoneKey(student.mobile);
-        const p2 = normalizePhoneKey(student.guardian_mobile);
+        const p1 = student._directPhoneKey !== undefined ? student._directPhoneKey : normalizePhoneKey(student.mobile);
+        const p2 = student._guardianPhoneKey !== undefined ? student._guardianPhoneKey : normalizePhoneKey(student.guardian_mobile);
         if ((p1 && txPhonesSet.has(p1)) || (p2 && txPhonesSet.has(p2))) {
             score += 30;
             reasons.push('Phone');
         }
 
-        const sCol = detectCollegeCode(`${student.college || ''} ${student.program || ''}`);
+        const sCol = student._collegeCode !== undefined ? student._collegeCode : detectCollegeCode(`${student.college || ''} ${student.program || ''}`);
         if (txCollegeCode && sCol && txCollegeCode === sCol) {
             score += 25;
             reasons.push('College/Program');
@@ -1420,8 +1549,13 @@ export function matchTransactionToStudent(tx, {
         tryNationalIdMatch(origTxSid, 'National ID entered in Transaction ID field');
     if (nidTxHit) return nidTxHit;
 
-    // Helper: evaluate name candidates (used both for Priority 5 and to guard Priority 4 against kiosk-phone conflicts)
+    // Helper: evaluate name candidates (memoized per transaction; used for Priority 5 and kiosk-phone conflict guard)
+    let _nameMatchComputed = false;
+    let _cachedNameMatch = null;
     const findBestNameMatch = () => {
+        if (_nameMatchComputed) return _cachedNameMatch;
+        _nameMatchComputed = true;
+
         for (const { text, source } of nameCandidateStrings) {
             const normQuery = normalizeAutoMatchName(text);
             if (!normQuery) continue;
@@ -1433,18 +1567,19 @@ export function matchTransactionToStudent(tx, {
             if (exactCands && exactCands.length > 0) {
                 const resolved = resolveCandidateGroup(exactCands, context);
                 if (resolved.student) {
-                    return {
+                    _cachedNameMatch = {
                         student: resolved.student,
                         matchReason: `Exact Name matched via ${source}`,
                         score: 1.0,
                         isExact: true
                     };
+                    return _cachedNameMatch;
                 }
             }
 
             // 5b: Ordered 3+ token subsequence match (e.g. 3-part name vs 4-part official name)
             if (qTokens.length >= 3) {
-                const pool = index.firstTokenIndex.get(qTokens[0]) || index.preparedStudents;
+                const pool = index.firstTokenIndex.get(qTokens[0]) || getFuzzyFirstTokenPool(index, qTokens[0]);
                 let bestCand = null;
                 let bestScore = 0;
                 let secondBestScore = 0;
@@ -1467,12 +1602,13 @@ export function matchTransactionToStudent(tx, {
 
                 if (bestCand && bestScore >= 0.85 && (bestScore - secondBestScore) >= 0.06) {
                     const confidence = Math.round(bestScore * 100);
-                    return {
+                    _cachedNameMatch = {
                         student: bestCand.student,
                         matchReason: `Full Name matched via ${source} (${confidence}%): "${bestCand.student.full_name || bestCand.student.arabic_name}"`,
                         score: bestScore,
                         isExact: false
                     };
+                    return _cachedNameMatch;
                 }
             }
 
@@ -1482,23 +1618,25 @@ export function matchTransactionToStudent(tx, {
                 if (guardCands && guardCands.length > 0) {
                     const resolved = resolveCandidateGroup(guardCands, context);
                     if (resolved.student) {
-                        return {
+                        _cachedNameMatch = {
                             student: resolved.student,
                             matchReason: `Guardian Name matched via ${source}`,
                             score: 0.92,
                             isExact: true
                         };
+                        return _cachedNameMatch;
                     }
                 }
             }
 
-            // 5d: Guarded Fuzzy Match on 3+ token names (catches 1-2 character spelling typos while blocking 2-word false positives)
+            // 5d: Guarded Fuzzy Match on 3+ token names using prefix/suffix candidate pool instead of full 22k scan
             if (qTokens.length >= 3 && index.preparedStudents.length > 0) {
+                const fuzzyPool = getFuzzyFirstTokenPool(index, qTokens[0]);
                 let bestCand = null;
                 let bestSim = 0;
                 let secondSim = 0;
 
-                for (const cand of index.preparedStudents) {
+                for (const cand of fuzzyPool) {
                     for (const tTokens of [cand.enTokens, cand.arTokens]) {
                         if (!tTokens || tTokens.length < 3) continue;
                         const s0 = tokenSimilarity(qTokens[0], tTokens[0]);
@@ -1533,12 +1671,13 @@ export function matchTransactionToStudent(tx, {
 
                 if (bestCand && bestSim >= 0.86 && (bestSim - secondSim) >= 0.04) {
                     const confidence = Math.round(bestSim * 100);
-                    return {
+                    _cachedNameMatch = {
                         student: bestCand.student,
                         matchReason: `Fuzzy Name Match (Confidence: ${confidence}%): "${bestCand.student.full_name || bestCand.student.arabic_name}"`,
                         score: bestSim,
                         isExact: false
                     };
+                    return _cachedNameMatch;
                 }
             }
         }
@@ -1569,16 +1708,28 @@ export function matchTransactionToStudent(tx, {
 
         if (resolved.student) {
             const matchedStudent = resolved.student;
-            const sNorm = `${normalizeAutoMatchName(matchedStudent.full_name || '')} ${normalizeAutoMatchName(matchedStudent.arabic_name || '')} ${normalizeAutoMatchName(matchedStudent.guardian_name || '')}`.trim();
-            const sTokenSet = new Set(sNorm ? sNorm.split(/\s+/) : []);
-            const hasNameOverlap = nameTokensSet.size > 0 && [...nameTokensSet].some(t => sTokenSet.has(t));
+            let sTokenSet = matchedStudent._allNameTokenSet;
+            if (!sTokenSet) {
+                const sNorm = `${normalizeAutoMatchName(matchedStudent.full_name || '')} ${normalizeAutoMatchName(matchedStudent.arabic_name || '')} ${normalizeAutoMatchName(matchedStudent.guardian_name || '')}`.trim();
+                sTokenSet = new Set(sNorm ? sNorm.split(/\s+/) : []);
+                matchedStudent._allNameTokenSet = sTokenSet;
+            }
+            let hasNameOverlap = false;
+            if (nameTokensSet.size > 0) {
+                for (const t of nameTokensSet) {
+                    if (sTokenSet.has(t)) {
+                        hasNameOverlap = true;
+                        break;
+                    }
+                }
+            }
 
             // Guard against Fawry Kiosk / Third-Party Terminal Mobile conflicts:
             // If the match came from tx.customer_mobile AND rawTxSid contains a 3+ word student name
             // that has ZERO overlap with the phone owner, check if that name belongs to another student!
             if (src.isTerminalMobile && !hasNameOverlap && nameTokensSet.size >= 3) {
                 const nameHit = findBestNameMatch();
-                if (nameHit && normalizeStudentIdValue(nameHit.student.student_id) !== normalizeStudentIdValue(matchedStudent.student_id)) {
+                if (nameHit && (nameHit.student._normSidForIdx || normalizeStudentIdValue(nameHit.student.student_id)) !== (matchedStudent._normSidForIdx || normalizeStudentIdValue(matchedStudent.student_id))) {
                     if (enableNameMatch) {
                         return {
                             proposedStudent: nameHit.student,

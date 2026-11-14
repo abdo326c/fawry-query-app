@@ -1269,7 +1269,7 @@ class SettlementProcessor {
 
         const all = firstPage.slice();
         let from = pageSize;
-        const BATCH_PAGES = 5;
+        const BATCH_PAGES = 8;
 
         while (true) {
             const batchPromises = [];

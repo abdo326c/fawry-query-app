@@ -734,6 +734,8 @@ export function parseBanqueMisrPdfText(fullText) {
  * 2. Exact Student ID lookup (populates matched_student_name from student_master)
  * 3. Fuzzy Arabic / English Student Name & Guardian Name matching for rows missing a valid Student ID
  */
+const _foreignStudentIndexCache = new WeakMap();
+
 export function matchForeignDepositsToStudents(deposits, studentMasterList = [], manualFixesList = []) {
     if (!Array.isArray(deposits) || deposits.length === 0) return [];
     const students = Array.isArray(studentMasterList) ? studentMasterList : [];
@@ -744,26 +746,34 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
         }
     });
 
-    const byId = new Map();
-    const preparedStudents = students.map(s => {
-        const sid = String(s.student_id || '').trim();
-        const normSid = normalizeStudentIdValue(sid);
-        if (sid) byId.set(sid, s);
-        if (normSid) byId.set(normSid, s);
-        const normEn = normalizePersonName(s.full_name || '');
-        const normAr = normalizePersonName(s.arabic_name || '');
-        const normGuardian = normalizePersonName(s.guardian_name || '');
-        return {
-            student: s,
-            sid: normSid || sid,
-            normEn,
-            normAr,
-            normGuardian,
-            enTokens: normEn ? normEn.split(' ').filter(t => t.length >= 2) : [],
-            arTokens: normAr ? normAr.split(' ').filter(t => t.length >= 2) : [],
-            guardianTokens: normGuardian ? normGuardian.split(' ').filter(t => t.length >= 2) : []
-        };
-    });
+    let cachedIndex = (Array.isArray(students) && students.length > 0) ? _foreignStudentIndexCache.get(students) : null;
+    if (!cachedIndex || cachedIndex.length !== students.length) {
+        const byId = new Map();
+        const preparedStudents = students.map(s => {
+            const sid = String(s.student_id || '').trim();
+            const normSid = normalizeStudentIdValue(sid);
+            if (sid) byId.set(sid, s);
+            if (normSid) byId.set(normSid, s);
+            const normEn = normalizePersonName(s.full_name || '');
+            const normAr = normalizePersonName(s.arabic_name || '');
+            const normGuardian = normalizePersonName(s.guardian_name || '');
+            return {
+                student: s,
+                sid: normSid || sid,
+                normEn,
+                normAr,
+                normGuardian,
+                enTokens: normEn ? normEn.split(' ').filter(t => t.length >= 2) : [],
+                arTokens: normAr ? normAr.split(' ').filter(t => t.length >= 2) : [],
+                guardianTokens: normGuardian ? normGuardian.split(' ').filter(t => t.length >= 2) : []
+            };
+        });
+        cachedIndex = { byId, preparedStudents, length: students.length };
+        if (Array.isArray(students) && students.length > 0) {
+            _foreignStudentIndexCache.set(students, cachedIndex);
+        }
+    }
+    const { byId, preparedStudents } = cachedIndex;
 
     const scoreTokenOverlap = (queryNorm, queryTokens, targetNorm, targetTokens) => {
         if (!queryNorm || !targetNorm || queryTokens.length === 0 || targetTokens.length === 0) return 0;

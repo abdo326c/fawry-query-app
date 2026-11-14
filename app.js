@@ -4625,23 +4625,27 @@ class App {
     }
 
     rebuildStudentMasterMap(students = []) {
-        const map = new Map();
+        const map = this.studentMasterByIdMap instanceof Map ? new Map() : new Map();
         for (const s of (students || [])) {
             if (!s || !s.student_id) continue;
             const rawSid = String(s.student_id).trim();
             if (!rawSid) continue;
+            if (!s._level) s._level = getStudentProgramLevel(s);
+            if (!s._levelTag) s._levelTag = formatStudentLevelTag(s._level);
             map.set(rawSid, s);
             map.set(rawSid.toUpperCase(), s);
-            const normSid = this.normalizeStudentId ? this.normalizeStudentId(rawSid) : normalizeStudentIdValue(rawSid);
+            const normSid = s._normSid || (this.normalizeStudentId ? this.normalizeStudentId(rawSid) : normalizeStudentIdValue(rawSid));
             if (normSid) {
-                map.set(normSid, s);
-                map.set(normSid.toUpperCase(), s);
-                if (/^\d+$/.test(normSid) && normSid.length < 9) {
-                    map.set(normSid.padStart(9, '0'), s);
+                const normStr = String(normSid);
+                map.set(normStr, s);
+                map.set(normStr.toUpperCase(), s);
+                if (/^\d+$/.test(normStr) && normStr.length < 9) {
+                    map.set(normStr.padStart(9, '0'), s);
                 }
             }
         }
         this.studentMasterByIdMap = map;
+        this._sidLevelCache = new Map();
         this._lastMappedStudentsRef = students;
         this._lastMappedStudentsLen = Array.isArray(students) ? students.length : 0;
         return map;
@@ -4660,22 +4664,113 @@ class App {
         return this.studentMasterByIdMap;
     }
 
+    async ensureFullStudentMaster({ forceReload = false } = {}) {
+        if (!forceReload && Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
+            this.syncStudentMasterMapFromCache();
+            return this.allStudentsData;
+        }
+        if (!forceReload && this._fullStudentMasterPromise) {
+            return this._fullStudentMasterPromise;
+        }
+        this._fullStudentMasterPromise = (async () => {
+            try {
+                const data = await fetchAll(
+                    'student_master',
+                    'student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source',
+                    null,
+                    'student_id'
+                );
+                if (Array.isArray(data) && data.length > 0) {
+                    this.allStudentsData = data.map(s => this.indexStudentRecord(s));
+                    this.allStudents = this.allStudentsData;
+                    this.rebuildStudentMasterMap(this.allStudentsData);
+                } else if (!this.allStudentsData) {
+                    this.allStudentsData = [];
+                }
+                return this.allStudentsData || [];
+            } finally {
+                this._fullStudentMasterPromise = null;
+            }
+        })();
+        return this._fullStudentMasterPromise;
+    }
+
     async ensureStudentLevelMap() {
         this.syncStudentMasterMapFromCache();
-        if (this.studentMasterByIdMap && this.studentMasterByIdMap.size > 0) {
+        if (this.studentMasterByIdMap && this.studentMasterByIdMap.size > 0 && Array.isArray(this.allStudents) && this.allStudents.length > 0) {
             return this.studentMasterByIdMap;
         }
-        try {
-            const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, program, mobile', null, 'student_id');
-            if (Array.isArray(rows) && rows.length > 0) {
-                if (!this.allStudents || this.allStudents.length === 0) {
-                    this.allStudents = rows;
-                }
-                this.rebuildStudentMasterMap(rows);
-            }
-        } catch (_e) {
-            // Ignore when offline or unseeded
+        if (this._fullStudentMasterPromise) {
+            try { await this._fullStudentMasterPromise; } catch (_e) {}
+            return this.studentMasterByIdMap;
         }
+        if (this._studentLevelMapPromise) {
+            return this._studentLevelMapPromise;
+        }
+        this._studentLevelMapPromise = (async () => {
+            try {
+                const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, program, mobile', null, 'student_id');
+                if (Array.isArray(rows) && rows.length > 0) {
+                    if (!this.allStudents || this.allStudents.length === 0) {
+                        this.allStudents = rows;
+                    }
+                    this.rebuildStudentMasterMap(rows);
+                }
+            } catch (_e) {
+                // Ignore when offline or unseeded
+            } finally {
+                this._studentLevelMapPromise = null;
+            }
+            return this.studentMasterByIdMap;
+        })();
+        return this._studentLevelMapPromise;
+    }
+
+    async ensureStudentLevelsForRows(rows = []) {
+        this.syncStudentMasterMapFromCache();
+        if (this.studentMasterByIdMap && this.studentMasterByIdMap.size > 0 && Array.isArray(this.allStudents) && this.allStudents.length > 0) {
+            return this.studentMasterByIdMap;
+        }
+        const candidates = new Set();
+        for (const r of (rows || [])) {
+            const raw = r?.student_id ? String(r.student_id).trim() : '';
+            if (!raw || raw === 'Empty' || raw === 'Missing' || raw === 'Missing ID' || /^dip\d+/i.test(raw)) continue;
+            if (this.studentMasterByIdMap?.has(raw)) continue;
+            candidates.add(raw);
+            const norm = this.normalizeStudentId ? this.normalizeStudentId(raw) : normalizeStudentIdValue(raw);
+            if (norm) candidates.add(norm);
+        }
+        if (candidates.size > 0 && candidates.size <= 200) {
+            try {
+                const { data, error } = await supabase
+                    .from('student_master')
+                    .select('student_id, full_name, college, program')
+                    .in('student_id', [...candidates]);
+                if (!error && Array.isArray(data) && data.length > 0) {
+                    if (!this.studentMasterByIdMap) this.studentMasterByIdMap = new Map();
+                    for (const s of data) {
+                        if (!s || !s.student_id) continue;
+                        s._level = getStudentProgramLevel(s);
+                        s._levelTag = formatStudentLevelTag(s._level);
+                        const rawSid = String(s.student_id).trim();
+                        this.studentMasterByIdMap.set(rawSid, s);
+                        this.studentMasterByIdMap.set(rawSid.toUpperCase(), s);
+                        const normSid = this.normalizeStudentId ? this.normalizeStudentId(rawSid) : normalizeStudentIdValue(rawSid);
+                        if (normSid) {
+                            this.studentMasterByIdMap.set(normSid, s);
+                            if (/^\d+$/.test(normSid) && normSid.length < 9) {
+                                this.studentMasterByIdMap.set(normSid.padStart(9, '0'), s);
+                            }
+                        }
+                    }
+                    this._sidLevelCache = new Map();
+                }
+            } catch (_e) {
+                // Fallback to background warm
+            }
+        }
+        // Warm full directory in background without blocking current page render
+        this.ensureStudentLevelMap().catch(() => {});
         return this.studentMasterByIdMap;
     }
 
@@ -4700,11 +4795,20 @@ class App {
     }
 
     getStudentLevelBySid(sid) {
-        const student = this.lookupStudentBySid(sid);
-        if (student) return getStudentProgramLevel(student);
-        const raw = String(sid || '').trim();
-        if (/^dip\d+/i.test(raw)) return 'PG';
-        return '';
+        if (sid === null || sid === undefined) return '';
+        const raw = String(sid).trim();
+        if (!raw || raw === 'Empty' || raw === 'Missing' || raw === 'Missing ID') return '';
+        if (!this._sidLevelCache) this._sidLevelCache = new Map();
+        const cached = this._sidLevelCache.get(raw);
+        if (cached !== undefined) return cached;
+        const student = this.lookupStudentBySid(raw);
+        const level = student
+            ? (student._level || (student._level = getStudentProgramLevel(student)))
+            : (/^dip\d+/i.test(raw) ? 'PG' : '');
+        if (this.studentMasterByIdMap && this.studentMasterByIdMap.size > 0 && this._sidLevelCache.size < 30000) {
+            this._sidLevelCache.set(raw, level);
+        }
+        return level;
     }
 
     getStudentLevelLabelBySid(sid) {
@@ -4742,7 +4846,6 @@ class App {
             btn.disabled = true;
 
             try {
-                await this.ensureStudentLevelMap();
                 const exportCols = 'reference_number, payment_date, student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
                 const pageSize = 1000;
                 const fetchExportPage = async (from) => {
@@ -4755,12 +4858,15 @@ class App {
                     return data || [];
                 };
 
-                const firstPage = await fetchExportPage(0);
+                const [firstPage] = await Promise.all([
+                    fetchExportPage(0),
+                    this.ensureStudentLevelMap()
+                ]);
                 const allData = firstPage.slice();
 
                 if (firstPage.length === pageSize) {
                     let from = pageSize;
-                    const BATCH_PAGES = 5;
+                    const BATCH_PAGES = 8;
                     while (true) {
                         const batchPromises = [];
                         for (let p = 0; p < BATCH_PAGES; p++) {
@@ -4793,43 +4899,45 @@ class App {
                 btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Building Excel (${allData.length.toLocaleString()})...`;
                 await new Promise(r => setTimeout(r, 0));
 
-                // Format exactly like the original Power Query Excel (strictly date-only, no time component)
-                const formattedData = allData.map(t => {
+                // Format and sanitize in a single pass to avoid duplicating 20k+ row objects
+                const len = allData.length;
+                const formattedData = new Array(len);
+                for (let i = 0; i < len; i++) {
+                    const t = allData[i];
                     const pDateStr = toDateOnly(t.payment_date);
                     const levelTag = formatStudentLevelTag(this.getTransactionStudentLevel(t));
 
-                    return {
-                        "Reference Number": t.reference_number,
+                    formattedData[i] = {
+                        "Reference Number": sanitizeExcelValue(t.reference_number),
                         "Payment Date": pDateStr,
-                        "Student ID": t.student_id,
+                        "Student ID": sanitizeExcelValue(t.student_id),
                         "Level": levelTag,
-                        "Customer Mobile Number": t.customer_mobile,
+                        "Customer Mobile Number": sanitizeExcelValue(t.customer_mobile),
                         "Total Amount Plus Fees": t.total_amount,
                         "Net Amount": t.net_amount,
                         "Fawry Fees": t.fawry_fees,
-                        "Payment Status": t.payment_status,
-                        "Item Name": t.item_name,
+                        "Payment Status": sanitizeExcelValue(t.payment_status),
+                        "Item Name": sanitizeExcelValue(t.item_name),
                         "Item Price": t.item_price,
-                        "Mapping": t.mapping,
-                        "2nd Mapping": t.second_mapping,
+                        "Mapping": sanitizeExcelValue(t.mapping),
+                        "2nd Mapping": sanitizeExcelValue(t.second_mapping),
                         "Is Settled": t.is_settled ? 'Yes' : 'No',
-                        "Settlement Batch": t.settlement_batch || '',
-                        "Merchant Name": t.merchant_name,
-                        "Bank": t.bank,
-                        "Check Column": t.check_column,
-                        "ID Status": t.id_status
+                        "Settlement Batch": sanitizeExcelValue(t.settlement_batch || ''),
+                        "Merchant Name": sanitizeExcelValue(t.merchant_name),
+                        "Bank": sanitizeExcelValue(t.bank),
+                        "Check Column": sanitizeExcelValue(t.check_column),
+                        "ID Status": sanitizeExcelValue(t.id_status)
                     };
-                });
+                }
 
-                const worksheet = XLSX.utils.json_to_sheet(sanitizeExcelRows(formattedData));
+                const worksheet = XLSX.utils.json_to_sheet(formattedData);
                 // Write integer Excel date serials (z: 'm/d/yyyy') so Excel shows a true Date with zero time component
-                allData.forEach((t, idx) => {
-                    const serial = dateToExcelSerial(t.payment_date);
+                for (let idx = 0; idx < len; idx++) {
+                    const serial = dateToExcelSerial(allData[idx].payment_date);
                     if (serial !== null) {
-                        const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 1 });
-                        worksheet[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+                        worksheet[`B${idx + 2}`] = { t: 'n', v: serial, z: 'm/d/yyyy' };
                     }
-                });
+                }
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
                 
@@ -4920,13 +5028,14 @@ class App {
         const sortCol = this.txSortCol || 'payment_date';
         const sortAsc = Boolean(this.txSortAsc);
 
-        const [{ data, count: fetchedCount, error }] = await Promise.all([
-            query
-                .order(sortCol, { ascending: sortAsc })
-                .order('id', { ascending: sortAsc })
-                .range(fromRange, toRange),
-            this.ensureStudentLevelMap()
-        ]);
+        const { data, count: fetchedCount, error } = await query
+            .order(sortCol, { ascending: sortAsc })
+            .order('id', { ascending: sortAsc })
+            .range(fromRange, toRange);
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+            await this.ensureStudentLevelsForRows(data);
+        }
 
         // A newer request was started while this one was running – ignore this (stale) result
         if (requestId !== this.txRequestId) return;
@@ -6082,11 +6191,11 @@ class App {
 
                 const exportSource = (this.filteredStudentsData && this.filteredStudentsData.length > 0)
                     ? this.filteredStudentsData
-                    : await fetchAll('student_master', '*', null, 'student_id');
+                    : await this.ensureFullStudentMaster();
 
                 const rows = (exportSource || []).map(s => ({
                     'Student ID': s.student_id || '',
-                    'Level': formatStudentLevelTag(getStudentProgramLevel(s)),
+                    'Level': s._levelTag || formatStudentLevelTag(getStudentProgramLevel(s)),
                     'Full Name': s.full_name || '',
                     'Arabic Name': s.arabic_name || '',
                     'Email': s.email || '',
@@ -6308,7 +6417,7 @@ class App {
                     "Current Status": tx.original_status,
                     "Confidence Tier": tierLabels[tx.confidenceTier] || (tx.proposedStudent ? 'Matched' : 'Unmatched'),
                     "Proposed Fix (Student ID)": tx.proposedStudent ? tx.proposedStudent.student_id : 'No Match Found',
-                    "Level": tx.proposedStudent ? formatStudentLevelTag(getStudentProgramLevel(tx.proposedStudent)) : '',
+                    "Level": tx.proposedStudent ? (tx.proposedStudent._levelTag || formatStudentLevelTag(getStudentProgramLevel(tx.proposedStudent))) : '',
                     "Proposed Fix (Student Name)": tx.proposedStudent ? tx.proposedStudent.full_name : '',
                     "Match Reason": tx.matchReason || '',
                     "Item Name": tx.original_item,
@@ -7191,7 +7300,11 @@ class App {
             }
 
             const matcherCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, item_name, item_price, mapping, second_mapping, bank, id_status, is_settled, erp_batch_number';
-            let invalidTx = await fetchAll('transactions', matcherCols, queryFn);
+            const [rawInvalidTx, loadedStudents] = await Promise.all([
+                fetchAll('transactions', matcherCols, queryFn),
+                this.ensureFullStudentMaster()
+            ]);
+            let invalidTx = rawInvalidTx;
             
             // If the targeted match list was very large and bypassed the .in(), filter locally
             if (this.targetedMatchRefs && this.targetedMatchRefs.length > 500) {
@@ -7227,23 +7340,15 @@ class App {
             const enableNameMatch = document.getElementById('automatch-enable-name')?.checked;
             const invalidRefs = filteredTx.map(t => String(t.reference_number));
 
-            // Fetch links for invalid references and ensure student_master directory is cached in memory concurrently
-            const [links, loadedStudents] = await Promise.all([
-                fetchByIn(
-                    'links',
-                    'payment_reference_number, custom_input_value, customer_national_id, customer_mobile, customer_email, customer_name',
-                    'payment_reference_number',
-                    invalidRefs,
-                    'payment_reference_number',
-                    350
-                ),
-                (this.allStudentsData && this.allStudentsData.length > 0)
-                    ? Promise.resolve(this.allStudentsData)
-                    : fetchAll('student_master', '*', null, 'student_id').then(rows => {
-                        this.allStudentsData = (rows || []).map(s => this.indexStudentRecord(s));
-                        return this.allStudentsData;
-                    })
-            ]);
+            // Fetch links for invalid references
+            const links = await fetchByIn(
+                'links',
+                'payment_reference_number, custom_input_value, customer_national_id, customer_mobile, customer_email, customer_name',
+                'payment_reference_number',
+                invalidRefs,
+                'payment_reference_number',
+                400
+            );
 
             const students = loadedStudents || [];
 
@@ -7283,11 +7388,13 @@ class App {
             let lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
             for (const tx of filteredTx) {
                 loopCount++;
-                const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-                if (now - lastYield > 24) {
-                    btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
-                    await new Promise(r => setTimeout(r, 0)); // Yield to browser only when frame budget exceeded
-                    lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                if ((loopCount & 63) === 0) {
+                    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                    if (now - lastYield > 50) {
+                        btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
+                        await new Promise(r => setTimeout(r, 0));
+                        lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                    }
                 }
 
                 const link = linksMap[tx.reference_number];
@@ -7695,9 +7802,22 @@ class App {
 
         try {
             const appliedRefs = [];
+            const appliedRefsSet = new Set();
             const manualFixesToInsert = [];
-
             const updateGroups = {};
+
+            // Pre-index unlocked sibling rows by reference_number for O(1) lookup
+            const siblingsByRef = new Map();
+            for (const sib of (this.automatchProposals || [])) {
+                if (sib.original_ref && !sib.locked) {
+                    let list = siblingsByRef.get(sib.original_ref);
+                    if (!list) {
+                        list = [];
+                        siblingsByRef.set(sib.original_ref, list);
+                    }
+                    list.push(sib.tx_id);
+                }
+            }
 
             for (const proposal of selectedProposals) {
                 const tx_id = proposal.tx_id;
@@ -7706,10 +7826,9 @@ class App {
                 updateGroups[sid].add(tx_id);
 
                 // Also include any unlocked sibling rows in automatchProposals that share the same reference_number
-                for (const sib of (this.automatchProposals || [])) {
-                    if (sib.original_ref && sib.original_ref === proposal.original_ref && !sib.locked) {
-                        updateGroups[sid].add(sib.tx_id);
-                    }
+                const sibIds = proposal.original_ref ? siblingsByRef.get(proposal.original_ref) : null;
+                if (sibIds) {
+                    for (let i = 0; i < sibIds.length; i++) updateGroups[sid].add(sibIds[i]);
                 }
                 
                 manualFixesToInsert.push({
@@ -7717,7 +7836,8 @@ class App {
                     correct_id: sid
                 });
 
-                if (!appliedRefs.includes(proposal.original_ref)) {
+                if (proposal.original_ref && !appliedRefsSet.has(proposal.original_ref)) {
+                    appliedRefsSet.add(proposal.original_ref);
                     appliedRefs.push(proposal.original_ref);
                 }
             }
@@ -7727,8 +7847,8 @@ class App {
             for (const [sid, txIdSet] of Object.entries(updateGroups)) {
                 const txIds = Array.from(txIdSet);
                 const statusVal = validateID(sid);
-                for (let i = 0; i < txIds.length; i += 300) {
-                    const chunk = txIds.slice(i, i + 300);
+                for (let i = 0; i < txIds.length; i += 350) {
+                    const chunk = txIds.slice(i, i + 350);
                     txUpdateTasks.push(async () => {
                         const { error } = await supabase
                             .from('transactions')
@@ -7741,7 +7861,7 @@ class App {
                     });
                 }
             }
-            await runConcurrent(txUpdateTasks, 6);
+            await runConcurrent(txUpdateTasks, 10);
 
             // Insert into manual_fixes (preserve existing item_name, mapping, second_mapping if any)
             if (manualFixesToInsert.length > 0) {
@@ -8740,7 +8860,6 @@ class App {
         if (refresh || !this.erpBaseData || this.erpBaseKey !== baseKey) {
             let baseData = [];
             try {
-                await this.ensureStudentLevelMap();
                 const includeFawry = bank !== DEFAULT_FOREIGN_BANK;
                 const includeForeign = !bank || bank === DEFAULT_FOREIGN_BANK;
 
@@ -9345,33 +9464,39 @@ class App {
     }
 
     generateErpExcel(rows = this.erpData, { dateMode = 'settlement', customDate = null } = {}) {
-        const effectiveDates = rows.map(row => this.resolveErpExportDate(row, dateMode, customDate));
-        const exportData = rows.map((row, index) => ({
-            'Date': effectiveDates[index],
-            'Voucher': '',
-            'Company': 'NU',
-            'Account': this.erpAccount(row),
-            'Name': '',
-            'Description': `${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`,
-            'Debit': 0,
-            'Credit': this.erpAmount(row),
-            'Currency': String(row.currency || 'EGP').toUpperCase(),
-            'Offset account type': 'Bank',
-            'Offset Non-ledger account': row.bank,
-            'Offset main account': '',
-            'Method of payment': '',
-            'Payment reference': row.reference_number || '',
-            'Line number': index + 1
-        }));
+        const len = rows.length;
+        const effectiveDates = new Array(len);
+        const exportData = new Array(len);
+        for (let index = 0; index < len; index++) {
+            const row = rows[index];
+            const effDate = this.resolveErpExportDate(row, dateMode, customDate);
+            effectiveDates[index] = effDate;
+            exportData[index] = {
+                'Date': effDate,
+                'Voucher': '',
+                'Company': 'NU',
+                'Account': sanitizeExcelValue(this.erpAccount(row)),
+                'Name': '',
+                'Description': sanitizeExcelValue(`${row.reference_number || ''}/${row.item_name || ''}/${row.mapping || ''}/${row.second_mapping || ''}/${row.student_id || ''}`),
+                'Debit': 0,
+                'Credit': this.erpAmount(row),
+                'Currency': String(row.currency || 'EGP').toUpperCase(),
+                'Offset account type': 'Bank',
+                'Offset Non-ledger account': sanitizeExcelValue(row.bank),
+                'Offset main account': '',
+                'Method of payment': '',
+                'Payment reference': sanitizeExcelValue(row.reference_number || ''),
+                'Line number': index + 1
+            };
+        }
 
-        const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
-        effectiveDates.forEach((effDate, idx) => {
-            const serial = dateToExcelSerial(effDate);
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        for (let idx = 0; idx < len; idx++) {
+            const serial = dateToExcelSerial(effectiveDates[idx]);
             if (serial !== null) {
-                const cellRef = XLSX.utils.encode_cell({ r: idx + 1, c: 0 });
-                ws[cellRef] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+                ws[`A${idx + 2}`] = { t: 'n', v: serial, z: 'm/d/yyyy' };
             }
-        });
+        }
         ws['!cols'] = [
             { wch: 13 }, // Date
             { wch: 14 }, // Voucher
@@ -9618,23 +9743,8 @@ class App {
                     tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="loader" class="spin" style="width:36px;height:36px;opacity:0.6;"></i><h3>Loading student directory...</h3></div></td></tr>';
                     renderIcons(tbody);
                 }
-                const data = await fetchAll(
-                    'student_master',
-                    'student_id, full_name, arabic_name, national_id, email, mobile, guardian_name, guardian_mobile, college, program, source',
-                    null,
-                    'student_id'
-                );
-                this.allStudentsData = (data || []).map(s => this.indexStudentRecord(s));
-                this.allStudents = this.allStudentsData;
-                this.rebuildStudentMasterMap(this.allStudentsData);
+                await this.ensureFullStudentMaster({ forceReload });
                 this.updateStudentsStatsAndDropdowns();
-
-                if (
-                    this.hasRole('operator') &&
-                    this.allStudentsData.some(s => !/^\((?:UG|PG)\)\b/i.test(String(s.program || '').trim()))
-                ) {
-                    this.labelExistingStudentsInDatabase({ silent: true }).catch(() => {});
-                }
             }
             this.markTabLoaded('student-master');
 
@@ -11995,30 +12105,24 @@ class App {
 
     async ensureStudentsLoadedForForeign() {
         if (Array.isArray(this.allStudents) && this.allStudents.length > 0) {
-            this.rebuildStudentMasterMap(this.allStudents);
+            this.syncStudentMasterMapFromCache();
             return this.allStudents;
         }
         if (Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
             this.allStudents = this.allStudentsData;
-            this.rebuildStudentMasterMap(this.allStudents);
+            this.syncStudentMasterMapFromCache();
             return this.allStudents;
         }
-        try {
-            const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, program, mobile', null, 'student_id');
-            if (Array.isArray(rows) && rows.length > 0) {
-                this.allStudents = rows;
-                this.rebuildStudentMasterMap(rows);
-            }
-        } catch (_e) {
-            // ignore if offline or empty
-        }
+        await this.ensureStudentLevelMap();
         return this.allStudents || [];
     }
 
     async loadForeignTransactions() {
-        await this.ensureStudentLevelMap();
         try {
-            const data = await fetchAll('foreign_transactions', '*', null, 'value_date');
+            const [data] = await Promise.all([
+                fetchAll('foreign_transactions', '*', null, 'value_date'),
+                this.ensureStudentLevelMap()
+            ]);
             if (Array.isArray(data)) {
                 const cloudRefs = new Set(data.map(r => r.reference_number).filter(Boolean));
                 const unsyncedLocal = (this.foreignTransactions || []).filter(r => r.reference_number && !cloudRefs.has(r.reference_number));
