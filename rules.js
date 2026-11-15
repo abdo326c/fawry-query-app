@@ -908,9 +908,9 @@ export async function buildCompressedXlsxBytes(workbook, opts = {}, xlsxLib = nu
     const entries = [];
     for (let i = 0; i < cfb.FileIndex.length; i++) {
         const fi = cfb.FileIndex[i];
-        if (fi.type !== 2 || !fi.content) continue;
+        if (fi.type !== 2 || !fi.size || !fi.content) continue;
         const name = String(cfb.FullPaths[i] || fi.name || '').replace(/^Root Entry\//, '');
-        if (!name) continue;
+        if (!name || name === '\x01Sh33tJ5' || name.charCodeAt(0) < 32) continue;
         entries.push({ name, data: fi.content });
     }
     return buildNativeZip(entries);

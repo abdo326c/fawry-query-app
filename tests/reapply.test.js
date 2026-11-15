@@ -27,6 +27,7 @@ const {
     buildMappingLookup,
     pruneEmptyWorksheetCells,
     buildNativeZip,
+    buildCompressedXlsxBytes,
     RULE_FIELDS
 } = await import('../rules.js');
 
@@ -342,4 +343,34 @@ test('buildNativeZip produces a valid DEFLATE PKZIP archive that shrinks repetit
     w.close();
     const restored = new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
     expect(restored).toBe(sampleXml);
+});
+
+test('buildCompressedXlsxBytes excludes SheetJS internal control entries such as \\x01Sh33tJ5', async () => {
+    const encoder = new TextEncoder();
+    const fakeXml = encoder.encode('<workbook/>');
+    const mockXlsx = {
+        write: vi.fn(() => new Uint8Array([1, 2, 3])),
+        CFB: {
+            read: vi.fn(() => ({
+                FullPaths: [
+                    'Root Entry/',
+                    'Root Entry/\x01Sh33tJ5',
+                    'Root Entry/xl/workbook.xml',
+                    'Root Entry/[Content_Types].xml'
+                ],
+                FileIndex: [
+                    { type: 5, size: 0, content: null },
+                    { type: 2, size: 4, content: new Uint8Array([0, 0, 0, 0]) },
+                    { type: 2, size: fakeXml.length, content: fakeXml },
+                    { type: 2, size: fakeXml.length, content: fakeXml }
+                ]
+            }))
+        }
+    };
+    const wb = { SheetNames: ['S1'], Sheets: { S1: { '!ref': 'A1:A1', A1: { t: 's', v: 'Header' } } } };
+    const zip = await buildCompressedXlsxBytes(wb, {}, mockXlsx);
+    const asciiDump = new TextDecoder('latin1').decode(zip);
+    expect(asciiDump).not.toContain('Sh33tJ5');
+    expect(asciiDump).toContain('xl/workbook.xml');
+    expect(asciiDump).toContain('[Content_Types].xml');
 });

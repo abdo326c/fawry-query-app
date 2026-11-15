@@ -33,7 +33,7 @@ import {
     mergeStudentEmails,
     getStudentDisplayEmails,
     writeCompressedExcel
-} from './rules.js?v=2.6.6';
+} from './rules.js?v=2.6.7';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
