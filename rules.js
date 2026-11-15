@@ -226,34 +226,95 @@ export function buildMappingLookup(mappings) {
 }
 
 /**
- * Fetch every row of a table (paginated past the 1,000-row limit).
+ * Fetch every row of a table past PostgREST's 1,000-row cap.
+ * Prefers O(N) keyset pagination on `orderByCol` whenever cursor values are present and `.gt()`
+ * is available (automatically shrinking pageSize on Postgres statement timeouts), falling back
+ * to conservative 2-way offset paging only when `orderByCol` is omitted from `selectCols` or mocked.
  * @param {string} table
  * @param {string} selectCols
  * @param {(q:any)=>any} [queryFn] adds filters to the query
  * @param {string} [orderByCol] a unique, stable column to page by
+ * @param {{pageSize?:number, onProgress?:(loaded:number)=>void}} [opts]
  */
-export async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id') {
-    const fetchPage = async (from) => {
-        let query = supabase.from(table).select(selectCols);
-        if (queryFn) query = queryFn(query);
-        query = query.order(orderByCol).range(from, from + PAGE_SIZE - 1);
-        const { data, error } = await query;
-        if (error) throw error;
-        return data || [];
+export async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id', { pageSize = PAGE_SIZE, onProgress = null } = {}) {
+    const isTimeoutError = (err) => {
+        const msg = String(err?.message || err?.details || err || '').toLowerCase();
+        return err?.code === '57014' || msg.includes('statement timeout') || msg.includes('canceling statement');
     };
 
-    // Fast path: fetch the first page alone so small tables (< 1,000 rows) only make 1 request
-    const firstPage = await fetchPage(0);
-    if (firstPage.length < PAGE_SIZE) return firstPage;
+    const buildQuery = () => {
+        let query = supabase.from(table).select(selectCols);
+        if (queryFn) query = queryFn(query);
+        return query;
+    };
 
+    const runAdaptivePage = async (makePageQuery, initialSize) => {
+        let limit = initialSize;
+        while (true) {
+            const { data, error } = await makePageQuery(limit);
+            if (!error) return { rows: data || [], limitUsed: limit };
+            if (isTimeoutError(error) && limit > 200) {
+                limit = Math.max(200, Math.floor(limit / 2));
+                continue;
+            }
+            throw error;
+        }
+    };
+
+    // Fetch first page alone so small tables (< pageSize) only make 1 request
+    const { rows: firstPage, limitUsed: firstLimit } = await runAdaptivePage(
+        (limit) => buildQuery().order(orderByCol, { ascending: true }).range(0, limit - 1),
+        pageSize
+    );
     const allData = firstPage.slice();
-    let from = PAGE_SIZE;
-    const BATCH_PAGES = 8;
+    if (typeof onProgress === 'function' && allData.length > 0) {
+        onProgress(allData.length);
+    }
+    if (firstPage.length < firstLimit) return allData;
 
+    let activeLimit = firstLimit;
+    const sampleCursor = firstPage[firstPage.length - 1]?.[orderByCol];
+    const probeQuery = buildQuery();
+    const canKeyset = sampleCursor !== undefined && sampleCursor !== null && typeof probeQuery?.gt === 'function';
+
+    if (canKeyset) {
+        let cursor = sampleCursor;
+        while (true) {
+            const { rows: page, limitUsed } = await runAdaptivePage(
+                (limit) => buildQuery()
+                    .gt(orderByCol, cursor)
+                    .order(orderByCol, { ascending: true })
+                    .range(0, limit - 1),
+                activeLimit
+            );
+            activeLimit = limitUsed;
+            if (!page || page.length === 0) break;
+            for (let i = 0; i < page.length; i++) allData.push(page[i]);
+            if (typeof onProgress === 'function') onProgress(allData.length);
+            if (page.length < limitUsed) break;
+            const nextCursor = page[page.length - 1]?.[orderByCol];
+            if (nextCursor === undefined || nextCursor === null || nextCursor === cursor) break;
+            cursor = nextCursor;
+        }
+        return allData;
+    }
+
+    // Conservative offset fallback when cursor column wasn't selected or test mock lacks .gt()
+    let from = firstPage.length;
+    const BATCH_PAGES = 2;
     while (true) {
         const batchPromises = [];
         for (let p = 0; p < BATCH_PAGES; p++) {
-            batchPromises.push(fetchPage(from + p * PAGE_SIZE));
+            const offset = from + p * activeLimit;
+            batchPromises.push(
+                buildQuery()
+                    .order(orderByCol, { ascending: true })
+                    .range(offset, offset + activeLimit - 1)
+                    .then(({ data, error }) => {
+                        if (error) throw error;
+                        return data || [];
+                    })
+            );
         }
         const pages = await Promise.all(batchPromises);
         let done = false;
@@ -263,13 +324,14 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
                 break;
             }
             for (let i = 0; i < page.length; i++) allData.push(page[i]);
-            if (page.length < PAGE_SIZE) {
+            if (page.length < activeLimit) {
                 done = true;
                 break;
             }
         }
+        if (typeof onProgress === 'function') onProgress(allData.length);
         if (done) break;
-        from += BATCH_PAGES * PAGE_SIZE;
+        from += BATCH_PAGES * activeLimit;
     }
     return allData;
 }

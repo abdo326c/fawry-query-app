@@ -15,12 +15,15 @@ vi.mock('../supabase.js', () => ({
     }
 }));
 
+const { supabase } = await import('../supabase.js');
+
 const {
     originalStudentId,
     baseFromTransaction,
     applyBusinessRules,
     diffTransaction,
     updateRuleFields,
+    fetchAll,
     buildMappingLookup,
     RULE_FIELDS
 } = await import('../rules.js');
@@ -176,4 +179,50 @@ test('updateRuleFields groups mapping-only changes across distinct student_ids i
 
 test('updateRuleFields refuses rows without an id', async () => {
     await expect(updateRuleFields([{ fields: { student_id: 'A' } }])).rejects.toThrow('without an id');
+});
+
+test('fetchAll uses O(N) keyset pagination and shrinks pageSize on Postgres statement timeout', async () => {
+    const origFrom = supabase.from;
+    const totalRows = Array.from({ length: 1250 }, (_, idx) => ({ id: (idx + 1) * 3 }));
+    const queryLog = [];
+    let simulateTimeout = true;
+
+    try {
+        supabase.from = vi.fn(() => {
+            let gtVal = null;
+            const chain = {
+                select: vi.fn(() => chain),
+                gt: vi.fn((col, val) => {
+                    if (col === 'id') gtVal = val;
+                    return chain;
+                }),
+                order: vi.fn(() => chain),
+                range: vi.fn(async (from, to) => {
+                    const limit = to - from + 1;
+                    queryLog.push({ gtVal, from, to, limit });
+                    if (simulateTimeout && gtVal !== null && limit >= 1000) {
+                        simulateTimeout = false;
+                        return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
+                    }
+                    const filtered = gtVal === null ? totalRows : totalRows.filter(r => r.id > gtVal);
+                    return { data: filtered.slice(from, to + 1), error: null };
+                })
+            };
+            return chain;
+        });
+
+        const progressUpdates = [];
+        const rows = await fetchAll('transactions', 'id', null, 'id', {
+            pageSize: 1000,
+            onProgress: (n) => progressUpdates.push(n)
+        });
+
+        expect(rows.map(r => r.id)).toEqual(totalRows.map(r => r.id));
+        expect(queryLog.every(q => q.from === 0)).toBe(true); // Never used non-zero OFFSET
+        expect(queryLog.some(q => q.gtVal === 3000 && q.limit === 1000)).toBe(true); // First keyset attempt at 1000
+        expect(queryLog.some(q => q.gtVal === 3000 && q.limit === 500)).toBe(true);  // Halved to 500 after timeout
+        expect(progressUpdates[progressUpdates.length - 1]).toBe(1250);
+    } finally {
+        supabase.from = origFrom;
+    }
 });

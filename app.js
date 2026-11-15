@@ -32,7 +32,7 @@ import {
     classifyStudentEmails,
     mergeStudentEmails,
     getStudentDisplayEmails
-} from './rules.js?v=2.6.1';
+} from './rules.js?v=2.6.2';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -1045,7 +1045,7 @@ class App {
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
-                            await loadScriptOnce('./settlement.js?v=2.5.2');
+                            await loadScriptOnce('./settlement.js?v=2.5.3');
                         }
                         if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
                             window.settlementApp = new window.SettlementProcessor(supabase);
@@ -1910,7 +1910,7 @@ class App {
                 if (!rpcSucceeded) {
                     allData = await fetchAll(
                         'transactions',
-                        'payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number',
+                        'id, payment_date, bank, item_price, mapping, second_mapping, item_name, id_status, is_settled, erp_batch_number',
                         q => {
                             q = q.gte('payment_date', dateFrom)
                                 .lte('payment_date', dateTo)
@@ -4358,7 +4358,7 @@ class App {
                             }
                         }
                         if (!values) {
-                            const rows = await fetchAll('transactions', currentColumn, null, 'id');
+                            const rows = await fetchAll('transactions', `id, ${currentColumn}`, null, 'id');
                             values = [...new Set(rows.map(r => r[currentColumn]).filter(v => v !== null && v !== undefined && v !== ''))].sort();
                         }
                         this.distinctCache[currentColumn] = {
@@ -4850,54 +4850,47 @@ class App {
             btn.disabled = true;
 
             try {
-                const exportCols = 'reference_number, payment_date, student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
-                const pageSize = 1000;
-                const fetchExportPage = async (from) => {
-                    const query = this.applyTransactionFiltersToQuery(supabase.from('transactions').select(exportCols));
-                    const { data, error } = await query
-                        .order('payment_date', { ascending: true })
-                        .order('id', { ascending: true })
-                        .range(from, from + pageSize - 1);
-                    if (error) throw error;
-                    return data || [];
-                };
-
-                const [firstPage] = await Promise.all([
-                    fetchExportPage(0),
-                    this.ensureStudentLevelMap()
-                ]);
-                const allData = firstPage.slice();
-
-                if (firstPage.length === pageSize) {
-                    let from = pageSize;
-                    const BATCH_PAGES = 8;
-                    while (true) {
-                        const batchPromises = [];
-                        for (let p = 0; p < BATCH_PAGES; p++) {
-                            batchPromises.push(fetchExportPage(from + p * pageSize));
+                const exportCols = 'id, reference_number, payment_date, student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
+                const allData = await fetchAll(
+                    'transactions',
+                    exportCols,
+                    q => this.applyTransactionFiltersToQuery(q),
+                    'id',
+                    {
+                        onProgress: (loaded) => {
+                            btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Exporting (${loaded.toLocaleString()})...`;
                         }
-                        const pages = await Promise.all(batchPromises);
-                        let done = false;
-                        for (const page of pages) {
-                            if (page.length === 0) {
-                                done = true;
-                                break;
-                            }
-                            for (let i = 0; i < page.length; i++) allData.push(page[i]);
-                            if (page.length < pageSize) {
-                                done = true;
-                                break;
-                            }
-                        }
-                        btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Exporting (${allData.length.toLocaleString()})...`;
-                        if (done) break;
-                        from += BATCH_PAGES * pageSize;
                     }
-                }
+                );
 
                 if (allData.length === 0) {
                     Toast.show('No data to export.', 'warning');
                     return;
+                }
+
+                // Preserve chronological export ordering after O(N) id-keyset fetch
+                allData.sort((a, b) => {
+                    const da = String(a.payment_date || '');
+                    const db = String(b.payment_date || '');
+                    if (da !== db) return da < db ? -1 : 1;
+                    return (Number(a.id) || 0) - (Number(b.id) || 0);
+                });
+
+                // Resolve missing student (UG)/(PG) levels without running a concurrent full-table scan
+                this.syncStudentMasterMapFromCache();
+                const missingSids = new Set();
+                for (let i = 0; i < allData.length; i++) {
+                    const raw = allData[i]?.student_id ? String(allData[i].student_id).trim() : '';
+                    if (!raw || raw === 'Empty' || raw === 'Missing' || raw === 'Missing ID' || /^dip\d+/i.test(raw)) continue;
+                    if (!this.lookupStudentBySid(raw)) missingSids.add(raw);
+                }
+                if (missingSids.size > 0) {
+                    btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Resolving student levels...`;
+                    if (missingSids.size <= 1500) {
+                        await this.ensureStudentLevelsForRows(allData);
+                    } else {
+                        await this.ensureStudentLevelMap();
+                    }
                 }
 
                 btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Building Excel (${allData.length.toLocaleString()})...`;
@@ -5438,7 +5431,7 @@ class App {
         try {
             const unmappedRows = await fetchAll(
                 'transactions',
-                'reference_number, item_name, check_column, item_price, mapping',
+                'id, reference_number, item_name, check_column, item_price, mapping',
                 q => q.or('mapping.is.null,mapping.eq.'),
                 'id'
             );
@@ -5889,7 +5882,7 @@ class App {
         try {
             const badRows = await fetchAll(
                 'transactions',
-                'reference_number, payment_date, student_id, id_status, item_name, item_price, mapping, second_mapping',
+                'id, reference_number, payment_date, student_id, id_status, item_name, item_price, mapping, second_mapping',
                 q => q.neq('id_status', 'Valid').neq('id_status', 'Exempt'),
                 'id'
             );
@@ -6756,17 +6749,12 @@ class App {
         if (window.lucide) lucide.createIcons();
         
         try {
-            let allData = [];
-            let from = 0;
-            let fetchMore = true;
-            while(fetchMore) {
-                const { data, error } = await supabase.from('transactions').select('id, reference_number, item_price, item_name, check_column, erp_batch_number, is_settled').order('id').range(from, from + 999);
-                if (error) throw error;
-                if (!data || data.length === 0) break;
-                allData = allData.concat(data);
-                if (data.length < 1000) fetchMore = false;
-                else from += 1000;
-            }
+            const allData = await fetchAll(
+                'transactions',
+                'id, reference_number, item_price, item_name, check_column, erp_batch_number, is_settled',
+                null,
+                'id'
+            );
             
             const grouped = {};
             for (const tx of allData) {

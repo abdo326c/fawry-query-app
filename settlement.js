@@ -1256,25 +1256,68 @@ class SettlementProcessor {
         }
     }
 
-    // Runs a query repeatedly with .range() until every row is fetched (Supabase returns max 1,000 per request)
+    // Runs a query repeatedly until every row is fetched, preferring O(N) keyset pagination on `id`
     async fetchAllPages(buildQuery, pageSize = 1000) {
-        const fetchPage = async (from) => {
-            const { data, error } = await buildQuery().order('id').range(from, from + pageSize - 1);
-            if (error) throw error;
-            return data || [];
+        const isTimeoutError = (err) => {
+            const msg = String(err?.message || err?.details || err || '').toLowerCase();
+            return err?.code === '57014' || msg.includes('statement timeout') || msg.includes('canceling statement');
         };
 
-        const firstPage = await fetchPage(0);
-        if (firstPage.length < pageSize) return firstPage;
+        const runAdaptive = async (makeQuery, startLimit) => {
+            let limit = startLimit;
+            while (true) {
+                const { data, error } = await makeQuery(limit);
+                if (!error) return { rows: data || [], limitUsed: limit };
+                if (isTimeoutError(error) && limit > 200) {
+                    limit = Math.max(200, Math.floor(limit / 2));
+                    continue;
+                }
+                throw error;
+            }
+        };
+
+        const { rows: firstPage, limitUsed: firstLimit } = await runAdaptive(
+            (limit) => buildQuery().order('id', { ascending: true }).range(0, limit - 1),
+            pageSize
+        );
+        if (firstPage.length < firstLimit) return firstPage;
 
         const all = firstPage.slice();
-        let from = pageSize;
-        const BATCH_PAGES = 8;
+        let activeLimit = firstLimit;
+        const firstCursor = firstPage[firstPage.length - 1]?.id;
+        const canKeyset = firstCursor !== undefined && firstCursor !== null && typeof buildQuery()?.gt === 'function';
 
+        if (canKeyset) {
+            let cursor = firstCursor;
+            while (true) {
+                const { rows: page, limitUsed } = await runAdaptive(
+                    (limit) => buildQuery().gt('id', cursor).order('id', { ascending: true }).range(0, limit - 1),
+                    activeLimit
+                );
+                activeLimit = limitUsed;
+                if (!page || page.length === 0) break;
+                for (let i = 0; i < page.length; i++) all.push(page[i]);
+                if (page.length < limitUsed) break;
+                const nextCursor = page[page.length - 1]?.id;
+                if (nextCursor === undefined || nextCursor === null || nextCursor === cursor) break;
+                cursor = nextCursor;
+            }
+            return all;
+        }
+
+        let from = firstPage.length;
+        const BATCH_PAGES = 2;
         while (true) {
             const batchPromises = [];
             for (let p = 0; p < BATCH_PAGES; p++) {
-                batchPromises.push(fetchPage(from + p * pageSize));
+                const offset = from + p * activeLimit;
+                batchPromises.push(
+                    buildQuery().order('id', { ascending: true }).range(offset, offset + activeLimit - 1)
+                        .then(({ data, error }) => {
+                            if (error) throw error;
+                            return data || [];
+                        })
+                );
             }
             const pages = await Promise.all(batchPromises);
             let done = false;
@@ -1284,13 +1327,13 @@ class SettlementProcessor {
                     break;
                 }
                 for (let i = 0; i < page.length; i++) all.push(page[i]);
-                if (page.length < pageSize) {
+                if (page.length < activeLimit) {
                     done = true;
                     break;
                 }
             }
             if (done) break;
-            from += BATCH_PAGES * pageSize;
+            from += BATCH_PAGES * activeLimit;
         }
         return all;
     }
