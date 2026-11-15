@@ -33,7 +33,7 @@ import {
     mergeStudentEmails,
     getStudentDisplayEmails,
     writeCompressedExcel
-} from './rules.js?v=2.6.5';
+} from './rules.js?v=2.6.6';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -4971,7 +4971,7 @@ class App {
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
                 
                 // Trigger download
-                writeCompressedExcel(workbook, `Fawry_Query_Export_${toDateOnly(new Date())}.xlsx`);
+                await writeCompressedExcel(workbook, `Fawry_Query_Export_${toDateOnly(new Date())}.xlsx`);
 
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
@@ -6253,7 +6253,7 @@ class App {
                 ];
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Students");
-                writeCompressedExcel(wb, `Student_Master_Export_${toDateOnly(new Date())}.xlsx`);
+                await writeCompressedExcel(wb, `Student_Master_Export_${toDateOnly(new Date())}.xlsx`);
                 Toast.show(`Exported ${rows.length.toLocaleString()} students`, "success");
 
                 btn.innerHTML = oldHtml;

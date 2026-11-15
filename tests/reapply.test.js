@@ -25,6 +25,8 @@ const {
     updateRuleFields,
     fetchAll,
     buildMappingLookup,
+    pruneEmptyWorksheetCells,
+    buildNativeZip,
     RULE_FIELDS
 } = await import('../rules.js');
 
@@ -285,4 +287,59 @@ test('fetchAll uses get_keyset_bounds RPC for parallel O(N) chunked fetches when
         supabase.from = origFrom;
         supabase.rpc = origRpc;
     }
+});
+
+test('pruneEmptyWorksheetCells deletes empty unstyled data cells while preserving headers, values, and styles', () => {
+    const wb = {
+        SheetNames: ['Fawry Query'],
+        Sheets: {
+            'Fawry Query': {
+                '!ref': 'A1:C3',
+                A1: { t: 's', v: 'Ref' },
+                B1: { t: 's', v: '' }, // Row 1 header slot preserved
+                A2: { t: 's', v: '1001' },
+                B2: { t: 's', v: '' }, // Empty data cell pruned
+                C2: { t: 's', v: '', s: { font: { bold: true } } }, // Styled empty cell preserved
+                A3: { t: 'n', v: 0 }, // Numeric 0 preserved
+                B3: { t: 's', v: '', f: 'A2' } // Formula cell preserved
+            }
+        }
+    };
+    pruneEmptyWorksheetCells(wb);
+    const ws = wb.Sheets['Fawry Query'];
+    expect(ws.A1).toBeDefined();
+    expect(ws.B1).toBeDefined();
+    expect(ws.A2).toBeDefined();
+    expect(ws.B2).toBeUndefined();
+    expect(ws.C2).toBeDefined();
+    expect(ws.A3).toEqual({ t: 'n', v: 0 });
+    expect(ws.B3).toBeDefined();
+});
+
+test('buildNativeZip produces a valid DEFLATE PKZIP archive that shrinks repetitive XML data', async () => {
+    const sampleXml = '<sheetData>' + '<row r="1"><c r="A1" t="s"><v>1</v></c><c r="B1" t="s"><v>2</v></c></row>'.repeat(200) + '</sheetData>';
+    const rawBytes = new TextEncoder().encode(sampleXml);
+    const zip = await buildNativeZip([{ name: 'xl/worksheets/sheet1.xml', data: rawBytes }]);
+
+    // Valid PKZIP Local File Header & End of Central Directory signatures
+    expect(zip[0]).toBe(0x50);
+    expect(zip[1]).toBe(0x4b);
+    expect(zip[2]).toBe(0x03);
+    expect(zip[3]).toBe(0x04);
+    expect(zip.length).toBeLessThan(rawBytes.length / 5);
+
+    // Inflate first entry payload directly to verify lossless roundtrip
+    const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    const method = dv.getUint16(8, true);
+    const compSize = dv.getUint32(18, true);
+    const nameLen = dv.getUint16(26, true);
+    const extraLen = dv.getUint16(28, true);
+    expect(method).toBe(8);
+    const compressedSlice = zip.subarray(30 + nameLen + extraLen, 30 + nameLen + extraLen + compSize);
+    const ds = new DecompressionStream('deflate-raw');
+    const w = ds.writable.getWriter();
+    w.write(compressedSlice);
+    w.close();
+    const restored = new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
+    expect(restored).toBe(sampleXml);
 });
