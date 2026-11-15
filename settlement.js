@@ -409,7 +409,7 @@ class SettlementProcessor {
                     slice.map(chunk =>
                         this.fetchAllPages(() => this.supabase
                             .from('transactions')
-                            .select('id, reference_number, payment_date, item_price, student_id, bank, is_settled, settlement_batch')
+                            .select('id, reference_number, payment_date, item_price, student_id, student_level, bank, is_settled, settlement_batch')
                             .in('reference_number', chunk))
                     )
                 );
@@ -433,7 +433,7 @@ class SettlementProcessor {
             try {
                 dateTx = await this.fetchAllPages(() => this.supabase
                     .from('transactions')
-                    .select('id, reference_number, payment_date, item_price, student_id, bank, is_settled, settlement_batch')
+                    .select('id, reference_number, payment_date, item_price, student_id, student_level, bank, is_settled, settlement_batch')
                     .in('bank', bankArray)
                     .gte('payment_date', minTrxDateStr)
                     .lte('payment_date', maxTrxDateStr));
@@ -458,6 +458,7 @@ class SettlementProcessor {
                     payment_date: cleanTxDate,
                     bank: tx.bank || '',
                     student_id: tx.student_id || '',
+                    student_level: tx.student_level || null,
                     item_price: 0,
                     is_settled: !!tx.is_settled,
                     settlement_batch: tx.settlement_batch || null,
@@ -469,6 +470,7 @@ class SettlementProcessor {
             dbGrouped[ref].is_settled = dbGrouped[ref].is_settled && !!tx.is_settled;
             if (!dbGrouped[ref].bank && tx.bank) dbGrouped[ref].bank = tx.bank;
             if (!dbGrouped[ref].student_id && tx.student_id) dbGrouped[ref].student_id = tx.student_id;
+            if (!dbGrouped[ref].student_level && tx.student_level) dbGrouped[ref].student_level = tx.student_level;
             if (!dbGrouped[ref].settlement_batch && tx.settlement_batch) dbGrouped[ref].settlement_batch = tx.settlement_batch;
             dbGrouped[ref].items.push(tx);
         }
@@ -493,6 +495,7 @@ class SettlementProcessor {
                     status: isMatched ? 'Matched' : 'Amount Mismatch',
                     bank: dData.bank || (detectedBanks.size === 1 ? Array.from(detectedBanks)[0] : ''),
                     student_id: dData.student_id || '',
+                    student_level: dData.student_level || null,
                     sys_amount: sysAmt,
                     stl_amount: stlAmt,
                     variance: variance,
@@ -541,6 +544,7 @@ class SettlementProcessor {
                         status: 'Missing in Settlement',
                         bank: dData.bank || '',
                         student_id: dData.student_id || '',
+                        student_level: dData.student_level || null,
                         sys_amount: dData.item_price,
                         stl_amount: 0,
                         variance: Math.round((0 - dData.item_price) * 100) / 100,
@@ -882,9 +886,13 @@ class SettlementProcessor {
             "Status": r.status,
             "Bank": r.bank || '',
             "Student ID": r.student_id || '',
-            "Level": (window.app && typeof window.app.getStudentLevelLabelBySid === 'function')
-                ? window.app.getStudentLevelLabelBySid(r.student_id)
-                : '',
+            "Level": (window.app && typeof window.app.getTransactionStudentLevel === 'function')
+                ? ((lvl) => lvl ? `(${lvl})` : '')(window.app.getTransactionStudentLevel(r))
+                : ((r.student_level === 'UG' || r.student_level === 'PG')
+                    ? `(${r.student_level})`
+                    : ((window.app && typeof window.app.getStudentLevelLabelBySid === 'function')
+                        ? window.app.getStudentLevelLabelBySid(r.student_id)
+                        : '')),
             "System Amount (EGP)": Number(r.sys_amount || 0),
             "Settlement Amount (EGP)": Number(r.stl_amount || 0),
             "Variance (Stl - Sys)": Number(r.variance ?? (Number(r.stl_amount || 0) - Number(r.sys_amount || 0))),

@@ -1045,7 +1045,7 @@ class App {
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
-                            await loadScriptOnce('./settlement.js?v=2.5.3');
+                            await loadScriptOnce('./settlement.js?v=2.5.4');
                         }
                         if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
                             window.settlementApp = new window.SettlementProcessor(supabase);
@@ -4736,6 +4736,8 @@ class App {
         }
         const candidates = new Set();
         for (const r of (rows || [])) {
+            const stored = typeof r?.student_level === 'string' ? r.student_level.trim().toUpperCase() : '';
+            if (stored === 'UG' || stored === 'PG') continue;
             const raw = r?.student_id ? String(r.student_id).trim() : '';
             if (!raw || raw === 'Empty' || raw === 'Missing' || raw === 'Missing ID' || /^dip\d+/i.test(raw)) continue;
             if (this.studentMasterByIdMap?.has(raw)) continue;
@@ -4821,6 +4823,8 @@ class App {
 
     getTransactionStudentLevel(tx) {
         if (!tx) return '';
+        const stored = typeof tx.student_level === 'string' ? tx.student_level.trim().toUpperCase() : '';
+        if (stored === 'UG' || stored === 'PG') return stored;
         if (tx.student_id) {
             const bySid = this.getStudentLevelBySid(tx.student_id);
             if (bySid) return bySid;
@@ -4850,7 +4854,7 @@ class App {
             btn.disabled = true;
 
             try {
-                const exportCols = 'id, reference_number, payment_date, student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
+                const exportCols = 'id, reference_number, payment_date, student_id, student_level, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
                 const allData = await fetchAll(
                     'transactions',
                     exportCols,
@@ -4876,21 +4880,20 @@ class App {
                     return (Number(a.id) || 0) - (Number(b.id) || 0);
                 });
 
-                // Resolve missing student (UG)/(PG) levels without running a concurrent full-table scan
+                // student_level is persisted directly on transactions via DB triggers;
+                // only resolve legacy/unpersisted rows lacking the column.
                 this.syncStudentMasterMapFromCache();
-                const missingSids = new Set();
+                const legacyRows = [];
                 for (let i = 0; i < allData.length; i++) {
-                    const raw = allData[i]?.student_id ? String(allData[i].student_id).trim() : '';
+                    const t = allData[i];
+                    if (t && Object.prototype.hasOwnProperty.call(t, 'student_level')) continue;
+                    const raw = t?.student_id ? String(t.student_id).trim() : '';
                     if (!raw || raw === 'Empty' || raw === 'Missing' || raw === 'Missing ID' || /^dip\d+/i.test(raw)) continue;
-                    if (!this.lookupStudentBySid(raw)) missingSids.add(raw);
+                    if (!this.lookupStudentBySid(raw)) legacyRows.push(t);
                 }
-                if (missingSids.size > 0) {
+                if (legacyRows.length > 0) {
                     btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Resolving student levels...`;
-                    if (missingSids.size <= 1500) {
-                        await this.ensureStudentLevelsForRows(allData);
-                    } else {
-                        await this.ensureStudentLevelMap();
-                    }
+                    await this.ensureStudentLevelsForRows(legacyRows);
                 }
 
                 btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Building Excel (${allData.length.toLocaleString()})...`;
@@ -5031,7 +5034,10 @@ class App {
             .range(fromRange, toRange);
 
         if (!error && Array.isArray(data) && data.length > 0) {
-            await this.ensureStudentLevelsForRows(data);
+            const legacyRows = data.filter(r => r && !Object.prototype.hasOwnProperty.call(r, 'student_level'));
+            if (legacyRows.length > 0) {
+                await this.ensureStudentLevelsForRows(legacyRows);
+            }
         }
 
         // A newer request was started while this one was running – ignore this (stale) result
@@ -11743,11 +11749,13 @@ class App {
         let desc = String(r.description ?? r.item_name ?? '');
         if (/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(desc)) desc = desc.normalize('NFKC');
         let studentId = r.student_id || '';
+        const origStudentId = String(studentId).trim();
         let matchedName = String(r.matched_student_name || '');
         if (/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(matchedName)) matchedName = matchedName.normalize('NFKC');
         let matchSource = r.match_source || (studentId ? 'statement_id' : 'unmatched');
         let mapping = r.mapping || DEFAULT_FOREIGN_MAPPING;
         let secondMapping = r.second_mapping || '';
+        let studentIdOverridden = false;
 
         // Check Manual Fixes table (this.allFixesData) in O(1) via cached Map
         const fixesMap = this.getFixesByRefMap();
@@ -11757,7 +11765,9 @@ class App {
             const fix = (refLower ? fixesMap.get(refLower) : null) || (txRefLower ? fixesMap.get(txRefLower) : null);
             if (fix) {
                 if (fix.correct_id && String(fix.correct_id).trim()) {
-                    studentId = String(fix.correct_id).trim();
+                    const nextId = String(fix.correct_id).trim();
+                    if (nextId !== origStudentId) studentIdOverridden = true;
+                    studentId = nextId;
                     matchSource = 'manual';
                 }
                 if (fix.item_name && String(fix.item_name).trim()) {
@@ -11772,8 +11782,16 @@ class App {
             }
         }
 
+        const storedLevel = typeof r.student_level === 'string' ? r.student_level.trim().toUpperCase() : '';
+        const hasPersistedLevelProp = Object.prototype.hasOwnProperty.call(r, 'student_level');
+        const resolvedLevel = studentIdOverridden
+            ? (this.getStudentLevelBySid(studentId) || undefined)
+            : ((storedLevel === 'UG' || storedLevel === 'PG')
+                ? storedLevel
+                : (this.getStudentLevelBySid(studentId) || (hasPersistedLevelProp ? null : undefined)));
+
         const idStatus = studentId ? validateID(studentId) : 'Missing ID';
-        return {
+        const out = {
             ...r,
             _uid: r._uid || `${ref}_${effectiveDate}_${amount}_${idx}`,
             reference_number: ref,
@@ -11792,6 +11810,12 @@ class App {
             match_source: matchSource,
             check_column: r.check_column || `${ref}-${String(desc).trim()}`
         };
+        if (resolvedLevel !== undefined) {
+            out.student_level = resolvedLevel;
+        } else if (studentIdOverridden) {
+            delete out.student_level;
+        }
+        return out;
     }
 
     toForeignDbRow(r) {
@@ -11809,6 +11833,7 @@ class App {
             currency: norm.currency ? String(norm.currency).trim() : 'USD',
             account_number: norm.account_number ? String(norm.account_number).trim() : null,
             student_id: norm.student_id ? String(norm.student_id).trim() : null,
+            student_level: this.getTransactionStudentLevel(norm) || null,
             extracted_name: norm.extracted_name || null,
             matched_student_name: norm.matched_student_name || null,
             handler_name: norm.handler_name || null,
@@ -12246,9 +12271,14 @@ class App {
                 data.forEach(r => byRef.set(r.reference_number, r));
                 this.foreignTransactions = [...byRef.values()].map((r, i) => this.normalizeForeignTransactionRow(r, i));
 
-                // Fetch only the student levels needed for these rows instead of downloading all 22k+ students
-                await this.ensureStudentLevelsForRows(this.foreignTransactions);
-                if (requestId !== this._fxLoadRequestId) return;
+                // Resolve student_level only for rows missing a persisted DB student_level
+                const legacyForeignRows = this.foreignTransactions.filter(
+                    r => r && !Object.prototype.hasOwnProperty.call(r, 'student_level')
+                );
+                if (legacyForeignRows.length > 0) {
+                    await this.ensureStudentLevelsForRows(legacyForeignRows);
+                    if (requestId !== this._fxLoadRequestId) return;
+                }
 
                 this.persistForeignTransactionsLocal();
 
@@ -12262,9 +12292,14 @@ class App {
                         .catch(() => {});
                 }
             } else if (Array.isArray(this.foreignTransactions)) {
-                await this.ensureStudentLevelsForRows(this.foreignTransactions);
-                if (requestId !== this._fxLoadRequestId) return;
                 this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
+                const legacyForeignRows = this.foreignTransactions.filter(
+                    r => r && !Object.prototype.hasOwnProperty.call(r, 'student_level')
+                );
+                if (legacyForeignRows.length > 0) {
+                    await this.ensureStudentLevelsForRows(legacyForeignRows);
+                    if (requestId !== this._fxLoadRequestId) return;
+                }
             }
             this.markTabLoaded('foreign-transactions');
         } catch (_e) {

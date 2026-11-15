@@ -1605,4 +1605,161 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             window.app.foreignTransactions = origForeign;
         }
     }
+
+    // 20. getTransactionStudentLevel prefers persisted tx.student_level and loadTransactions/loadForeignTransactions skip student_master queries
+    {
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const origAllStudents = window.app.allStudents;
+        const origAllStudentsData = window.app.allStudentsData;
+        const origMap = window.app.studentMasterByIdMap;
+        const origFixes = window.app.allFixesData;
+        const origForeign = window.app.foreignTransactions;
+
+        try {
+            window.app.allStudents = [];
+            window.app.allStudentsData = [];
+            window.app.studentMasterByIdMap = new Map();
+            window.app._sidLevelCache = new Map();
+            window.app.allFixesData = [];
+            window.app.foreignTransactions = [];
+
+            expect(window.app.getTransactionStudentLevel({ student_id: '241001234', student_level: 'PG' })).toBe('PG');
+            expect(window.app.getTransactionStudentLevel({ student_id: '251009999', student_level: 'ug' })).toBe('UG');
+
+            const queriedTables = [];
+            supabase.from = vi.fn((table) => {
+                queriedTables.push(table);
+                if (table === 'foreign_transactions') {
+                    return {
+                        select: vi.fn().mockReturnThis(),
+                        order: vi.fn().mockReturnThis(),
+                        range: vi.fn().mockResolvedValue({
+                            data: [
+                                { id: 10, reference_number: 'FX_PERSISTED_1', value_date: '2026-11-15', amount: 500, currency: 'USD', description: 'Tuition', student_id: '241009999', student_level: 'PG' },
+                                { id: 11, reference_number: 'FX_PERSISTED_2', value_date: '2026-11-15', amount: 250, currency: 'USD', description: 'Unmatched', student_id: null, student_level: null }
+                            ],
+                            error: null
+                        })
+                    };
+                }
+                if (table === 'transactions') {
+                    return {
+                        select: vi.fn().mockReturnThis(),
+                        order: vi.fn().mockReturnThis(),
+                        range: vi.fn().mockResolvedValue({
+                            data: [
+                                { id: 100, reference_number: 'TX_PERSISTED_1', payment_date: '2026-11-15', student_id: '241009999', student_level: 'UG', item_price: 1000, item_name: 'Tuition', bank: 'NUADCB136', id_status: 'Valid' }
+                            ],
+                            count: 1,
+                            error: null
+                        })
+                    };
+                }
+                return { select: vi.fn().mockReturnThis(), in: vi.fn().mockResolvedValue({ data: [], error: null }) };
+            });
+
+            await window.app.loadForeignTransactions();
+            await window.app.loadTransactions();
+
+            expect(queriedTables).toContain('foreign_transactions');
+            expect(queriedTables).toContain('transactions');
+            expect(queriedTables).not.toContain('student_master');
+            expect(window.app.getTransactionStudentLevel(window.app.foreignTransactions[0])).toBe('PG');
+        } finally {
+            supabase.from = origFrom;
+            window.app.allStudents = origAllStudents;
+            window.app.allStudentsData = origAllStudentsData;
+            window.app.studentMasterByIdMap = origMap;
+            window.app.allFixesData = origFixes;
+            window.app.foreignTransactions = origForeign;
+        }
+    }
+
+    // 21. Fawry Export (btn-export) selects persisted student_level and runs zero student_master queries
+    {
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const origRpc = supabase.rpc;
+        const origXLSX = globalThis.XLSX;
+        const origAllStudents = window.app.allStudents;
+        const origAllStudentsData = window.app.allStudentsData;
+        const origMap = window.app.studentMasterByIdMap;
+        const origEnsureMap = window.app.ensureStudentLevelMap;
+
+        const exportBtn = document.getElementById('btn-export');
+        expect(exportBtn).toBeTruthy();
+
+        let capturedSheetRows = null;
+        try {
+            window.app.allStudents = [];
+            window.app.allStudentsData = [];
+            window.app.studentMasterByIdMap = new Map();
+            window.app._sidLevelCache = new Map();
+
+            const fullDirectorySpy = vi.fn().mockRejectedValue(new Error('Should not query student_master during export'));
+            window.app.ensureStudentLevelMap = fullDirectorySpy;
+
+            let resolveExportDone;
+            const exportDone = new Promise(resolve => { resolveExportDone = resolve; });
+
+            globalThis.XLSX = {
+                utils: {
+                    json_to_sheet: vi.fn((rows) => {
+                        capturedSheetRows = rows;
+                        return { '!ref': 'A1:B2' };
+                    }),
+                    book_new: vi.fn(() => ({})),
+                    book_append_sheet: vi.fn()
+                },
+                writeFile: vi.fn(() => { resolveExportDone(); })
+            };
+
+            const selectCols = [];
+            const queriedTables = [];
+            const rows = [
+                { id: 1, reference_number: 'EX1', payment_date: '2026-11-15', student_id: '241001111', student_level: 'UG', customer_mobile: '', total_amount: 100, net_amount: 99, fawry_fees: 1, payment_status: 'PAID', item_name: 'Fee', item_price: 100, mapping: 'Tuition', second_mapping: '', is_settled: true, settlement_batch: 'B1', merchant_name: 'NU', bank: 'NUADCB136', check_column: 'EX1-Fee', id_status: 'Valid' },
+                { id: 2, reference_number: 'EX2', payment_date: '2026-11-15', student_id: '241002222', student_level: 'PG', customer_mobile: '', total_amount: 200, net_amount: 198, fawry_fees: 2, payment_status: 'PAID', item_name: 'Fee', item_price: 200, mapping: 'Tuition', second_mapping: '', is_settled: false, settlement_batch: '', merchant_name: 'NU', bank: 'NUADCB136', check_column: 'EX2-Fee', id_status: 'Valid' },
+                { id: 3, reference_number: 'EX3', payment_date: '2026-11-15', student_id: '999999999', student_level: null, customer_mobile: '', total_amount: 50, net_amount: 49, fawry_fees: 1, payment_status: 'PAID', item_name: 'Fee', item_price: 50, mapping: 'Tuition', second_mapping: '', is_settled: false, settlement_batch: '', merchant_name: 'NU', bank: 'NUADCB136', check_column: 'EX3-Fee', id_status: 'Valid' }
+            ];
+
+            supabase.rpc = vi.fn(async () => ({ data: [{ chunk_idx: 0, min_key: '1', max_key: '3' }], error: null }));
+            supabase.from = vi.fn((table) => {
+                queriedTables.push(table);
+                if (table === 'transactions') {
+                    const result = { data: rows, error: null };
+                    const builder = {
+                        select: vi.fn((cols) => { selectCols.push(cols); return builder; }),
+                        gte: vi.fn(() => builder),
+                        lte: vi.fn(() => builder),
+                        gt: vi.fn(() => builder),
+                        lt: vi.fn(() => builder),
+                        eq: vi.fn(() => builder),
+                        order: vi.fn(() => builder),
+                        limit: vi.fn(() => Promise.resolve(result)),
+                        range: vi.fn(() => Promise.resolve(result))
+                    };
+                    return builder;
+                }
+                return { select: vi.fn().mockReturnThis(), in: vi.fn().mockResolvedValue({ data: [], error: null }) };
+            });
+
+            exportBtn.click();
+            await exportDone;
+
+            expect(fullDirectorySpy).not.toHaveBeenCalled();
+            expect(queriedTables).not.toContain('student_master');
+            expect(selectCols.some(c => typeof c === 'string' && c.includes('student_level'))).toBe(true);
+            expect(capturedSheetRows).toHaveLength(3);
+            expect(capturedSheetRows.map(r => r.Level)).toEqual(['(UG)', '(PG)', '']);
+        } finally {
+            supabase.from = origFrom;
+            supabase.rpc = origRpc;
+            globalThis.XLSX = origXLSX;
+            window.app.allStudents = origAllStudents;
+            window.app.allStudentsData = origAllStudentsData;
+            window.app.studentMasterByIdMap = origMap;
+            window.app.ensureStudentLevelMap = origEnsureMap;
+        }
+    }
 });
