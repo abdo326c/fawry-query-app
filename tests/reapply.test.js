@@ -279,6 +279,8 @@ test('fetchAll uses get_keyset_bounds RPC for parallel O(N) chunked fetches when
         expect(rangeCalls.some(c => c.gteVal === 1001 && c.lteVal === 2000)).toBe(true);
         expect(rangeCalls.some(c => c.gteVal === 2001 && c.lteVal === 3000)).toBe(true);
         expect(rangeCalls.some(c => c.gteVal === 3001 && c.lteVal === 3200)).toBe(true);
+        expect(rangeCalls.filter(c => c.gtVal !== null)).toHaveLength(0); // No redundant 2nd query when bucket ends at max_val
+        expect(rangeCalls).toHaveLength(4); // 1 firstPage + 3 single-shot buckets
     } finally {
         supabase.from = origFrom;
         supabase.rpc = origRpc;

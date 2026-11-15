@@ -32,7 +32,7 @@ import {
     classifyStudentEmails,
     mergeStudentEmails,
     getStudentDisplayEmails
-} from './rules.js?v=2.6.3';
+} from './rules.js?v=2.6.4';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -4667,13 +4667,24 @@ class App {
         return this.studentMasterByIdMap;
     }
 
-    async ensureFullStudentMaster({ forceReload = false } = {}) {
+    async ensureFullStudentMaster({ forceReload = false, onProgress = null } = {}) {
         if (!forceReload && Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
             this.syncStudentMasterMapFromCache();
             return this.allStudentsData;
         }
+        if (typeof onProgress === 'function') {
+            if (!this._studentMasterProgressListeners) this._studentMasterProgressListeners = new Set();
+            this._studentMasterProgressListeners.add(onProgress);
+            if (Array.isArray(this._partialStudentsPreview) && this._partialStudentsPreview.length > 0) {
+                try { onProgress(this._partialStudentsLoadedCount || this._partialStudentsPreview.length, this._partialStudentsPreview); } catch (_e) {}
+            }
+        }
         if (!forceReload && this._fullStudentMasterPromise) {
-            return this._fullStudentMasterPromise;
+            try {
+                return await this._fullStudentMasterPromise;
+            } finally {
+                if (typeof onProgress === 'function') this._studentMasterProgressListeners?.delete(onProgress);
+            }
         }
         this._fullStudentMasterPromise = (async () => {
             try {
@@ -4681,7 +4692,20 @@ class App {
                     'student_master',
                     'student_id, full_name, arabic_name, national_id, email, personal_email, mobile, guardian_name, guardian_mobile, college, program, source',
                     null,
-                    'student_id'
+                    'student_id',
+                    {
+                        onProgress: (loaded, partialRows) => {
+                            if (Array.isArray(partialRows) && partialRows.length > 0 && !this._partialStudentsPreview) {
+                                this._partialStudentsPreview = partialRows.slice(0, 200).map(s => this.indexStudentRecord(s));
+                            }
+                            this._partialStudentsLoadedCount = loaded;
+                            if (this._studentMasterProgressListeners) {
+                                for (const fn of this._studentMasterProgressListeners) {
+                                    try { fn(loaded, this._partialStudentsPreview || partialRows); } catch (_e) {}
+                                }
+                            }
+                        }
+                    }
                 );
                 if (Array.isArray(data) && data.length > 0) {
                     this.allStudentsData = data.map(s => this.indexStudentRecord(s));
@@ -4692,6 +4716,9 @@ class App {
                 }
                 return this.allStudentsData || [];
             } finally {
+                this._partialStudentsPreview = null;
+                this._partialStudentsLoadedCount = 0;
+                if (this._studentMasterProgressListeners) this._studentMasterProgressListeners.clear();
                 this._fullStudentMasterPromise = null;
             }
         })();
@@ -9790,22 +9817,7 @@ class App {
         s._sourceLower = String(s.source || '').toLowerCase();
         s._level = getStudentProgramLevel(s);
         s._levelTag = formatStudentLevelTag(s._level);
-        s._searchHaystack = [
-            sid,
-            s._normSid,
-            s._level,
-            s._levelTag,
-            s.full_name,
-            s.arabic_name,
-            s.email,
-            s.personal_email,
-            s.mobile,
-            s.guardian_mobile,
-            s.guardian_name,
-            s.national_id,
-            s.college,
-            s.program
-        ].filter(Boolean).join('\n').toLowerCase();
+        s._searchHaystack = `${sid}\n${s._normSid}\n${s._level}\n${s._levelTag}\n${s.full_name || ''}\n${s.arabic_name || ''}\n${s.email || ''}\n${s.personal_email || ''}\n${s.mobile || ''}\n${s.guardian_mobile || ''}\n${s.guardian_name || ''}\n${s.national_id || ''}\n${s.college || ''}\n${s.program || ''}`.toLowerCase();
         return s;
     }
 
@@ -9813,11 +9825,30 @@ class App {
         const tbody = document.getElementById('students-table-body');
         try {
             if (!this.allStudentsData || forceReload) {
+                const termRawInit = (document.getElementById('student-search-input')?.value || '').trim();
+                const collegeInit = document.getElementById('student-filter-college')?.value || '';
+                const sourceInit = document.getElementById('student-filter-source')?.value || '';
+                const canRenderPreview = !termRawInit && !collegeInit && !sourceInit && (this.studentsCurrentPage || 1) === 1;
+                let previewRendered = false;
+
                 if (tbody) {
                     tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i data-lucide="loader" class="spin" style="width:36px;height:36px;opacity:0.6;"></i><h3>Loading student directory...</h3></div></td></tr>';
                     renderIcons(tbody);
                 }
-                await this.ensureFullStudentMaster({ forceReload });
+                await this.ensureFullStudentMaster({
+                    forceReload,
+                    onProgress: (loaded, previewRows) => {
+                        const totalEl = document.getElementById('students-stat-total');
+                        if (totalEl && !this.allStudentsData) {
+                            totalEl.textContent = `${loaded.toLocaleString()}...`;
+                        }
+                        if (canRenderPreview && !previewRendered && Array.isArray(previewRows) && previewRows.length > 0) {
+                            previewRendered = true;
+                            this.filteredStudentsData = previewRows;
+                            this.renderStudentsPage();
+                        }
+                    }
+                });
                 this.updateStudentsStatsAndDropdowns();
             }
             this.markTabLoaded('student-master');

@@ -268,7 +268,7 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
     );
     const allData = firstPage.slice();
     if (typeof onProgress === 'function' && allData.length > 0) {
-        onProgress(allData.length);
+        onProgress(allData.length, allData);
     }
     if (firstPage.length < firstLimit) return allData;
 
@@ -294,12 +294,13 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
                     if (bounds.length === 0) return allData;
                     const numericCursor = typeof sampleCursor === 'number' && Number.isFinite(sampleCursor);
                     const coerceBound = (val) => (numericCursor ? Number(val) : val);
-                    const PARALLEL_CHUNKS = 8;
+                    const PARALLEL_CHUNKS = 12;
                     let loadedCount = allData.length;
 
                     const fetchBoundRange = async (bound) => {
                         const loVal = coerceBound(bound.min_val);
                         const hiVal = coerceBound(bound.max_val);
+                        const hiValStr = String(hiVal);
                         const bucketRows = [];
                         let bucketCursor = null;
                         let localLimit = activeLimit;
@@ -319,11 +320,11 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
                             for (let i = 0; i < page.length; i++) bucketRows.push(page[i]);
                             if (page.length < limitUsed) break;
                             const nextC = page[page.length - 1]?.[orderByCol];
-                            if (nextC === undefined || nextC === null || nextC === bucketCursor) break;
+                            if (nextC === undefined || nextC === null || nextC === bucketCursor || String(nextC) === hiValStr) break;
                             bucketCursor = nextC;
                         }
                         loadedCount += bucketRows.length;
-                        if (typeof onProgress === 'function') onProgress(loadedCount);
+                        if (typeof onProgress === 'function') onProgress(loadedCount, allData);
                         return bucketRows;
                     };
 
