@@ -278,6 +278,69 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
     const canKeyset = sampleCursor !== undefined && sampleCursor !== null && typeof probeQuery?.gt === 'function';
 
     if (canKeyset) {
+        const canParallelKeyset = typeof supabase.rpc === 'function'
+            && typeof probeQuery?.gte === 'function'
+            && typeof probeQuery?.lte === 'function';
+
+        if (canParallelKeyset) {
+            try {
+                const { data: bounds, error: bErr } = await supabase.rpc('get_keyset_bounds', {
+                    p_table: table,
+                    p_col: orderByCol,
+                    p_chunk_size: activeLimit,
+                    p_after: String(sampleCursor)
+                });
+                if (!bErr && Array.isArray(bounds)) {
+                    if (bounds.length === 0) return allData;
+                    const numericCursor = typeof sampleCursor === 'number' && Number.isFinite(sampleCursor);
+                    const coerceBound = (val) => (numericCursor ? Number(val) : val);
+                    const PARALLEL_CHUNKS = 8;
+                    let loadedCount = allData.length;
+
+                    const fetchBoundRange = async (bound) => {
+                        const loVal = coerceBound(bound.min_val);
+                        const hiVal = coerceBound(bound.max_val);
+                        const bucketRows = [];
+                        let bucketCursor = null;
+                        let localLimit = activeLimit;
+                        while (true) {
+                            const { rows: page, limitUsed } = await runAdaptivePage(
+                                (limit) => {
+                                    let q = buildQuery();
+                                    q = bucketCursor === null
+                                        ? q.gte(orderByCol, loVal).lte(orderByCol, hiVal)
+                                        : q.gt(orderByCol, bucketCursor).lte(orderByCol, hiVal);
+                                    return q.order(orderByCol, { ascending: true }).range(0, limit - 1);
+                                },
+                                localLimit
+                            );
+                            localLimit = limitUsed;
+                            if (!page || page.length === 0) break;
+                            for (let i = 0; i < page.length; i++) bucketRows.push(page[i]);
+                            if (page.length < limitUsed) break;
+                            const nextC = page[page.length - 1]?.[orderByCol];
+                            if (nextC === undefined || nextC === null || nextC === bucketCursor) break;
+                            bucketCursor = nextC;
+                        }
+                        loadedCount += bucketRows.length;
+                        if (typeof onProgress === 'function') onProgress(loadedCount);
+                        return bucketRows;
+                    };
+
+                    for (let i = 0; i < bounds.length; i += PARALLEL_CHUNKS) {
+                        const slice = bounds.slice(i, i + PARALLEL_CHUNKS);
+                        const chunkResults = await Promise.all(slice.map(b => fetchBoundRange(b)));
+                        for (const chunkRows of chunkResults) {
+                            for (let j = 0; j < chunkRows.length; j++) allData.push(chunkRows[j]);
+                        }
+                    }
+                    return allData;
+                }
+            } catch (_rpcErr) {
+                // Fallback seamlessly to sequential keyset below if RPC is unavailable
+            }
+        }
+
         let cursor = sampleCursor;
         while (true) {
             const { rows: page, limitUsed } = await runAdaptivePage(

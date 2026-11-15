@@ -226,3 +226,61 @@ test('fetchAll uses O(N) keyset pagination and shrinks pageSize on Postgres stat
         supabase.from = origFrom;
     }
 });
+
+test('fetchAll uses get_keyset_bounds RPC for parallel O(N) chunked fetches when available', async () => {
+    const origFrom = supabase.from;
+    const origRpc = supabase.rpc;
+    const totalRows = Array.from({ length: 3200 }, (_, idx) => ({ id: idx + 1 }));
+    const rangeCalls = [];
+
+    try {
+        supabase.rpc = vi.fn(async (fn, args) => {
+            if (fn === 'get_keyset_bounds') {
+                expect(args).toMatchObject({ p_table: 'transactions', p_col: 'id', p_chunk_size: 1000, p_after: '1000' });
+                return {
+                    data: [
+                        { chunk_idx: 0, min_val: '1001', max_val: '2000' },
+                        { chunk_idx: 1, min_val: '2001', max_val: '3000' },
+                        { chunk_idx: 2, min_val: '3001', max_val: '3200' }
+                    ],
+                    error: null
+                };
+            }
+            return { data: null, error: { message: 'unexpected rpc' } };
+        });
+
+        supabase.from = vi.fn(() => {
+            let gteVal = null;
+            let lteVal = null;
+            let gtVal = null;
+            const chain = {
+                select: vi.fn(() => chain),
+                gte: vi.fn((_c, v) => { gteVal = v; return chain; }),
+                lte: vi.fn((_c, v) => { lteVal = v; return chain; }),
+                gt: vi.fn((_c, v) => { gtVal = v; return chain; }),
+                order: vi.fn(() => chain),
+                range: vi.fn(async (from, to) => {
+                    rangeCalls.push({ gteVal, lteVal, gtVal, from, to });
+                    const filtered = totalRows.filter(r =>
+                        (gteVal == null || r.id >= gteVal) &&
+                        (lteVal == null || r.id <= lteVal) &&
+                        (gtVal == null || r.id > gtVal)
+                    );
+                    return { data: filtered.slice(from, to + 1), error: null };
+                })
+            };
+            return chain;
+        });
+
+        const rows = await fetchAll('transactions', 'id', null, 'id', { pageSize: 1000 });
+        expect(rows.length).toBe(3200);
+        expect(rows.map(r => r.id)).toEqual(totalRows.map(r => r.id));
+        expect(rangeCalls.every(c => c.from === 0)).toBe(true); // Zero OFFSET scans
+        expect(rangeCalls.some(c => c.gteVal === 1001 && c.lteVal === 2000)).toBe(true);
+        expect(rangeCalls.some(c => c.gteVal === 2001 && c.lteVal === 3000)).toBe(true);
+        expect(rangeCalls.some(c => c.gteVal === 3001 && c.lteVal === 3200)).toBe(true);
+    } finally {
+        supabase.from = origFrom;
+        supabase.rpc = origRpc;
+    }
+});

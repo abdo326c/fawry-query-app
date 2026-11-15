@@ -32,7 +32,7 @@ import {
     classifyStudentEmails,
     mergeStudentEmails,
     getStudentDisplayEmails
-} from './rules.js?v=2.6.2';
+} from './rules.js?v=2.6.3';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
