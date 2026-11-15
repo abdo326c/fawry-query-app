@@ -1530,4 +1530,79 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             window.app.loadStudents = origLoadStudents;
         }
     }
+
+    // 19. loadForeignTransactions loads scoped student levels without downloading full 22k+ directory and uses O(1) fix map
+    {
+        const { supabase } = await import('../supabase.js');
+        const origFrom = supabase.from;
+        const origEnsureMap = window.app.ensureStudentLevelMap;
+        const origAllStudents = window.app.allStudents;
+        const origAllStudentsData = window.app.allStudentsData;
+        const origMap = window.app.studentMasterByIdMap;
+        const origFixes = window.app.allFixesData;
+        const origForeign = window.app.foreignTransactions;
+
+        try {
+            window.app.allStudents = [];
+            window.app.allStudentsData = [];
+            window.app.studentMasterByIdMap = new Map();
+            window.app._sidLevelCache = new Map();
+            window.app.foreignTransactions = [];
+            window.app.foreignQuickFilter = 'all';
+            window.app.allFixesData = [
+                { reference_number: 'FX_FAST_1', correct_id: '241001234', mapping: 'Tuition' }
+            ];
+
+            const fullDirectorySpy = vi.fn().mockRejectedValue(new Error('Should not download entire student_master'));
+            window.app.ensureStudentLevelMap = fullDirectorySpy;
+
+            const queriedTables = [];
+            const studentInIds = [];
+            supabase.from = vi.fn((table) => {
+                queriedTables.push(table);
+                if (table === 'foreign_transactions') {
+                    return {
+                        select: vi.fn().mockReturnThis(),
+                        order: vi.fn().mockReturnThis(),
+                        range: vi.fn().mockResolvedValue({
+                            data: [
+                                { id: 1, reference_number: 'FX_FAST_1', value_date: '2026-11-15', amount: 1200, currency: 'USD', description: 'Wire', student_id: null }
+                            ],
+                            error: null
+                        })
+                    };
+                }
+                if (table === 'student_master') {
+                    return {
+                        select: vi.fn().mockReturnThis(),
+                        in: vi.fn(async (_col, ids) => {
+                            studentInIds.push(...ids);
+                            return {
+                                data: [{ student_id: '241001234', full_name: 'Fast Student', college: 'CS', program: '(UG) Undergraduate / Computer Science' }],
+                                error: null
+                            };
+                        })
+                    };
+                }
+                return { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: vi.fn().mockResolvedValue({ data: [], error: null }) };
+            });
+
+            await window.app.loadForeignTransactions();
+
+            expect(fullDirectorySpy).not.toHaveBeenCalled();
+            expect(queriedTables).toContain('foreign_transactions');
+            expect(studentInIds).toContain('241001234');
+            expect(window.app.foreignTransactions[0].student_id).toBe('241001234');
+            expect(window.app.foreignTransactions[0].mapping).toBe('Tuition');
+            expect(window.app.getTransactionStudentLevel(window.app.foreignTransactions[0])).toBe('UG');
+        } finally {
+            supabase.from = origFrom;
+            window.app.ensureStudentLevelMap = origEnsureMap;
+            window.app.allStudents = origAllStudents;
+            window.app.allStudentsData = origAllStudentsData;
+            window.app.studentMasterByIdMap = origMap;
+            window.app.allFixesData = origFixes;
+            window.app.foreignTransactions = origForeign;
+        }
+    }
 });

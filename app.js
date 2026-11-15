@@ -4743,13 +4743,16 @@ class App {
             const norm = this.normalizeStudentId ? this.normalizeStudentId(raw) : normalizeStudentIdValue(raw);
             if (norm) candidates.add(norm);
         }
-        if (candidates.size > 0 && candidates.size <= 200) {
+        if (candidates.size > 0) {
             try {
-                const { data, error } = await supabase
-                    .from('student_master')
-                    .select('student_id, full_name, college, program')
-                    .in('student_id', [...candidates]);
-                if (!error && Array.isArray(data) && data.length > 0) {
+                const candidateList = [...candidates];
+                const data = candidateList.length <= 200
+                    ? ((await supabase
+                        .from('student_master')
+                        .select('student_id, full_name, college, program')
+                        .in('student_id', candidateList)).data || [])
+                    : await fetchByIn('student_master', 'student_id, full_name, college, program', 'student_id', candidateList, 'student_id', 200, 4);
+                if (Array.isArray(data) && data.length > 0) {
                     if (!this.studentMasterByIdMap) this.studentMasterByIdMap = new Map();
                     for (const s of data) {
                         if (!s || !s.student_id) continue;
@@ -4769,11 +4772,9 @@ class App {
                     this._sidLevelCache = new Map();
                 }
             } catch (_e) {
-                // Fallback to background warm
+                // Ignore transient lookup failures; full directory loads lazily only when explicitly needed
             }
         }
-        // Warm full directory in background without blocking current page render
-        this.ensureStudentLevelMap().catch(() => {});
         return this.studentMasterByIdMap;
     }
 
@@ -11729,6 +11730,23 @@ class App {
     // FOREIGN TRANSACTIONS (Smart Bank Statement Student Deposit Extractor)
     // =========================================================================
 
+    getFixesByRefMap() {
+        const fixes = this.allFixesData;
+        if (!Array.isArray(fixes) || fixes.length === 0) return null;
+        if (this._fixesByRefCache && this._fixesByRefCacheSource === fixes && this._fixesByRefCacheLen === fixes.length) {
+            return this._fixesByRefCache;
+        }
+        const map = new Map();
+        for (const f of fixes) {
+            const k = String(f?.reference_number || '').trim().toLowerCase();
+            if (k && !map.has(k)) map.set(k, f);
+        }
+        this._fixesByRefCache = map;
+        this._fixesByRefCacheSource = fixes;
+        this._fixesByRefCacheLen = fixes.length;
+        return map;
+    }
+
     normalizeForeignTransactionRow(r, idx = 0) {
         if (!r) return r;
         const amount = Number(r.amount ?? r.item_price) || 0;
@@ -11743,14 +11761,12 @@ class App {
         let mapping = r.mapping || DEFAULT_FOREIGN_MAPPING;
         let secondMapping = r.second_mapping || '';
 
-        // Check Manual Fixes table (this.allFixesData) by reference_number or transaction_ref
-        if (Array.isArray(this.allFixesData) && this.allFixesData.length > 0) {
+        // Check Manual Fixes table (this.allFixesData) in O(1) via cached Map
+        const fixesMap = this.getFixesByRefMap();
+        if (fixesMap) {
             const refLower = String(ref || '').trim().toLowerCase();
             const txRefLower = String(r.transaction_ref || '').trim().toLowerCase();
-            const fix = this.allFixesData.find(f => {
-                const k = String(f.reference_number || '').trim().toLowerCase();
-                return k && (k === refLower || (txRefLower && k === txRefLower));
-            });
+            const fix = (refLower ? fixesMap.get(refLower) : null) || (txRefLower ? fixesMap.get(txRefLower) : null);
             if (fix) {
                 if (fix.correct_id && String(fix.correct_id).trim()) {
                     studentId = String(fix.correct_id).trim();
@@ -12219,11 +12235,20 @@ class App {
     }
 
     async loadForeignTransactions() {
+        const requestId = (this._fxLoadRequestId = (this._fxLoadRequestId || 0) + 1);
+        const tbody = document.getElementById('foreign-transactions-body');
+
+        // Render cached local rows immediately (0ms) or show a loading skeleton while fetching
+        if (Array.isArray(this.foreignTransactions) && this.foreignTransactions.length > 0) {
+            this.applyForeignFilters();
+        } else if (tbody) {
+            tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(9) + '</tr>').join('');
+        }
+
         try {
-            const [data] = await Promise.all([
-                fetchAll('foreign_transactions', '*', null, 'value_date'),
-                this.ensureStudentLevelMap()
-            ]);
+            const data = await fetchAll('foreign_transactions', '*', null, 'id');
+            if (requestId !== this._fxLoadRequestId) return;
+
             if (Array.isArray(data)) {
                 const cloudRefs = new Set(data.map(r => r.reference_number).filter(Boolean));
                 const unsyncedLocal = (this.foreignTransactions || []).filter(r => r.reference_number && !cloudRefs.has(r.reference_number));
@@ -12232,19 +12257,30 @@ class App {
                 (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
                 data.forEach(r => byRef.set(r.reference_number, r));
                 this.foreignTransactions = [...byRef.values()].map((r, i) => this.normalizeForeignTransactionRow(r, i));
+
+                // Fetch only the student levels needed for these rows instead of downloading all 22k+ students
+                await this.ensureStudentLevelsForRows(this.foreignTransactions);
+                if (requestId !== this._fxLoadRequestId) return;
+
                 this.persistForeignTransactionsLocal();
 
                 if (unsyncedLocal.length > 0 && this.hasRole('operator')) {
-                    const res = await this.syncForeignTransactionsToSupabase({ silent: true, rows: unsyncedLocal });
-                    if (res.synced > 0) {
-                        Toast.show(`Synced ${res.synced} local foreign transaction(s) to Supabase`, 'success');
-                    }
+                    this.syncForeignTransactionsToSupabase({ silent: true, rows: unsyncedLocal })
+                        .then(res => {
+                            if (res?.synced > 0) {
+                                Toast.show(`Synced ${res.synced} local foreign transaction(s) to Supabase`, 'success');
+                            }
+                        })
+                        .catch(() => {});
                 }
             } else if (Array.isArray(this.foreignTransactions)) {
+                await this.ensureStudentLevelsForRows(this.foreignTransactions);
+                if (requestId !== this._fxLoadRequestId) return;
                 this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
             }
             this.markTabLoaded('foreign-transactions');
         } catch (_e) {
+            if (requestId !== this._fxLoadRequestId) return;
             if (Array.isArray(this.foreignTransactions)) {
                 this.foreignTransactions = this.foreignTransactions.map((r, i) => this.normalizeForeignTransactionRow(r, i));
             }
