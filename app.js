@@ -31,8 +31,9 @@ import {
     matchTransactionToStudent,
     classifyStudentEmails,
     mergeStudentEmails,
-    getStudentDisplayEmails
-} from './rules.js?v=2.6.4';
+    getStudentDisplayEmails,
+    writeCompressedExcel
+} from './rules.js?v=2.6.5';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -164,6 +165,7 @@ window.customConfirm = function(message, okText = 'OK', cancelText = 'Cancel') {
 window.escapeHTML = escapeHTML;
 window.sanitizeExcelValue = sanitizeExcelValue;
 window.sanitizeExcelRows = sanitizeExcelRows;
+window.writeCompressedExcel = writeCompressedExcel;
 
 // Shared utility: format money
 function formatMoney(num) {
@@ -1045,7 +1047,7 @@ class App {
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
-                            await loadScriptOnce('./settlement.js?v=2.5.4');
+                            await loadScriptOnce('./settlement.js?v=2.5.5');
                         }
                         if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
                             window.settlementApp = new window.SettlementProcessor(supabase);
@@ -1605,7 +1607,7 @@ class App {
             XLSX.utils.book_append_sheet(wb, ws, 'Total Fawry Collection');
         }
 
-        XLSX.writeFile(wb, `Collection_Report_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
+        writeCompressedExcel(wb, `Collection_Report_${groupBy}_${dateFrom}_to_${dateTo}.xlsx`);
         Toast.show('Dashboard report exported to Excel!', 'success');
     }
 
@@ -3836,7 +3838,7 @@ class App {
             }]);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
-            XLSX.writeFile(workbook, "Item_Mappings_Template.xlsx");
+            writeCompressedExcel(workbook, "Item_Mappings_Template.xlsx");
         });
 
         document.getElementById('btn-template-fixes').addEventListener('click', () => {
@@ -3849,7 +3851,7 @@ class App {
             }]);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
-            XLSX.writeFile(workbook, "Manual_Fixes_Template.xlsx");
+            writeCompressedExcel(workbook, "Manual_Fixes_Template.xlsx");
         });
 
         // Manual Fixes Search, Filters, Deduplicate & Unresolved Transactions Panel
@@ -4969,7 +4971,7 @@ class App {
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Fawry Query");
                 
                 // Trigger download
-                XLSX.writeFile(workbook, `Fawry_Query_Export_${toDateOnly(new Date())}.xlsx`);
+                writeCompressedExcel(workbook, `Fawry_Query_Export_${toDateOnly(new Date())}.xlsx`);
 
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
@@ -4998,7 +5000,7 @@ class App {
                 const worksheet = XLSX.utils.json_to_sheet(sanitizeExcelRows(formattedData));
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Item Mappings");
-                XLSX.writeFile(workbook, `Item_Mappings_Export_${toDateOnly(new Date())}.xlsx`);
+                writeCompressedExcel(workbook, `Item_Mappings_Export_${toDateOnly(new Date())}.xlsx`);
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
             }
@@ -5023,7 +5025,7 @@ class App {
                 const worksheet = XLSX.utils.json_to_sheet(sanitizeExcelRows(formattedData));
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Manual Fixes");
-                XLSX.writeFile(workbook, `Manual_Fixes_Export_${toDateOnly(new Date())}.xlsx`);
+                writeCompressedExcel(workbook, `Manual_Fixes_Export_${toDateOnly(new Date())}.xlsx`);
             } catch (err) {
                 Toast.show('Export failed: ' + err.message, 'error');
             }
@@ -6251,7 +6253,7 @@ class App {
                 ];
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Students");
-                XLSX.writeFile(wb, `Student_Master_Export_${toDateOnly(new Date())}.xlsx`);
+                writeCompressedExcel(wb, `Student_Master_Export_${toDateOnly(new Date())}.xlsx`);
                 Toast.show(`Exported ${rows.length.toLocaleString()} students`, "success");
 
                 btn.innerHTML = oldHtml;
@@ -6471,7 +6473,7 @@ class App {
                     ];
                     const wb = XLSX.utils.book_new();
                     XLSX.utils.book_append_sheet(wb, ws, 'Auto-Matcher Results');
-                    XLSX.writeFile(wb, `Auto_Matcher_Results_${toDateOnly(new Date())}.xlsx`);
+                    writeCompressedExcel(wb, `Auto_Matcher_Results_${toDateOnly(new Date())}.xlsx`);
                 } else {
                     const csv = Papa.unparse(safeExportRows);
                     // Include UTF-8 BOM so Microsoft Excel renders Arabic text cleanly when opening CSV exports
@@ -8207,7 +8209,7 @@ class App {
             ];
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Payment Links");
-            XLSX.writeFile(wb, "Payment_Links_Import_Template.xlsx");
+            writeCompressedExcel(wb, "Payment_Links_Import_Template.xlsx");
             Toast.show("Template downloaded!", "success");
         });
 
@@ -8339,7 +8341,7 @@ class App {
                 ];
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Payment Links");
-                XLSX.writeFile(wb, `Payment_Links_Export_${toDateOnly(new Date())}.xlsx`);
+                writeCompressedExcel(wb, `Payment_Links_Export_${toDateOnly(new Date())}.xlsx`);
                 Toast.show(`Exported ${exportRows.length.toLocaleString()} links`, "success");
             } catch (err) {
                 Toast.show("Error exporting: " + err.message, "error");
@@ -9616,7 +9618,7 @@ class App {
         XLSX.utils.book_append_sheet(wb, ws, "ERP_Export");
 
         const dateStr = toDateOnly(new Date());
-        XLSX.writeFile(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
+        writeCompressedExcel(wb, `Dynamics_365_Export_${dateStr}.xlsx`);
         const totalSummary = this.formatErpCurrencySummary(rows);
         const modeLabel = dateMode === 'payment' ? 'Payment / Value Date' : dateMode === 'custom' ? `Custom Date ${toDateOnly(customDate)}` : 'Settlement Date';
         Toast.show(`ERP file exported (${modeLabel}): ${exportData.length} lines, total ${totalSummary}`, 'success');
@@ -10594,7 +10596,7 @@ class App {
         XLSX.utils.book_append_sheet(wb, wsLedger, 'Statement of Payments');
         XLSX.utils.book_append_sheet(wb, wsSummary, 'Category Summary');
         XLSX.utils.book_append_sheet(wb, wsProfile, 'Student Profile');
-        XLSX.writeFile(wb, `Student_Statement_${sid}_${toDateOnly(new Date())}.xlsx`);
+        writeCompressedExcel(wb, `Student_Statement_${sid}_${toDateOnly(new Date())}.xlsx`);
         Toast.show(`Exported statement for ${sid}`, 'success');
     }
 
@@ -11570,7 +11572,7 @@ class App {
         ];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Double Payments');
-        XLSX.writeFile(wb, `Double_Payments_Report_${toDateOnly(new Date())}.xlsx`);
+        writeCompressedExcel(wb, `Double_Payments_Report_${toDateOnly(new Date())}.xlsx`);
         Toast.show(`Exported ${exportData.length} double-payment cluster(s)`, 'success');
     }
 
@@ -13268,7 +13270,7 @@ class App {
         const ws = XLSX.utils.json_to_sheet(sanitizeExcelRows(exportData));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'BM_Transactions');
-        XLSX.writeFile(wb, `BM_Transactions_${toDateOnly(new Date())}.xlsx`);
+        writeCompressedExcel(wb, `BM_Transactions_${toDateOnly(new Date())}.xlsx`);
         Toast.show(`Exported ${exportData.length} BM transactions to Excel`, 'success');
     }
 

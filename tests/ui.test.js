@@ -1752,6 +1752,11 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
             expect(selectCols.some(c => typeof c === 'string' && c.includes('student_level'))).toBe(true);
             expect(capturedSheetRows).toHaveLength(3);
             expect(capturedSheetRows.map(r => r.Level)).toEqual(['(UG)', '(PG)', '']);
+            expect(globalThis.XLSX.writeFile).toHaveBeenCalledWith(
+                expect.any(Object),
+                expect.stringMatching(/^Fawry_Query_Export_\d{4}-\d{2}-\d{2}\.xlsx$/),
+                expect.objectContaining({ compression: true, bookSST: true })
+            );
         } finally {
             supabase.from = origFrom;
             supabase.rpc = origRpc;

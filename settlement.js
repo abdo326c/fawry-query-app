@@ -872,7 +872,7 @@ class SettlementProcessor {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Consolidated Settlement");
         const today = SettlementProcessor.toDateOnly(new Date());
-        XLSX.writeFile(wb, `Consolidated_Settlement_${today}.xlsx`);
+        (window.writeCompressedExcel ? window.writeCompressedExcel(wb, `Consolidated_Settlement_${today}.xlsx`) : XLSX.writeFile(wb, `Consolidated_Settlement_${today}.xlsx`, { compression: true, bookSST: true }));
     }
 
     exportReconciliation() {
@@ -951,7 +951,7 @@ class SettlementProcessor {
         XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
 
         const today = SettlementProcessor.toDateOnly(new Date());
-        XLSX.writeFile(wb, `Settlement_Reconciliation_Report_${today}.xlsx`);
+        (window.writeCompressedExcel ? window.writeCompressedExcel(wb, `Settlement_Reconciliation_Report_${today}.xlsx`) : XLSX.writeFile(wb, `Settlement_Reconciliation_Report_${today}.xlsx`, { compression: true, bookSST: true }));
     }
 
     async markAsSettled() {

@@ -1,13 +1,13 @@
-const CACHE_NAME = 'fawry-app-cache-v49';
+const CACHE_NAME = 'fawry-app-cache-v50';
 const urlsToCache = [
   './',
   './index.html',
   './styles.css?v=3.0.7',
-  './app.js?v=2.7.1',
+  './app.js?v=2.7.2',
   './ui-chrome.js?v=1.0.0',
-  './rules.js?v=2.6.4',
+  './rules.js?v=2.6.5',
   './csv-processor.js',
-  './settlement.js?v=2.5.4',
+  './settlement.js?v=2.5.5',
   './foreign-transactions.js',
   './fx-rates.js',
   './supabase.js',

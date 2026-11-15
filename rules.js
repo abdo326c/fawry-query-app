@@ -736,6 +736,19 @@ export function sanitizeExcelRows(rows) {
 }
 
 /**
+ * Writes an Excel workbook with ZIP DEFLATE compression and a Shared Strings Table (bookSST)
+ * so repetitive values across thousands of rows are stored once, shrinking .xlsx files dramatically.
+ */
+export function writeCompressedExcel(workbook, filename, opts = {}) {
+    const xlsxLib = (typeof XLSX !== 'undefined' ? XLSX : globalThis.XLSX);
+    return xlsxLib.writeFile(workbook, filename, {
+        compression: true,
+        bookSST: true,
+        ...opts
+    });
+}
+
+/**
  * Strips any time component from a date value without timezone shifting,
  * returning a pure 'YYYY-MM-DD' string (or null).
  */
