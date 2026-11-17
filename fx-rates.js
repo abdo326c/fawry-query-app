@@ -205,9 +205,10 @@ export async function fetchUsdToEgpRateForDate(dateOrLatest = 'latest', fetchImp
         ? latestCandidates
         : [
             { url: `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${targetDate}/v1/currencies/usd.json`, provider: 'currency-api' },
-            { url: `https://${targetDate}.currency-api.pages.dev/v1/currencies/usd.json`, provider: 'currency-api-pages' },
-            // Fallback to latest rate if historical snapshot for targetDate is not published
-            ...latestCandidates
+            { url: `https://${targetDate}.currency-api.pages.dev/v1/currencies/usd.json`, provider: 'currency-api-pages' }
+            // No fallback to the "latest" feeds here: that stored TODAY's rate under a past date,
+            // permanently (it was then synced to Supabase and never re-fetched). Returning null
+            // lets resolveUsdToEgpRate use the nearest earlier known rate instead.
         ];
 
     for (const c of candidates) {
@@ -422,13 +423,15 @@ export async function syncMissingFxRates(dates = [], store, { fetchImpl = typeof
     const uniqueMissing = [...new Set(
         (dates || [])
             .map(d => toDateOnly(d))
-            .filter(d => d && (!todayStr || d <= todayStr) && !targetStore.ratesByDate[d])
+            // Never fetch dates after today (Egypt): a future value date would otherwise be
+            // stored with today's rate.
+            .filter(d => d && d <= effectiveTodayStr && !targetStore.ratesByDate[d])
     )].sort();
 
     for (let i = 0; i < uniqueMissing.length; i += concurrency) {
         const chunk = uniqueMissing.slice(i, i + concurrency);
         const results = await Promise.all(chunk.map(async (d) => {
-            const fetched = await fetchUsdToEgpRateForDate(d, fetchImpl, todayStr);
+            const fetched = await fetchUsdToEgpRateForDate(d, fetchImpl, effectiveTodayStr);
             return { d, fetched };
         }));
         for (const { d, fetched } of results) {

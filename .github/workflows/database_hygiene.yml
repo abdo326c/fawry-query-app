@@ -38,8 +38,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          if [ "${{ github.event.inputs.apply_fixes }}" = "false" ]; then
-            node scripts/database_hygiene.js
-          else
+          # Scheduled runs only INSPECT. Deleting rows needs a manual run with apply_fixes ticked
+          # (on a schedule the input is empty, which previously fell through to --fix every night).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.apply_fixes }}" = "true" ]; then
             node scripts/database_hygiene.js --fix
+          else
+            node scripts/database_hygiene.js
           fi

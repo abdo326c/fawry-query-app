@@ -28,13 +28,53 @@ import { finished } from 'stream/promises';
 import { execFileSync } from 'child_process';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ';
+// The service-role key is REQUIRED: the backup RPCs and table reads are blocked for the anon key,
+// and falling back to it made every run "succeed" with an authorization error swallowed.
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 const headers = {
     'apikey': SUPABASE_KEY,
     'Authorization': `Bearer ${SUPABASE_KEY}`,
     'Content-Type': 'application/json'
 };
+
+function assertServiceKey() {
+    if (!SUPABASE_KEY) {
+        throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set. Add it as a repository secret (Settings -> Secrets -> Actions).');
+    }
+}
+
+/**
+ * Reads every row of a table through PostgREST with the service-role key (bypasses RLS),
+ * paging with LIMIT/OFFSET on a stable order. Used for tables the backup RPCs don't cover.
+ */
+export async function fetchTableAll(table, orderBy, pageSize = 1000) {
+    const rows = [];
+    for (let offset = 0; ; offset += pageSize) {
+        const url = `${SUPABASE_URL}/rest/v1/${encodeURIComponent(table)}?select=*&order=${encodeURIComponent(orderBy)}&limit=${pageSize}&offset=${offset}`;
+        const res = await fetch(url, { headers });
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Reading table ${table} failed: ${res.status} ${text}`);
+        }
+        const page = await res.json();
+        for (const r of page) rows.push(r);
+        if (page.length < pageSize) break;
+    }
+    return rows;
+}
+
+// Tables not included in export_database_backup_payload / the chunk RPCs.
+// audit_logs is re-read here in full because the payload RPC caps it at 500 rows.
+const EXTRA_BACKUP_TABLES = [
+    { table: 'foreign_transactions', orderBy: 'id.asc' },
+    { table: 'settlement_batches', orderBy: 'id.asc' },
+    { table: 'links', orderBy: 'id.asc' },
+    { table: 'payment_links', orderBy: 'id.asc' },
+    { table: 'import_batches', orderBy: 'id.asc' },
+    { table: 'exchange_rates', orderBy: 'rate_date.asc,currency_pair.asc' },
+    { table: 'audit_logs', orderBy: 'id.asc' }
+];
 
 async function fetchRpc(fn, body = {}) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
@@ -262,6 +302,8 @@ export async function runFullDatabaseBackup() {
     console.log(`   >> Month: ${hierarchy.month}`);
     console.log(`   >>> Week: ${hierarchy.week}`);
 
+    assertServiceKey();
+
     // Verify Google Credentials upfront
     const creds = getGoogleCredentials();
     if (!creds || !creds.refreshToken) {
@@ -293,7 +335,17 @@ export async function runFullDatabaseBackup() {
         console.log(`  ✓ Item Mappings: ${coreSnapshot.mappings_count.toLocaleString()} rules`);
         console.log(`  ✓ Manual Fixes:  ${coreSnapshot.fixes_count.toLocaleString()} rules`);
         console.log(`  ✓ User Roles:    ${coreSnapshot.roles_count.toLocaleString()} users`);
-        console.log(`  ✓ Audit Logs:    ${(coreSnapshot.audit_logs || []).length.toLocaleString()} entries`);
+        console.log(`  ✓ Audit Logs:    ${(coreSnapshot.audit_logs || []).length.toLocaleString()} entries (latest; full log below)`);
+
+        // [1b] Tables not covered by the backup RPCs (full copies, service-role REST paging)
+        const extraTableCounts = {};
+        for (const { table, orderBy } of EXTRA_BACKUP_TABLES) {
+            const rows = await fetchTableAll(table, orderBy);
+            const fileName = table === 'audit_logs' ? 'audit_logs_full.json' : `${table}.json`;
+            fs.writeFileSync(path.join(tempDir, fileName), JSON.stringify(rows), 'utf-8');
+            extraTableCounts[table] = rows.length;
+            console.log(`  ✓ ${table}: ${rows.length.toLocaleString()} rows`);
+        }
 
         // [2/4] Stream All Raw Transactions (in chunks of 5,000)
         console.log('\n[2/4] Streaming all raw transactions from database...');
@@ -371,7 +423,8 @@ export async function runFullDatabaseBackup() {
                 mappings_count: coreSnapshot.mappings_count,
                 manual_fixes_count: coreSnapshot.fixes_count,
                 user_roles_count: coreSnapshot.roles_count,
-                audit_logs_count: (coreSnapshot.audit_logs || []).length
+                audit_logs_count: extraTableCounts.audit_logs ?? (coreSnapshot.audit_logs || []).length,
+                extra_tables: extraTableCounts
             }
         };
         const manifestPath = path.join(tempDir, 'manifest.json');
@@ -505,5 +558,9 @@ export async function runFullDatabaseBackup() {
 
 // Direct CLI execution
 if (process.argv[1] && process.argv[1].endsWith('backup_to_drive.js')) {
-    runFullDatabaseBackup().catch(console.error);
+    runFullDatabaseBackup().catch(err => {
+        // Exit non-zero so the GitHub Actions job is marked FAILED instead of green.
+        console.error('❌ Backup failed:', err);
+        process.exit(1);
+    });
 }
