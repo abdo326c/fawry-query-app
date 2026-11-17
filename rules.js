@@ -328,13 +328,19 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
                         return bucketRows;
                     };
 
+                    // Collect bucket rows separately and only append them once EVERY bucket has
+                    // succeeded. Appending as we go meant that a failure in a later bucket fell
+                    // through to the sequential fallback below, which re-read the same rows and
+                    // returned them twice.
+                    const parallelRows = [];
                     for (let i = 0; i < bounds.length; i += PARALLEL_CHUNKS) {
                         const slice = bounds.slice(i, i + PARALLEL_CHUNKS);
                         const chunkResults = await Promise.all(slice.map(b => fetchBoundRange(b)));
                         for (const chunkRows of chunkResults) {
-                            for (let j = 0; j < chunkRows.length; j++) allData.push(chunkRows[j]);
+                            for (let j = 0; j < chunkRows.length; j++) parallelRows.push(chunkRows[j]);
                         }
                     }
+                    for (let j = 0; j < parallelRows.length; j++) allData.push(parallelRows[j]);
                     return allData;
                 }
             } catch (_rpcErr) {

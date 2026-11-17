@@ -37,6 +37,26 @@ beforeEach(() => {
     document.documentElement.innerHTML = html.toString();
 });
 
+// Runs fn() while the mocked supabase returns `rows` for foreign_transactions
+// (every other table keeps the default mock).
+async function withForeignDbRows(supabaseMock, rows, fn) {
+    const synced = (rows || []).map(r => ({ ...r }));
+    const origFrom = supabaseMock.from;
+    supabaseMock.from = vi.fn((table) => {
+        if (table !== 'foreign_transactions') return origFrom(table);
+        const q = {};
+        for (const m of ['select', 'eq', 'gte', 'lte', 'gt', 'in', 'or', 'order']) q[m] = vi.fn(() => q);
+        q.range = vi.fn().mockResolvedValue({ data: synced, error: null });
+        q.limit = vi.fn().mockResolvedValue({ data: synced, error: null });
+        return q;
+    });
+    try {
+        return await fn();
+    } finally {
+        supabaseMock.from = origFrom;
+    }
+}
+
 test('UI elements are present across all 9 pages', () => {
     // Auth & Theme
     expect(document.getElementById('btn-login')).not.toBeNull();
@@ -575,8 +595,16 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(txDetailsModal.classList.contains('hidden')).toBe(true);
     foreignFixModal.classList.add('hidden');
 
+    // ERP export is database-first: deposits that exist ONLY in this browser's cache (never
+    // synced, or deleted by another user) are excluded once the database answers.
+    const { supabase: erpSupabase } = await import('../supabase.js');
+    const cacheOnlyRows = await window.app.fetchForeignRowsForErp('2026-01-01', '2026-01-31');
+    expect(cacheOnlyRows.length).toBe(0);
+
     // Verify NuMisrUsd5 deposits appear in ERP Export preview with Same Date & USD currency
-    const foreignErpRows = await window.app.fetchForeignRowsForErp('2026-01-01', '2026-01-31');
+    // once they are in the database (DB values win over the cached copy).
+    const foreignErpRows = await withForeignDbRows(erpSupabase, window.app.foreignTransactions,
+        () => window.app.fetchForeignRowsForErp('2026-01-01', '2026-01-31'));
     expect(foreignErpRows.length).toBe(2);
     expect(window.app.resolveErpExportDate(foreignErpRows[1], 'settlement')).toBe('2026-01-08');
     window.app.erpData = foreignErpRows;
@@ -609,7 +637,8 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
         { reference_number: 'FX2', value_date: '2026-01-08', student_id: '241009888', amount: 500, currency: 'USD', description: 'Dep 2', id_status: 'Valid' }
     ];
     // Prevent network fetch inside test by matching cached todayStr rate on 2026-01-31
-    await window.app.loadDashboard();
+    // (deposits must be in the database: dashboard and ERP read BM deposits database-first)
+    await withForeignDbRows(erpSupabase, window.app.foreignTransactions, () => window.app.loadDashboard());
     // 1000*50 + 500*48 = 74,000 EGP
     expect(document.getElementById('dashboard-split-misrusd5-val').textContent).toBe('USD 1,500.00');
     expect(document.getElementById('dashboard-split-misrusd5-egp').textContent).toContain('EGP 74,000.00');
@@ -630,8 +659,10 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
 
     // Apply Manual Custom Rate Override (52.00 EGP/USD -> 1500 * 52 = 78,000 EGP)
     document.getElementById('dashboard-fx-rate-input').value = '52.00';
-    document.getElementById('btn-dash-apply-fx').click();
-    await new Promise(r => setTimeout(r, 20));
+    await withForeignDbRows(erpSupabase, window.app.foreignTransactions, async () => {
+        document.getElementById('btn-dash-apply-fx').click();
+        await new Promise(r => setTimeout(r, 20));
+    });
     expect(document.getElementById('stat-total-collections').textContent).toBe('EGP 78,000.00');
 
     // Verify manual sync button was removed while keeping strictly whitelisted DB row mapping

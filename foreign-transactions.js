@@ -42,8 +42,30 @@ export function parseStatementAmount(val) {
  *   { dateOnly: 'YYYY-MM-DD', dateTime: 'YYYY-MM-DD HH:MM:SS' }
  * Handles both 'YYYY-MM-DD HH:MM:SS' (CSV) and 'DD-MM-YYYY HH:MM:SS' (PDF).
  */
+function isoIfValidDate(y, m, d) {
+    const yi = Number(y), mi = Number(m), di = Number(d);
+    if (!(mi >= 1 && mi <= 12 && di >= 1 && di <= 31)) return null;
+    const dt = new Date(Date.UTC(yi, mi - 1, di));
+    if (dt.getUTCFullYear() !== yi || dt.getUTCMonth() !== mi - 1 || dt.getUTCDate() !== di) return null;
+    return `${String(yi).padStart(4, '0')}-${String(mi).padStart(2, '0')}-${String(di).padStart(2, '0')}`;
+}
+
 export function parseStatementDate(raw) {
     if (!raw) return { dateOnly: null, dateTime: '' };
+    // Real Excel date cells arrive as serial numbers (e.g. 45672.5 = 2025-01-14 12:00:00)
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+        const iso = toDateOnly(raw);
+        if (!iso) return { dateOnly: null, dateTime: '' };
+        const totalSec = Math.round((raw - Math.floor(raw)) * 86400);
+        if (totalSec <= 0 || totalSec >= 86400) return { dateOnly: iso, dateTime: iso };
+        const pad = n => String(n).padStart(2, '0');
+        const hh = Math.floor(totalSec / 3600), mm = Math.floor((totalSec % 3600) / 60), ss = totalSec % 60;
+        return { dateOnly: iso, dateTime: `${iso} ${pad(hh)}:${pad(mm)}:${pad(ss)}` };
+    }
+    if (raw instanceof Date) {
+        const iso = toDateOnly(raw);
+        return { dateOnly: iso, dateTime: iso || '' };
+    }
     const str = String(raw).trim();
     if (!str) return { dateOnly: null, dateTime: '' };
 
@@ -53,7 +75,8 @@ export function parseStatementDate(raw) {
 
     let m = datePart.match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})$/);
     if (m) {
-        const iso = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+        const iso = isoIfValidDate(m[1], m[2], m[3]);
+        if (!iso) return { dateOnly: null, dateTime: str };
         return { dateOnly: iso, dateTime: timePart ? `${iso} ${timePart}` : iso };
     }
     m = datePart.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
@@ -61,7 +84,8 @@ export function parseStatementDate(raw) {
         const day = parseInt(m[1], 10);
         const month = parseInt(m[2], 10);
         const year = m[3];
-        const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const iso = isoIfValidDate(year, month, day);
+        if (!iso) return { dateOnly: null, dateTime: str };
         return { dateOnly: iso, dateTime: timePart ? `${iso} ${timePart}` : iso };
     }
 
@@ -852,7 +876,9 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
                         scoreTokenOverlap(handlerNorm, handlerTokens, cand.normGuardian, cand.guardianTokens),
                         scoreTokenOverlap(handlerNorm, handlerTokens, cand.normAr, cand.arTokens)
                     );
-                    if (gScore >= 0.5) score = Math.min(1.0, score + 0.12);
+                    // Not capped at 1.0: the guardian/handler bonus may break a tie between two
+                    // students with identical names, but must never turn one into an automatic pass.
+                    if (gScore >= 0.5) score = score + 0.12;
                 }
 
                 if (score > bestScore) {
@@ -864,7 +890,9 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
                 }
             }
 
-            if (bestCandidate && bestScore >= 0.72 && (bestScore === 1.0 || (bestScore - secondBestScore) >= 0.05)) {
+            // Always require a clear lead over the runner-up: two students with the same full
+            // name both score 1.0, and picking the first one silently books the deposit wrongly.
+            if (bestCandidate && bestScore >= 0.72 && (bestScore - secondBestScore) >= 0.05) {
                 return {
                     ...dep,
                     student_id: bestCandidate.sid,
@@ -874,7 +902,7 @@ export function matchForeignDepositsToStudents(deposits, studentMasterList = [],
                     matched_student_name: bestCandidate.student.full_name || bestCandidate.student.arabic_name || '',
                     id_status: validateID(bestCandidate.sid),
                     match_source: 'name_match',
-                    match_confidence: Math.round(bestScore * 100)
+                    match_confidence: Math.min(100, Math.round(bestScore * 100))
                 };
             }
         }

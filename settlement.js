@@ -958,6 +958,10 @@ class SettlementProcessor {
         if (window.app && typeof window.app.requireRole === 'function') {
             if (!window.app.requireRole('accountant', 'mark transactions as settled')) return;
         }
+        if (this.loadedRunMetadata) {
+            Toast.show('Saved runs are read-only. Re-upload the settlement files to mark them as settled.', 'warning');
+            return;
+        }
         const matches = this.reconciliationResults.filter(r => r.status === 'Matched' && !r.is_settled);
         if (matches.length === 0) {
             Toast.show('No new matched transactions to mark as settled.', 'info');
@@ -999,7 +1003,10 @@ class SettlementProcessor {
                                 is_settled: true,
                                 settlement_batch: batch || null
                             })
-                            .in('reference_number', chunk);
+                            .in('reference_number', chunk)
+                            // Only items not yet settled: a partly settled reference keeps the
+                            // batch already recorded on its settled items.
+                            .or('is_settled.is.null,is_settled.eq.false');
                         if (error) throw error;
                     });
                 }
@@ -1053,7 +1060,7 @@ class SettlementProcessor {
                 .limit(50);
 
             if (error) throw error;
-            this.savedSettlementRuns = Array.isArray(data) ? data : [];
+            this.savedSettlementRuns = Array.isArray(data) ? data.map(SettlementProcessor.normalizeSavedRun) : [];
             this.renderSettlementHistory();
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="9" class="text-center" style="color: var(--text-muted); padding: 1.25rem;">No saved settlement runs available (${settlementEsc(err.message)}).</td></tr>`;
@@ -1162,25 +1169,27 @@ class SettlementProcessor {
 
         if (this.btnSaveRun) this.btnSaveRun.disabled = true;
         try {
+            // Column names must match public.settlement_batches (schema.sql). Fields without
+            // a dedicated column live in summary_data; normalizeSavedRun() maps them back on load.
             const payload = {
                 batch_label: defaultLabel,
-                settlement_numbers: batches,
+                user_email: window.app?.currentUser?.email || null,
                 files_count: this.processedFilesCount || 1,
-                total_references: activePool.length,
                 matched_count: matchedCount,
                 mismatch_count: mismatchCount,
-                missing_in_system_count: missingSysCount,
-                missing_in_settlement_count: missingStlCount,
-                total_settlement_amount: totalStl,
-                total_system_amount: totalSys,
+                missing_sys_count: missingSysCount,
+                missing_stl_count: missingStlCount,
+                total_stl_amount: totalStl,
+                total_sys_amount: totalSys,
                 net_variance: netVar,
-                settlement_date_from: minDate,
-                settlement_date_to: maxDate,
-                discrepancies: discrepancies.slice(0, 500),
                 summary_data: {
+                    settlement_numbers: batches,
+                    total_references: activePool.length,
+                    settlement_date_from: minDate,
+                    settlement_date_to: maxDate,
+                    discrepancies: discrepancies.slice(0, 500),
                     reconciliation_rows: all.slice(0, 1000)
-                },
-                created_by: window.app?.currentUser?.email || 'Accountant'
+                }
             };
 
             const { error } = await this.supabase.from('settlement_batches').insert([payload]);
@@ -1361,15 +1370,49 @@ class SettlementProcessor {
         return d.toISOString().substring(0, 10);
     }
 
+    // Maps a settlement_batches row (DB column names + summary_data extras) to the field
+    // names the history table and summary cards read.
+    static normalizeSavedRun(row) {
+        const s = (row && row.summary_data) || {};
+        return {
+            ...row,
+            created_by: row.user_email || null,
+            total_settlement_amount: row.total_stl_amount,
+            total_system_amount: row.total_sys_amount,
+            missing_in_system_count: row.missing_sys_count,
+            missing_in_settlement_count: row.missing_stl_count,
+            total_references: s.total_references ?? null,
+            settlement_numbers: s.settlement_numbers || [],
+            settlement_date_from: s.settlement_date_from || null,
+            settlement_date_to: s.settlement_date_to || null,
+            discrepancies: s.discrepancies || []
+        };
+    }
+
+    // Builds "YYYY-MM-DD" only if it is a real calendar date (rejects 2026-25-01, 2025-02-30)
+    static ymdIfValid(y, m, d) {
+        const yi = Number(y), mi = Number(m), di = Number(d);
+        if (!(mi >= 1 && mi <= 12 && di >= 1 && di <= 31)) return null;
+        const dt = new Date(Date.UTC(yi, mi - 1, di));
+        if (dt.getUTCFullYear() !== yi || dt.getUTCMonth() !== mi - 1 || dt.getUTCDate() !== di) return null;
+        return `${String(yi).padStart(4, '0')}-${String(mi).padStart(2, '0')}-${String(di).padStart(2, '0')}`;
+    }
+
     // Any date value from the settlement file → "YYYY-MM-DD" (or null)
     static toDateOnly(raw) {
         if (raw === null || raw === undefined || raw === '') return null;
         if (typeof raw === 'number') return SettlementProcessor.excelSerialToText(raw).substring(0, 10);
         const str = String(raw).trim();
         let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-        if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-        m = str.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/); // Fawry format: DD/MM/YYYY
-        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+        if (m) return SettlementProcessor.ymdIfValid(m[1], m[2], m[3]);
+        m = str.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/);
+        if (m) {
+            // Fawry format is DD/MM/YYYY; if the second part can't be a month (>12) but the
+            // first can, the value is MM/DD/YYYY (e.g. "1/25/2026 10:15:00 AM").
+            let day = Number(m[1]), month = Number(m[2]);
+            if (month > 12 && day <= 12) { const t = day; day = month; month = t; }
+            return SettlementProcessor.ymdIfValid(m[3], month, day);
+        }
         const d = new Date(str);
         if (isNaN(d.getTime())) return null;
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

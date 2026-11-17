@@ -1,3 +1,16 @@
+-- ============================================================================
+-- WARNING: THIS FILE IS OUT OF DATE. DO NOT RE-RUN IT ON THE PRODUCTION DATABASE.
+--
+-- It predates migrations 2.4.0 - 2.11.0. Several of its CREATE OR REPLACE / DROP POLICY
+-- statements would silently UNDO later security fixes (user deactivation, default-deny roles,
+-- active-viewer SELECT policies, the audit-log guard trigger, sync_auth_users admin check).
+--
+-- Production state = this file + every file in migrations/ applied in version order.
+-- To refresh this file from the live database (schema only, no data):
+--   supabase db dump --schema public -f schema.sql
+--   (or: pg_dump --schema-only --schema=public "<connection string>" > schema.sql)
+-- ============================================================================
+
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 

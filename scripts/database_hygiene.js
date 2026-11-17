@@ -31,9 +31,13 @@ import {
 } from './backup_to_drive.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdHhkeXVldnhjZXp4emJpaXFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjU5MDEsImV4cCI6MjA5NTEwMTkwMX0.ZiKUw1db5pDRYto-hLGut3rdrzxVfRN36ouX4AjB5AQ';
+// Service-role key required (the hygiene RPC rejects the anon key); no silent fallback.
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = true } = {}) {
+    if (!SUPABASE_KEY) {
+        throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set. Add it as a repository secret (Settings -> Secrets -> Actions).');
+    }
     console.log('='.repeat(70));
     console.log('🔍 FAWRY DATABASE HYGIENE & AUTO-DEDUPLICATION AUDIT');
     console.log(`Mode: ${applyFixes ? 'AUTO-CLEAN (--fix)' : 'INSPECTION (Read-Only)'}`);
@@ -161,5 +165,8 @@ ${driveReportUrl ? `- **Drive Report**: [Open in Google Drive](${driveReportUrl}
 // Direct CLI execution
 if (process.argv[1] && process.argv[1].endsWith('database_hygiene.js')) {
     const shouldFix = process.argv.includes('--fix');
-    runDatabaseHygiene({ applyFixes: shouldFix }).catch(console.error);
+    runDatabaseHygiene({ applyFixes: shouldFix }).catch(err => {
+        console.error('❌ Hygiene audit failed:', err);
+        process.exit(1);
+    });
 }

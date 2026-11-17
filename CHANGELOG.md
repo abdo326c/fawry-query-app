@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.11.0 – 2026-11-17
+
+Fixes for the critical and high-severity issues found in a full code review.
+
+**Before deploying:**
+1. Supabase → Authentication → turn **off** "Allow new users to sign up".
+2. Run `migrations/2.11.0_security_and_hygiene_fixes.sql` in the SQL editor.
+3. Make sure the `SUPABASE_SERVICE_ROLE_KEY` repository secret is set (backup and hygiene jobs now fail without it instead of silently "succeeding").
+
+**After deploying:** signed-in accounts with no `user_roles` row no longer see any data, and non-`@nu.edu.eg` accounts start inactive. Add or activate staff in the Users & Roles admin page.
+
+### ERP / money
+- **Re-importing a BM (USD) statement no longer clears the ERP batch/voucher** of already-posted deposits (they could be exported and posted twice). The sync never writes ERP fields; only Record ERP and Unlink do.
+- **Recording or unlinking an ERP batch on BM deposits now fails loudly** if the database write fails, instead of stamping only this browser.
+- **ERP export / dashboard read BM deposits database-first.** A stale browser cache no longer overrides other users' corrections, cleared batches or deleted duplicates; cache-only rows are used only when the database can't be reached (with a warning).
+- **ERP export no longer skips BM deposits** at 1,000-row page boundaries (it paged on the non-unique `value_date`).
+- **Past dates are no longer stored with today's USD→EGP rate** when the historical rate can't be fetched; the nearest earlier known rate is used instead. Future value dates are not fetched.
+- **`fetchAll` no longer returns duplicate rows** when one parallel page fails and the sequential fallback runs.
+
+### Settlement
+- **"Save Run to History" works again** (it wrote to columns that don't exist in `settlement_batches`).
+- **Month-first dates (`1/25/2026`) no longer abort reconciliation**; impossible dates are rejected.
+- **Mark as Settled only updates unsettled items**, so items settled under another batch keep their batch number. Saved (historical) runs are read-only.
+
+### BM (USD) deposits
+- **Two students with the same name are never auto-matched** to a deposit; the handler bonus can break ties but not force a 100% match.
+- **Excel date cells** (serial numbers) are parsed correctly instead of being saved as `"45672.5"`.
+
+### Database & automation (migration 2.11.0)
+- Default-deny roles; active-viewer read policies on every table (including `foreign_transactions`, `exchange_rates`, `settlement_batches`, `user_roles`), evaluated once per query.
+- `sync_auth_users()` is admin/automation-only and no longer re-activates users an admin deactivated.
+- The audit-log guard trigger is attached, so audit entries can't be forged to drive admin Revert.
+- Nightly hygiene only deletes mapping rules that are true duplicates (same mappings); case variants that map differently are reported, not deleted. Scheduled runs are inspection-only; deleting needs a manual run with "apply fixes".
+- Weekly backup now includes `foreign_transactions`, `settlement_batches`, `links`, `payment_links`, `import_batches`, `exchange_rates` and the full audit log, and the job fails (red) on any error.
+- `schema.sql` carries a warning: it is out of date and must not be re-run on production.
+
 ## 2.1.0 – 2026-10-11
 
 Fixes to the "Re-apply Rules" logic.

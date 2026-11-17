@@ -33,7 +33,7 @@ import {
     mergeStudentEmails,
     getStudentDisplayEmails,
     writeCompressedExcel
-} from './rules.js?v=2.6.7';
+} from './rules.js?v=2.6.8';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -1047,7 +1047,7 @@ class App {
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
-                            await loadScriptOnce('./settlement.js?v=2.5.5');
+                            await loadScriptOnce('./settlement.js?v=2.5.6');
                         }
                         if (!window.settlementApp && typeof window.SettlementProcessor !== 'undefined') {
                             window.settlementApp = new window.SettlementProcessor(supabase);
@@ -8880,10 +8880,12 @@ class App {
 
     async fetchForeignRowsForErp(dateFrom, dateTo) {
         const byRef = new Map();
+        const localByRef = new Map();
         (this.foreignTransactions || []).forEach(r => {
             const key = String(r.reference_number || '').trim();
-            if (key) byRef.set(key, r);
+            if (key) localByRef.set(key, r);
         });
+        let dbLoaded = false;
         try {
             const dbForeign = await fetchAll(
                 'foreign_transactions',
@@ -8893,18 +8895,29 @@ class App {
                     if (dateTo) fq = fq.lte('value_date', dateTo);
                     return fq;
                 },
-                'value_date'
+                // Must be a UNIQUE column: fetchAll pages with "> last value", so a non-unique
+                // column (value_date) silently skipped same-day rows at every 1,000-row boundary.
+                'reference_number'
             );
             if (Array.isArray(dbForeign)) {
+                dbLoaded = true;
+                // The database is the source of truth: student IDs corrected by other users,
+                // ERP batches (including cleared ones) and deleted duplicates all come from here.
+                // Locally cached fields only fill gaps the DB row doesn't have (e.g. mapping).
                 dbForeign.forEach(r => {
                     const key = String(r.reference_number || '').trim();
                     if (!key) return;
-                    const existing = byRef.get(key);
-                    byRef.set(key, existing ? { ...r, ...existing, erp_batch_number: r.erp_batch_number ?? existing.erp_batch_number, erp_voucher: r.erp_voucher ?? existing.erp_voucher } : r);
+                    const local = localByRef.get(key);
+                    byRef.set(key, local ? { ...local, ...r, erp_batch_number: r.erp_batch_number ?? null, erp_voucher: r.erp_voucher ?? null } : r);
                 });
             }
-        } catch (_e) {
-            // Fall back cleanly to localStorage / in-memory foreignTransactions when offline or table unmigrated
+        } catch (err) {
+            console.warn("Could not load BM (USD) deposits from Supabase; using this browser's cached copy:", err?.message || err);
+        }
+        if (!dbLoaded) {
+            // Offline / table not migrated: fall back to the local cache only.
+            localByRef.forEach((r, key) => byRef.set(key, r));
+            Toast.show("BM (USD) deposits could not be loaded from the database; the ERP preview uses this browser's cached copy, which may be out of date.", 'warning');
         }
 
         const foreignRows = [];
@@ -9253,6 +9266,8 @@ class App {
                 }
                 try {
                     if (source === 'foreign') {
+                        const { error: fErr } = await supabase.from('foreign_transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('reference_number', ref);
+                        if (fErr) throw fErr;
                         (this.foreignTransactions || []).forEach(r => {
                             if (r.reference_number === ref) {
                                 r.erp_batch_number = null;
@@ -9260,11 +9275,6 @@ class App {
                             }
                         });
                         this.persistForeignTransactionsLocal();
-                        try {
-                            await supabase.from('foreign_transactions').update({ erp_batch_number: null, erp_voucher: null }).eq('reference_number', ref);
-                        } catch (_e) {
-                            // offline / unmigrated table fallback
-                        }
                         await this.logAudit('ERP Batch Unlinked (Foreign)', String(ref), {
                             reference_number: ref,
                             cleared_batch: batch
@@ -9690,6 +9700,15 @@ class App {
 
             if (foreignRows.length > 0) {
                 const foreignRefSet = new Set(foreignRows.map(r => String(r.reference_number || '').trim()).filter(Boolean));
+                // Write to the database FIRST and fail loudly: a stamp that only lives in this
+                // browser lets other users export (and post) the same deposits again.
+                const foreignRefs = [...foreignRefSet];
+                for (let i = 0; i < foreignRefs.length; i += batchSize) {
+                    const { error: fErr } = await supabase.from('foreign_transactions')
+                        .update({ erp_batch_number: batchNum, erp_voucher: startVoucher })
+                        .in('reference_number', foreignRefs.slice(i, i + batchSize));
+                    if (fErr) throw new Error(`Saving ERP batch on BM (USD) deposits failed: ${fErr.message}`);
+                }
                 (this.foreignTransactions || []).forEach(r => {
                     if (foreignRefSet.has(String(r.reference_number || '').trim())) {
                         r.erp_batch_number = batchNum;
@@ -9697,16 +9716,6 @@ class App {
                     }
                 });
                 this.persistForeignTransactionsLocal();
-                try {
-                    const foreignRefs = [...foreignRefSet];
-                    if (foreignRefs.length > 0) {
-                        await supabase.from('foreign_transactions')
-                            .update({ erp_batch_number: batchNum, erp_voucher: startVoucher })
-                            .in('reference_number', foreignRefs);
-                    }
-                } catch (_e) {
-                    // offline / unmigrated table fallback
-                }
             }
 
             const totalStamped = unexportedRows.length;
@@ -11873,9 +11882,10 @@ class App {
             deposit_method: norm.deposit_method || 'Cash Deposit',
             description: norm.description || null,
             id_status: norm.id_status || null,
-            match_source: norm.match_source || 'unmatched',
-            erp_batch_number: norm.erp_batch_number || null,
-            erp_voucher: norm.erp_voucher || null
+            match_source: norm.match_source || 'unmatched'
+            // erp_batch_number / erp_voucher are deliberately NOT synced from here: they are written
+            // only by recordErpReferences and the ERP unlink action. Including them made every
+            // re-import / re-sync upsert overwrite a posted batch with NULL (double-posting risk).
         };
     }
 
