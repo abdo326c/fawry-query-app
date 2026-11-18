@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.11.1 – 2026-11-18
+
+- **All Excel exports show dates as `yyyy-mm-dd`** (`yyyy-mm-dd hh:mm:ss` when there is a time). Real Excel date cells (Fawry Query export, Dynamics 365 journal) keep their date value with the new display format; date text in columns named "… Date", "Created", "Expiry", "Time" etc. is rewritten (e.g. `17/11/2026`, `17-Nov-2026`, `1/25/2026 3:05 PM`). Applied once in `writeCompressedExcel`, so every export is covered. The dashboard collection report's daily rows also use `yyyy-mm-dd` instead of `17-Nov-2026`.
+
 ## 2.11.0 – 2026-11-17
 
 Fixes for the critical and high-severity issues found in a full code review.
