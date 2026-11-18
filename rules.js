@@ -893,12 +893,171 @@ export async function buildNativeZip(entries) {
     return zip;
 }
 
+// ---------------------------------------------------------------------------
+// Excel date formatting: every export shows dates as yyyy-mm-dd
+// ---------------------------------------------------------------------------
+export const EXCEL_DATE_FORMAT = 'yyyy-mm-dd';
+export const EXCEL_DATETIME_FORMAT = 'yyyy-mm-dd hh:mm:ss';
+
+// Header text that marks a date column (e.g. "Payment Date", "Created At", "Expiry Date", "Timestamp").
+const DATE_HEADER_RE = /\b(date|dates|time|timestamp|created|updated|expiry|expires|expiration)\b|\b(created|updated|imported|settled|posted)\s+at\b/i;
+const MONTH_ABBR = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+function isDateNumberFormat(z) {
+    if (typeof z !== 'string' || !z) return false;
+    const s = z.replace(/"[^"]*"|\[[^\]]*\]|\\./g, '');
+    return /[dy]/i.test(s) && !/[#0?]/.test(s);
+}
+
+function validYmd(y, m, d) {
+    if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31)) return false;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/**
+ * Re-writes a date / date-time text in the forms the app produces or receives
+ * (ISO "2026-11-17", ISO timestamps "2026-11-17T08:13:33Z", "17/11/2026", "1/25/2026 10:15 AM",
+ * "17-Nov-2026") as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS". Returns null if it is not a date.
+ * Ambiguous D/M/YYYY values are read day-first (Fawry format) unless the month part is > 12.
+ */
+export function formatExcelDateText(raw) {
+    if (raw === null || raw === undefined) return null;
+    const str = String(raw).trim();
+    if (!str || str.length > 40) return null;
+
+    // ISO date, optional time; a timezone (Z / +02:00) is converted to local time
+    let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?)?$/i);
+    if (m) {
+        if (m[7]) {
+            const dt = new Date(str.replace(' ', 'T'));
+            if (isNaN(dt.getTime())) return null;
+            return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}`;
+        }
+        const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+        if (!validYmd(y, mo, d)) return null;
+        const date = `${y}-${pad2(mo)}-${pad2(d)}`;
+        if (m[4] === undefined) return date;
+        const hh = Number(m[4]);
+        if (hh > 23) return null;
+        return `${date} ${pad2(hh)}:${m[5]}:${m[6] || '00'}`;
+    }
+
+    // D/M/YYYY or M/D/YYYY, optional ", hh:mm[:ss] [AM|PM]"
+    m = str.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+    if (m) {
+        let d = Number(m[1]), mo = Number(m[2]);
+        const y = Number(m[3]);
+        if (mo > 12 && d <= 12) { const t = d; d = mo; mo = t; }
+        if (!validYmd(y, mo, d)) return null;
+        const date = `${y}-${pad2(mo)}-${pad2(d)}`;
+        if (m[4] === undefined) return date;
+        let hh = Number(m[4]);
+        const ap = (m[7] || '').toUpperCase();
+        if (ap === 'PM' && hh < 12) hh += 12;
+        if (ap === 'AM' && hh === 12) hh = 0;
+        if (hh > 23) return null;
+        return `${date} ${pad2(hh)}:${m[5]}:${m[6] || '00'}`;
+    }
+
+    // 17-Nov-2026 / 17 Nov 2026
+    m = str.match(/^(\d{1,2})[\s-]([A-Za-z]{3})[A-Za-z]*[\s-](\d{4})$/);
+    if (m) {
+        const mo = MONTH_ABBR[m[2].toLowerCase()];
+        const d = Number(m[1]), y = Number(m[3]);
+        if (!mo || !validYmd(y, mo, d)) return null;
+        return `${y}-${pad2(mo)}-${pad2(d)}`;
+    }
+    return null;
+}
+
+function decodeColumnLetters(letters) {
+    let n = 0;
+    for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+    return n - 1;
+}
+
+/**
+ * Makes every date in a workbook display as yyyy-mm-dd (yyyy-mm-dd hh:mm:ss when it has a time):
+ *  - real Excel date cells (numbers with a date format, or Date cells) get the yyyy-mm-dd format;
+ *  - text in date columns (header contains "Date", "Time", "Created", "Expiry", ...) is rewritten
+ *    as "YYYY-MM-DD" text. Text stays text, so re-importing an exported file behaves as before.
+ * Non-date text in those columns is left untouched.
+ */
+export function applyIsoDateFormats(workbook) {
+    if (!workbook || !Array.isArray(workbook.SheetNames) || !workbook.Sheets) return workbook;
+    const ADDR_RE = /^([A-Z]+)(\d+)$/;
+    for (const name of workbook.SheetNames) {
+        const ws = workbook.Sheets[name];
+        if (!ws || typeof ws !== 'object' || Array.isArray(ws['!data'])) continue;
+
+        // Index cells by row so the header row can be found (row 1 for json_to_sheet; row 2 for
+        // titled pivot sheets, whose first row holds only a title).
+        const rows = new Map();
+        for (const addr in ws) {
+            if (addr.charCodeAt(0) === 33) continue;
+            const am = ADDR_RE.exec(addr);
+            if (!am) continue;
+            const r = Number(am[2]) - 1;
+            if (!rows.has(r)) rows.set(r, []);
+            rows.get(r).push({ addr, c: decodeColumnLetters(am[1]) });
+        }
+        const sortedRows = [...rows.keys()].sort((a, b) => a - b);
+
+        let headerRow = -1;
+        const dateCols = new Set();
+        for (const r of sortedRows.slice(0, 3)) {
+            const strCells = rows.get(r).filter(({ addr }) => ws[addr] && ws[addr].t === 's' && String(ws[addr].v || '').trim() !== '');
+            if (strCells.length >= 2) {
+                headerRow = r;
+                for (const { addr, c } of strCells) {
+                    const text = String(ws[addr].v).trim();
+                    if (text.length <= 60 && DATE_HEADER_RE.test(text)) dateCols.add(c);
+                }
+                break;
+            }
+        }
+
+        for (const r of sortedRows) {
+            for (const { addr, c } of rows.get(r)) {
+                const cell = ws[addr];
+                if (!cell || cell.f) continue;
+                if (cell.t === 'd' && cell.v instanceof Date && !isNaN(cell.v.getTime())) {
+                    const d = cell.v;
+                    const serial = (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()) / 86400000) + 25569;
+                    ws[addr] = { t: 'n', v: serial, z: (serial % 1) ? EXCEL_DATETIME_FORMAT : EXCEL_DATE_FORMAT };
+                    continue;
+                }
+                if (cell.t === 'n' && isDateNumberFormat(cell.z)) {
+                    const hasTime = /h/i.test(cell.z.replace(/"[^"]*"|\[[^\]]*\]/g, '')) || (typeof cell.v === 'number' && cell.v % 1 !== 0);
+                    cell.z = hasTime ? EXCEL_DATETIME_FORMAT : EXCEL_DATE_FORMAT;
+                    delete cell.w;
+                    continue;
+                }
+                if (cell.t === 's' && r > headerRow && dateCols.has(c)) {
+                    const iso = formatExcelDateText(cell.v);
+                    if (iso && iso !== cell.v) {
+                        cell.v = iso;
+                        delete cell.w;
+                        delete cell.h;
+                        delete cell.r;
+                    }
+                }
+            }
+        }
+    }
+    return workbook;
+}
+
 /**
  * Generates compact .xlsx bytes using Shared Strings (bookSST), empty-cell pruning,
  * and native CompressionStream dynamic-Huffman DEFLATE when available.
  */
 export async function buildCompressedXlsxBytes(workbook, opts = {}, xlsxLib = null) {
     const lib = xlsxLib || (typeof XLSX !== 'undefined' ? XLSX : globalThis.XLSX);
+    applyIsoDateFormats(workbook);
     pruneEmptyWorksheetCells(workbook);
     const rawArr = lib.write(workbook, {
         type: 'array',
@@ -929,6 +1088,7 @@ export async function buildCompressedXlsxBytes(workbook, opts = {}, xlsxLib = nu
  */
 export function writeCompressedExcel(workbook, filename, opts = {}) {
     const xlsxLib = (typeof XLSX !== 'undefined' ? XLSX : globalThis.XLSX);
+    applyIsoDateFormats(workbook);   // all exports: dates as yyyy-mm-dd
     pruneEmptyWorksheetCells(workbook);
 
     const canNativeZip = (!opts.bookType || opts.bookType === 'xlsx')

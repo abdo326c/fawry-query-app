@@ -33,7 +33,7 @@ import {
     mergeStudentEmails,
     getStudentDisplayEmails,
     writeCompressedExcel
-} from './rules.js?v=2.6.8';
+} from './rules.js?v=2.6.9';
 import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
@@ -2177,7 +2177,7 @@ class App {
                         const dateLabel = `${parseInt(dateParts[2])}-${monthNames[parseInt(dateParts[1]) - 1]}-${dateParts[0]}`;
                         htmlOutput += `<tr class="day-row" data-drill-group="date" data-drill-key="${d}" style="cursor: pointer;" title="Click to view transactions for ${dateLabel}">
                             <td>${dateLabel}</td>`;
-                        const exportRow = { "Date": dateLabel };
+                        const exportRow = { "Date": d }; // Excel exports use yyyy-mm-dd
                         selectedBanks.forEach(b => {
                             htmlOutput += renderBankTds(row, b);
                         });
@@ -2188,7 +2188,7 @@ class App {
                         exportRow["Grand Total (EGP)"] = Number((row.Total || 0).toFixed(2));
                         if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
                         this.lastDashboardExportRows.push(exportRow);
-                        reportDailyRows.push(buildRowAoaValues(dateLabel, row));
+                        reportDailyRows.push(buildRowAoaValues(d, row));
                     });
                 } else {
                     months.forEach(m => {
@@ -2214,7 +2214,7 @@ class App {
                             const dateLabel = `${parseInt(dateParts[2])}-${monthNames[parseInt(dateParts[1]) - 1]}-${dateParts[0]}`;
                             htmlOutput += `<tr class="day-row month-${m}" data-drill-group="date" data-drill-key="${d}" style="${multiMonth ? 'display: none;' : ''} cursor: pointer;" title="Click to view transactions for ${dateLabel}">
                                 <td>${dateLabel}</td>`;
-                            const exportRow = { "Date": dateLabel };
+                            const exportRow = { "Date": d }; // Excel exports use yyyy-mm-dd
                             selectedBanks.forEach(b => {
                                 htmlOutput += renderBankTds(row, b);
                             });
@@ -2225,7 +2225,7 @@ class App {
                             exportRow["Grand Total (EGP)"] = Number((row.Total || 0).toFixed(2));
                             if (showShare) exportRow["% Share"] = bankTotals.Total > 0 ? `${((row.Total / bankTotals.Total) * 100).toFixed(1)}%` : '0.0%';
                             this.lastDashboardExportRows.push(exportRow);
-                            reportDailyRows.push(buildRowAoaValues(dateLabel, row));
+                            reportDailyRows.push(buildRowAoaValues(d, row));
                         });
                     });
                 }
@@ -4960,11 +4960,11 @@ class App {
                 }
 
                 const worksheet = XLSX.utils.json_to_sheet(formattedData);
-                // Write integer Excel date serials (z: 'm/d/yyyy') so Excel shows a true Date with zero time component
+                // Write integer Excel date serials (z: 'yyyy-mm-dd') so Excel shows a true Date with zero time component
                 for (let idx = 0; idx < len; idx++) {
                     const serial = dateToExcelSerial(allData[idx].payment_date);
                     if (serial !== null) {
-                        worksheet[`B${idx + 2}`] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+                        worksheet[`B${idx + 2}`] = { t: 'n', v: serial, z: 'yyyy-mm-dd' };
                     }
                 }
                 const workbook = XLSX.utils.book_new();
@@ -9604,7 +9604,7 @@ class App {
         for (let idx = 0; idx < len; idx++) {
             const serial = dateToExcelSerial(effectiveDates[idx]);
             if (serial !== null) {
-                ws[`A${idx + 2}`] = { t: 'n', v: serial, z: 'm/d/yyyy' };
+                ws[`A${idx + 2}`] = { t: 'n', v: serial, z: 'yyyy-mm-dd' };
             }
         }
         ws['!cols'] = [
