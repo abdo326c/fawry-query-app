@@ -6779,9 +6779,9 @@ class App {
                     <head>
                         <title>Official Student Statement - ${sid}</title>
                         <style>
-                            @page { size: A4; margin: 14mm; }
+                            @page { size: A4; margin: 0; }
                             * { box-sizing: border-box; }
-                            body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; max-width: 900px; margin: 0 auto; padding: 1.5rem; font-size: 12.5px; line-height: 1.45; }
+                            body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; max-width: 900px; margin: 0 auto; padding: 14mm; font-size: 12.5px; line-height: 1.45; }
                             .brand-bar { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2.5px solid #0f766e; padding-bottom: 0.9rem; margin-bottom: 1.25rem; }
                             .brand-title { font-size: 1.35rem; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -0.02em; }
                             .brand-sub { font-size: 0.8rem; color: #475569; margin: 0.2rem 0 0 0; }
@@ -6803,7 +6803,7 @@ class App {
                             .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #e2e8f0; color: #0f172a; font-weight: 600; font-size: 0.72rem; }
                             h3 { font-size: 0.95rem; margin: 1.1rem 0 0.55rem 0; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.3rem; }
                             .custom-footer { margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; color: #64748b; font-size: 0.75rem; border-top: 1px solid #cbd5e1; padding-top: 0.75rem; }
-                            @media print { body { padding: 0; } }
+                            @media print { body { padding: 14mm; max-width: none; } }
                         </style>
                     </head>
                     <body>
