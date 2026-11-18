@@ -1,5 +1,6 @@
-# Dependencies
+# Dependencies & Build Output
 node_modules/
+dist/
 
 # Environment
 .env

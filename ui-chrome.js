@@ -17,7 +17,9 @@
         });
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
+    let globalListenersBound = false;
+
+    function initUiChrome() {
         if (window.lucide) window.lucide.createIcons();
 
         // 1. Sidebar Collapse Toggle
@@ -29,7 +31,8 @@
             }
         } catch (e) { /* ignore */ }
 
-        if (btnCollapse && appLayout) {
+        if (btnCollapse && appLayout && !btnCollapse.dataset.chromeBound) {
+            btnCollapse.dataset.chromeBound = '1';
             btnCollapse.addEventListener('click', () => {
                 appLayout.classList.toggle('sidebar-collapsed');
                 try {
@@ -44,7 +47,8 @@
         // 2. Show / Hide Password toggle on Auth screen
         const btnEye = document.getElementById('btn-toggle-auth-password');
         const pwInput = document.getElementById('auth-password');
-        if (btnEye && pwInput) {
+        if (btnEye && pwInput && !btnEye.dataset.chromeBound) {
+            btnEye.dataset.chromeBound = '1';
             btnEye.addEventListener('click', () => {
                 const isPw = pwInput.type === 'password';
                 pwInput.type = isPw ? 'text' : 'password';
@@ -54,6 +58,8 @@
 
         // 3. Header "Tools" dropdown popovers
         document.querySelectorAll('[data-dropdown-toggle]').forEach(trigger => {
+            if (trigger.dataset.chromeBound) return;
+            trigger.dataset.chromeBound = '1';
             trigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const menuId = trigger.getAttribute('data-dropdown-toggle');
@@ -65,14 +71,23 @@
             });
         });
 
-        document.addEventListener('click', () => {
-            document.querySelectorAll('.action-dropdown-menu.open').forEach(m => m.classList.remove('open'));
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
+        if (!globalListenersBound) {
+            globalListenersBound = true;
+            document.addEventListener('click', () => {
                 document.querySelectorAll('.action-dropdown-menu.open').forEach(m => m.classList.remove('open'));
-            }
-        });
-    });
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    document.querySelectorAll('.action-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+                }
+            });
+        }
+    }
+
+    if (typeof window !== 'undefined') {
+        window.initUiChrome = initUiChrome;
+    }
+
+    document.addEventListener('DOMContentLoaded', initUiChrome);
 })();

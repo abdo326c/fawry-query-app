@@ -9007,7 +9007,11 @@ applyAutoMatcherMixin(App);
 applyErpExportMixin(App);
 applyAdminAuditMixin(App);
 
-// Start app
+export { App };
+
+// Start app when static shell is already in the document
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new App();
+    if (document.querySelector('.app-layout')) {
+        window.app = new App();
+    }
 });

@@ -26,5 +26,8 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: TypeScript & Vite Production Build Check
+        run: npm run build
+
       - name: Run Test Suite
         run: npm test
