@@ -796,18 +796,38 @@ class DashboardMixin {
             
             // 1. Query Fawry transactions only when at least one Fawry bank is checked
             if (fawryBanksSelected.length > 0) {
-                if (statusFilter === 'all') {
-                    // Single-scan combined summary RPC (pivot + KPIs + categories in 1 query)
-                    const { data: summaryRes, error: summaryErr } = await supabase.rpc('get_dashboard_summary', {
+                const rpcArgs = {
+                    start_date: dateFrom,
+                    end_date: dateTo,
+                    group_col: groupBy,
+                    banks: fawryBanksSelected
+                };
+                if (statusFilter !== 'all') {
+                    rpcArgs.status_filter = statusFilter;
+                }
+                const { data: summaryRes, error: summaryErr } = await supabase.rpc('get_dashboard_summary', rpcArgs);
+                if (!summaryErr && summaryRes && summaryRes.kpis && Array.isArray(summaryRes.pivot)) {
+                    rpcSucceeded = true;
+                    summaryRpcData = summaryRes;
+                    allData = summaryRes.pivot
+                        .filter(row => fawryBanksSelected.includes(row.bank))
+                        .map(row => ({
+                            payment_date: groupBy === 'date' ? row.group_key : null,
+                            mapping: groupBy === 'mapping' ? row.group_key : null,
+                            second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
+                            item_name: groupBy === 'item_name' ? row.group_key : null,
+                            bank: row.bank,
+                            item_price: row.total_amount
+                        }));
+                } else if (statusFilter === 'all') {
+                    const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
                         start_date: dateFrom,
                         end_date: dateTo,
-                        group_col: groupBy,
-                        banks: fawryBanksSelected
+                        group_col: groupBy
                     });
-                    if (!summaryErr && summaryRes && summaryRes.kpis && Array.isArray(summaryRes.pivot)) {
+                    if (!pivotByErr && Array.isArray(pivotByData)) {
                         rpcSucceeded = true;
-                        summaryRpcData = summaryRes;
-                        allData = summaryRes.pivot
+                        allData = pivotByData
                             .filter(row => fawryBanksSelected.includes(row.bank))
                             .map(row => ({
                                 payment_date: groupBy === 'date' ? row.group_key : null,
@@ -817,37 +837,18 @@ class DashboardMixin {
                                 bank: row.bank,
                                 item_price: row.total_amount
                             }));
-                    } else {
-                        const { data: pivotByData, error: pivotByErr } = await supabase.rpc('get_dashboard_pivot_by', {
-                            start_date: dateFrom,
-                            end_date: dateTo,
-                            group_col: groupBy
-                        });
-                        if (!pivotByErr && Array.isArray(pivotByData)) {
-                            rpcSucceeded = true;
-                            allData = pivotByData
+                    } else if (groupBy === 'date') {
+                        // 2. Fallback to legacy date-only RPC
+                        const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
+                        rpcSucceeded = !rpcError && Array.isArray(rpcData);
+                        if (rpcSucceeded) {
+                            allData = rpcData
                                 .filter(row => fawryBanksSelected.includes(row.bank))
                                 .map(row => ({
-                                    payment_date: groupBy === 'date' ? row.group_key : null,
-                                    mapping: groupBy === 'mapping' ? row.group_key : null,
-                                    second_mapping: groupBy === 'second_mapping' ? row.group_key : null,
-                                    item_name: groupBy === 'item_name' ? row.group_key : null,
+                                    payment_date: row.payment_date,
                                     bank: row.bank,
-                                    item_price: row.total_amount
+                                    item_price: row.daily_total
                                 }));
-                        } else if (groupBy === 'date') {
-                            // 2. Fallback to legacy date-only RPC
-                            const { data: rpcData, error: rpcError } = await supabase.rpc('get_dashboard_pivot', { start_date: dateFrom, end_date: dateTo });
-                            rpcSucceeded = !rpcError && Array.isArray(rpcData);
-                            if (rpcSucceeded) {
-                                allData = rpcData
-                                    .filter(row => fawryBanksSelected.includes(row.bank))
-                                    .map(row => ({
-                                        payment_date: row.payment_date,
-                                        bank: row.bank,
-                                        item_price: row.daily_total
-                                    }));
-                            }
                         }
                     }
                 }

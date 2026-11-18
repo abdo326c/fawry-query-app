@@ -59,6 +59,7 @@ import {
     runConcurrent,
     loadScriptOnce,
     renderIcons,
+    inlineIcon,
     SUPABASE_EXEMPT_OR_FILTER,
     formatIdStatusMeta,
     formatMoney,
@@ -735,16 +736,47 @@ class App {
         }
     }
 
-    async fetchUniqueFilters() {
-        try {
-            const { data, error } = await supabase.from('item_mappings').select('mapping, item_name');
-            if (!error && data) {
-                this.uniqueLists.mapping = [...new Set(data.map(d => d.mapping).filter(Boolean))].sort();
-                this.uniqueLists.item_name = [...new Set(data.map(d => d.item_name).filter(Boolean))].sort();
-            }
-        } catch (err) {
-            console.error('Error fetching distinct mappings:', err);
+    async fetchUniqueFilters({ force = false } = {}) {
+        const cacheKey = 'spdb-unique-filters-v1';
+        if (!force) {
+            try {
+                const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && Array.isArray(parsed.mapping) && Array.isArray(parsed.item_name) && (Date.now() - (parsed.ts || 0)) < 300000) {
+                        this.uniqueLists.mapping = parsed.mapping;
+                        this.uniqueLists.item_name = parsed.item_name;
+                        return this.uniqueLists;
+                    }
+                }
+            } catch (_e) { /* ignore storage errors */ }
+            if (this._uniqueFiltersPromise) return this._uniqueFiltersPromise;
         }
+
+        this._uniqueFiltersPromise = (async () => {
+            try {
+                const { data, error } = await supabase.from('item_mappings').select('mapping, item_name');
+                if (!error && data) {
+                    this.uniqueLists.mapping = [...new Set(data.map(d => d.mapping).filter(Boolean))].sort();
+                    this.uniqueLists.item_name = [...new Set(data.map(d => d.item_name).filter(Boolean))].sort();
+                    try {
+                        if (typeof sessionStorage !== 'undefined') {
+                            sessionStorage.setItem(cacheKey, JSON.stringify({
+                                ts: Date.now(),
+                                mapping: this.uniqueLists.mapping,
+                                item_name: this.uniqueLists.item_name
+                            }));
+                        }
+                    } catch (_e) { /* ignore storage errors */ }
+                }
+            } catch (err) {
+                console.error('Error fetching distinct mappings:', err);
+            } finally {
+                this._uniqueFiltersPromise = null;
+            }
+            return this.uniqueLists;
+        })();
+        return this._uniqueFiltersPromise;
     }
 
     initNavigation() {
@@ -965,6 +997,12 @@ class App {
 
     invalidateDistinctCache() {
         this.distinctCache = {};
+        this._uniqueFiltersPromise = null;
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.removeItem('spdb-unique-filters-v1');
+            }
+        } catch (_e) { /* ignore */ }
     }
 
     // Returns the adjusted names currently stored for these mapping rules (call BEFORE changing the rules,
@@ -2936,6 +2974,7 @@ class App {
         }
         this.studentMasterByIdMap = map;
         this._sidLevelCache = new Map();
+        this._studentLookupIndexCache = null;
         this._lastMappedStudentsRef = students;
         this._lastMappedStudentsLen = Array.isArray(students) ? students.length : 0;
         return map;
@@ -3332,9 +3371,10 @@ class App {
 
         const filterKey = this.getTransactionsFilterKey();
         const reuseCount = this.currentPage > 1 && this._txCountCache?.key === filterKey && typeof this._txCountCache.count === 'number';
+        const txCols = 'id, reference_number, payment_date, student_id, original_student_id, student_level, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, merchant_name, bank, check_column, file_name, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher';
 
         let query = this.applyTransactionFiltersToQuery(
-            supabase.from('transactions').select('*', reuseCount ? {} : { count: 'exact' })
+            supabase.from('transactions').select(txCols, reuseCount ? {} : { count: 'exact' })
         );
 
         const fromRange = (this.currentPage - 1) * this.pageSize;
@@ -3442,7 +3482,7 @@ class App {
                         <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
                             <span class="badge ${statusClass}" title="${escapeHTML(statusTooltip)}">${escapeHTML(shortStatus)}</span>
                             ${canEditRules ? `<button type="button" class="tx-quick-fix-btn ${statusClass}" data-quick-fix-ref="${escapeHTML(t.reference_number)}" title="Add / Edit Manual Fix for ${escapeHTML(t.reference_number)}">
-                                <i data-lucide="wrench"></i>
+                                ${inlineIcon('wrench', 13)}
                             </button>` : ''}
                         </div>
                     </td>
@@ -3451,32 +3491,32 @@ class App {
             `;
         }).join('');
 
-        tbody.querySelectorAll('[data-quick-fix-ref]').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const ref = btn.getAttribute('data-quick-fix-ref');
-                this.openQuickFixForRef(ref);
-            });
-        });
-
-        tbody.querySelectorAll('[data-quick-map-item]').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const itemName = btn.getAttribute('data-quick-map-item');
-                this.openQuickMapForItem(itemName);
-            });
-        });
-
-        tbody.querySelectorAll('tr[data-tx-row-idx]').forEach(row => {
-            row.addEventListener('click', (e) => {
+        if (!tbody.dataset.delegatedBound) {
+            tbody.dataset.delegatedBound = '1';
+            tbody.addEventListener('click', (e) => {
+                const fixBtn = e.target.closest('[data-quick-fix-ref]');
+                if (fixBtn) {
+                    e.stopPropagation();
+                    this.openQuickFixForRef(fixBtn.getAttribute('data-quick-fix-ref'));
+                    return;
+                }
+                const mapBtn = e.target.closest('[data-quick-map-item]');
+                if (mapBtn) {
+                    e.stopPropagation();
+                    this.openQuickMapForItem(mapBtn.getAttribute('data-quick-map-item'));
+                    return;
+                }
                 if (e.target.closest('button, a, input')) return;
-                const idx = parseInt(row.getAttribute('data-tx-row-idx'), 10);
-                const tx = (this.currentPageTransactions || [])[idx];
-                if (tx) this.openTransactionDetailsModal(tx);
+                const row = e.target.closest('tr[data-tx-row-idx]');
+                if (row) {
+                    const idx = parseInt(row.getAttribute('data-tx-row-idx'), 10);
+                    const tx = (this.currentPageTransactions || [])[idx];
+                    if (tx) this.openTransactionDetailsModal(tx);
+                }
             });
-        });
+        }
 
-        if (window.lucide) lucide.createIcons({ root: tbody });
+        renderIcons(tbody);
     }
 
     async openQuickMapForItem(rawItemName) {

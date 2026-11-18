@@ -1417,11 +1417,13 @@ REVOKE EXECUTE ON FUNCTION public.revert_audit_log_entry(bigint) FROM public, an
 GRANT EXECUTE ON FUNCTION public.revert_audit_log_entry(bigint) TO authenticated;
 
 -- 21. Single-Scan Dashboard Summary RPC (combines Pivot + KPI counts + Category breakdown)
+DROP FUNCTION IF EXISTS public.get_dashboard_summary(DATE, DATE, TEXT, TEXT[]);
 CREATE OR REPLACE FUNCTION public.get_dashboard_summary(
   start_date DATE,
   end_date DATE,
   group_col TEXT DEFAULT 'date',
-  banks TEXT[] DEFAULT NULL
+  banks TEXT[] DEFAULT NULL,
+  status_filter TEXT DEFAULT 'all'
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -1431,6 +1433,7 @@ SET search_path = public
 AS $function$
 DECLARE
   v_group_col TEXT := LOWER(BTRIM(COALESCE(group_col, 'date')));
+  v_status    TEXT := LOWER(BTRIM(COALESCE(status_filter, 'all')));
   v_kpis JSONB;
   v_pivot JSONB;
   v_categories JSONB;
@@ -1454,6 +1457,23 @@ BEGIN
     WHERE t.payment_date >= start_date
       AND t.payment_date <= end_date
       AND (banks IS NULL OR CARDINALITY(banks) = 0 OR t.bank = ANY(banks))
+      AND (
+        v_status = 'all'
+        OR (v_status = 'valid' AND (
+              t.id_status IN ('Valid', 'Exempt')
+              OR COALESCE(t.mapping, '') ~* '\m(dip|diploma|workshops?)\M'
+              OR COALESCE(t.second_mapping, '') ~* '\m(dip|diploma|workshops?)\M'
+            ))
+        OR (v_status = 'invalid' AND (
+              COALESCE(t.id_status, '') NOT IN ('Valid', 'Exempt')
+              AND COALESCE(t.mapping, '') !~* '\m(dip|diploma|workshops?)\M'
+              AND COALESCE(t.second_mapping, '') !~* '\m(dip|diploma|workshops?)\M'
+            ))
+        OR (v_status = 'settled' AND COALESCE(t.is_settled, false) = true)
+        OR (v_status = 'unsettled' AND COALESCE(t.is_settled, false) = false)
+        OR (v_status = 'erp_recorded' AND NULLIF(BTRIM(COALESCE(t.erp_batch_number, '')), '') IS NOT NULL)
+        OR (v_status = 'erp_unposted' AND NULLIF(BTRIM(COALESCE(t.erp_batch_number, '')), '') IS NULL)
+      )
   ),
   kpis_agg AS (
     SELECT
@@ -1501,7 +1521,7 @@ BEGIN
 END;
 $function$;
 
-GRANT EXECUTE ON FUNCTION public.get_dashboard_summary(DATE, DATE, TEXT, TEXT[]) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_summary(DATE, DATE, TEXT, TEXT[], TEXT) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.get_keyset_bounds(
   p_table TEXT,

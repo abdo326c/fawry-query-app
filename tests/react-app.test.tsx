@@ -26,7 +26,9 @@ vi.mock('../supabase.js', () => ({
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue({ data: [], error: null }),
       maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-      range: vi.fn().mockResolvedValue({ data: [], count: 0, error: null })
+      range: vi.fn().mockResolvedValue({ data: [], count: 0, error: null }),
+      then: (resolve: (val: unknown) => void) =>
+        Promise.resolve({ data: [{ mapping: 'Tuition', item_name: 'Tuition Fee' }], error: null }).then(resolve)
     }))
   }
 }));
@@ -43,6 +45,7 @@ import {
 } from '../src/services/rules';
 import { createEmptyFxStore, setManualFxRate, convertUsdToEgp } from '../src/services/fx-rates';
 import { parseStatementDate } from '../src/services/foreign-transactions';
+import { inlineIcon } from '../app-utils.js';
 
 describe('React 19 + TypeScript Migration Architecture', () => {
   beforeEach(() => {
@@ -221,5 +224,17 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     (app.openPaymentLinkModal as () => void)();
     expect(document.getElementById('modal-link')?.classList.contains('hidden')).toBe(false);
     document.getElementById('modal-link')?.classList.add('hidden');
+
+    // Verify inlineIcon renders pre-built SVG without unparsed data-lucide attributes
+    const wrenchSvg = inlineIcon('wrench', 13);
+    expect(wrenchSvg).toContain('<svg');
+    expect(wrenchSvg).toContain('lucide-wrench');
+    expect(wrenchSvg).not.toContain('data-lucide=');
+
+    // Verify fetchUniqueFilters caches in sessionStorage and invalidateDistinctCache clears it
+    await (app.fetchUniqueFilters as (opts?: { force?: boolean }) => Promise<unknown>)({ force: true });
+    expect(sessionStorage.getItem('spdb-unique-filters-v1')).not.toBeNull();
+    (app.invalidateDistinctCache as () => void)();
+    expect(sessionStorage.getItem('spdb-unique-filters-v1')).toBeNull();
   });
 });

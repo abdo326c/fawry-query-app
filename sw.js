@@ -7,6 +7,7 @@ const urlsToCache = [
   './app-utils.js',
   './dashboard.js',
   './auto-matcher.js',
+  './automatcher.worker.js',
   './erp-export.js',
   './admin-audit.js',
   './ui-chrome.js?v=1.0.0',

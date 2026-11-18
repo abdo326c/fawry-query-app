@@ -158,7 +158,16 @@ class AutoMatcherMixin {
                 if (sigSet.size >= 3) sharedMobileSet.add(pk);
             }
 
-            const studentLookupIndex = buildStudentLookupIndex(students);
+            if (
+                !this._studentLookupIndexCache ||
+                this._studentLookupIndexSource !== students ||
+                this._studentLookupIndexLen !== students.length
+            ) {
+                this._studentLookupIndexCache = buildStudentLookupIndex(students);
+                this._studentLookupIndexSource = students;
+                this._studentLookupIndexLen = students.length;
+            }
+            const studentLookupIndex = this._studentLookupIndexCache;
 
             this.automatchProposals = [];
 
