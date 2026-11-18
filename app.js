@@ -71,6 +71,7 @@ import { applyDashboardMixin } from './dashboard.js';
 import { applyAutoMatcherMixin } from './auto-matcher.js';
 import { applyErpExportMixin } from './erp-export.js';
 import { applyAdminAuditMixin } from './admin-audit.js';
+import './settlement.js';
 
 class App {
     constructor() {

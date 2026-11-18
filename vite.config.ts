@@ -1,9 +1,32 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 
+function copyRootStaticAssetsPlugin() {
+  return {
+    name: 'copy-root-static-assets',
+    closeBundle() {
+      const rootDir = import.meta.dirname;
+      const outDir = path.resolve(rootDir, 'dist');
+      if (!fs.existsSync(outDir)) return;
+
+      const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (/\.(?:js|css|png|svg|ico)$/i.test(entry.name) || entry.name === 'manifest.json') {
+          fs.copyFileSync(
+            path.join(rootDir, entry.name),
+            path.join(outDir, entry.name)
+          );
+        }
+      }
+    }
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), copyRootStaticAssetsPlugin()],
   build: {
     outDir: 'dist',
     target: 'es2022',
@@ -32,6 +55,9 @@ export default defineConfig({
           }
           if (id.endsWith('/admin-audit.js') || id.endsWith('\\admin-audit.js')) {
             return 'feature-admin';
+          }
+          if (id.endsWith('/settlement.js') || id.endsWith('\\settlement.js')) {
+            return 'feature-settlement';
           }
         }
       }

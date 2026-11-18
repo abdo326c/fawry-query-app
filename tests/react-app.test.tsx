@@ -236,5 +236,12 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     expect(sessionStorage.getItem('spdb-unique-filters-v1')).not.toBeNull();
     (app.invalidateDistinctCache as () => void)();
     expect(sessionStorage.getItem('spdb-unique-filters-v1')).toBeNull();
+
+    // Verify clicking Fawry Settlements tab initializes SettlementProcessor immediately without network script error
+    const settlementNav = document.querySelector('.nav-link[data-tab="settlement"]') as HTMLElement | null;
+    expect(settlementNav).not.toBeNull();
+    settlementNav?.click();
+    expect((window as unknown as { SettlementProcessor?: unknown }).SettlementProcessor).toBeDefined();
+    expect((window as unknown as { settlementApp?: unknown }).settlementApp).toBeDefined();
   });
 });
