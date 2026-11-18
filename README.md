@@ -8,27 +8,38 @@ It's a static site (HTML + JavaScript modules). All data lives in Supabase.
 
 | Tab | What it does |
 |---|---|
-| Dashboard | Collections pivot by date, mapping or item, per bank (NUADIB64 / NUADCB136) |
-| Transactions | Search, filter and export imported payments; import Fawry order and link files |
-| Settlement | Upload bank settlement Excel/ZIP files, reconcile them against the system and mark matched payments as settled |
+| Dashboard | Multi-currency collections pivot by date, mapping or item, per bank (NUADIB64 / NUADCB136 / Banque Misr USD) with USD→EGP FX sync |
+| Transactions | Search, filter and export imported Fawry payments; import Fawry order and link files |
+| BM Transactions | Import Banque Misr (USD) bank statements (Excel/CSV/PDF), auto-match student names, and manage foreign deposits |
+| Settlement | Upload bank settlement Excel/ZIP files, reconcile them against the system, save run history, and mark matched payments as settled |
 | Item Mappings | Rules that rename items and assign Mapping / 2nd Mapping |
 | Manual Fixes | Per-reference corrections (student ID, item name, mappings) |
 | Auto-Matcher | Proposes student IDs for invalid or missing IDs (link info, email, national ID, phone, optional name match) |
-| Students Details | Student master list lookup and import |
+| Students Details | Student master list lookup, UG/PG classification, statement export, and bulk import |
 | Payment Links | Catalogue of Fawry payment links |
-| ERP Export | Builds the Dynamics 365 journal file and records batch/voucher numbers |
+| ERP Export | Builds the Dynamics 365 journal file (Fawry + BM USD deposits) and records batch/voucher numbers |
+| Users & Roles | Admin-only 4-tier RBAC management (`viewer`, `operator`, `accountant`, `admin`), user activation/deactivation, and Audit Log with point-in-time revert |
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `index.html` | Page layout, modals, CDN libraries, Content-Security-Policy |
+| `index.html` | Page layout, modals, CDN libraries (with SRI hashes), Content-Security-Policy |
 | `styles.css` | Styling (dark and light themes) |
+| `ui-chrome.js` | Service Worker registration, sidebar rail collapse, auth password toggle, and dropdown popovers |
 | `supabase.js` | Supabase client (project URL and **public** anon key) |
-| `rules.js` | Shared business rules (ID validation, link → fix → mapping order) and paginated data helpers |
+| `rules.js` | Shared business rules (ID validation, link → fix → mapping order), Excel compression/date formatting, and paginated data helpers |
+| `app-utils.js` | Shared UI helpers (`Toast`, progress wrappers, currency/status formatting, script loader) |
 | `csv-processor.js` | Importer for Fawry order and link files (CSV / Excel) |
-| `settlement.js` | Settlement reconciliation |
-| `app.js` | The rest of the UI |
+| `settlement.js` | Settlement reconciliation and saved settlement batch history |
+| `foreign-transactions.js` | Banque Misr (USD) statement parser (Excel/CSV/PDF) and student deposit matcher |
+| `fx-rates.js` | Historical and daily USD→EGP exchange rate store and sync helpers |
+| `dashboard.js` | Dashboard pivot, KPI summary, FX rate controls, and collection report Excel export |
+| `auto-matcher.js` | Student ID auto-matching engine UI and proposal review |
+| `erp-export.js` | Dynamics 365 (ERP) journal preview, Excel export, and batch/voucher recording |
+| `admin-audit.js` | Users & Roles RBAC admin panel, Audit Log viewer/undo, Double-Payment detector, and Database Hygiene modal |
+| `app.js` | Core application controller, authentication, transactions, mappings, fixes, students, and foreign deposits UI |
+| `schema.sql` | Consolidated baseline PostgreSQL schema, RLS policies, triggers, and RPCs (through v2.11.0) |
 
 ## Running it
 

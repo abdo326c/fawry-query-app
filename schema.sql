@@ -1,14 +1,9 @@
 -- ============================================================================
--- WARNING: THIS FILE IS OUT OF DATE. DO NOT RE-RUN IT ON THE PRODUCTION DATABASE.
+-- CONSOLIDATED SCHEMA (v2.11.1 — includes migrations 2.1.0 through 2.11.0)
 --
--- It predates migrations 2.4.0 - 2.11.0. Several of its CREATE OR REPLACE / DROP POLICY
--- statements would silently UNDO later security fixes (user deactivation, default-deny roles,
--- active-viewer SELECT policies, the audit-log guard trigger, sync_auth_users admin check).
---
--- Production state = this file + every file in migrations/ applied in version order.
--- To refresh this file from the live database (schema only, no data):
---   supabase db dump --schema public -f schema.sql
---   (or: pg_dump --schema-only --schema=public "<connection string>" > schema.sql)
+-- Idempotent baseline schema for the Student Payments Database (Supabase / PostgreSQL).
+-- For incremental upgrades on an existing database, you can also run the individual
+-- files in migrations/ in version order.
 -- ============================================================================
 
 -- Enable UUID extension
@@ -315,41 +310,73 @@ END;
 $$;
 
 
--- 11. Role-Based Access Control (4-tier RBAC: viewer < operator < accountant < admin)
+-- 11. Role-Based Access Control (4-tier RBAC: viewer < operator < accountant < admin, default-deny)
 CREATE TABLE IF NOT EXISTS user_roles (
   email       VARCHAR(255) PRIMARY KEY,
   role        VARCHAR(50) NOT NULL DEFAULT 'viewer' CHECK (role IN ('viewer', 'operator', 'accountant', 'admin')),
+  is_active   BOOLEAN NOT NULL DEFAULT TRUE,
   updated_by  VARCHAR(255),
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
-INSERT INTO user_roles (email, role, updated_by)
-VALUES ('ammahmoud@nu.edu.eg', 'admin', 'system')
-ON CONFLICT (email) DO UPDATE SET role = 'admin', updated_at = NOW();
+ALTER TABLE public.user_roles
+  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
+INSERT INTO user_roles (email, role, is_active, updated_by)
+VALUES ('ammahmoud@nu.edu.eg', 'admin', TRUE, 'system')
+ON CONFLICT (email) DO UPDATE SET role = 'admin', is_active = TRUE, updated_at = NOW();
 
 CREATE INDEX IF NOT EXISTS idx_user_roles_email_lower ON public.user_roles (LOWER(BTRIM(email)));
 
 CREATE OR REPLACE FUNCTION public.role_level(r TEXT)
-RETURNS INTEGER LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = public AS $$
-  SELECT CASE LOWER(COALESCE(r, 'viewer'))
+RETURNS INTEGER
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public
+AS $$
+  SELECT CASE LOWER(COALESCE(r, 'none'))
     WHEN 'admin' THEN 4
     WHEN 'accountant' THEN 3
     WHEN 'operator' THEN 2
-    ELSE 1
+    WHEN 'viewer' THEN 1
+    ELSE 0
   END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.current_user_role()
-RETURNS TEXT LANGUAGE plpgsql STABLE PARALLEL SAFE SECURITY INVOKER SET search_path = public AS $$
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
-  v_email TEXT;
-  v_role  TEXT;
+  v_email     TEXT;
+  v_role      TEXT;
+  v_is_active BOOLEAN;
 BEGIN
-  v_email := LOWER(BTRIM(COALESCE(auth.jwt() ->> 'email', '')));
-  IF v_email = '' THEN RETURN 'viewer'; END IF;
-  IF v_email = 'ammahmoud@nu.edu.eg' THEN RETURN 'admin'; END IF;
-  SELECT role INTO v_role FROM public.user_roles WHERE LOWER(BTRIM(email)) = v_email LIMIT 1;
-  RETURN COALESCE(v_role, 'viewer');
+  v_email := LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', '')));
+  IF v_email = '' THEN
+    RETURN 'none';
+  END IF;
+  IF v_email = 'ammahmoud@nu.edu.eg' THEN
+    RETURN 'admin';
+  END IF;
+
+  SELECT role, COALESCE(is_active, TRUE)
+  INTO v_role, v_is_active
+  FROM public.user_roles
+  WHERE LOWER(TRIM(email)) = v_email
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN 'none';
+  END IF;
+  IF v_is_active IS FALSE THEN
+    RETURN 'deactivated';
+  END IF;
+
+  RETURN COALESCE(v_role, 'none');
 END;
 $$;
 
@@ -360,8 +387,12 @@ $$;
 
 ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS user_roles_select ON user_roles;
-CREATE POLICY user_roles_select ON user_roles FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS user_roles_select ON public.user_roles;
+CREATE POLICY user_roles_select ON public.user_roles
+  FOR SELECT TO authenticated USING (
+    (SELECT public.has_min_role('viewer'))
+    OR LOWER(TRIM(email)) = (SELECT LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', ''))))
+  );
 DROP POLICY IF EXISTS user_roles_admin_write ON user_roles;
 CREATE POLICY user_roles_admin_write ON user_roles FOR ALL TO authenticated USING ((SELECT public.has_min_role('admin'))) WITH CHECK ((SELECT public.has_min_role('admin')));
 
@@ -379,7 +410,7 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS rbac_insert ON %I', tbl);
     EXECUTE format('DROP POLICY IF EXISTS rbac_update ON %I', tbl);
     EXECUTE format('DROP POLICY IF EXISTS rbac_delete ON %I', tbl);
-    EXECUTE format('CREATE POLICY rbac_select ON %I FOR SELECT TO authenticated USING (true)', tbl);
+    EXECUTE format('CREATE POLICY rbac_select ON %I FOR SELECT TO authenticated USING ((SELECT public.has_min_role(''viewer'')))', tbl);
   END LOOP;
 END $$;
 
@@ -405,6 +436,52 @@ CREATE POLICY rbac_delete ON import_batches FOR DELETE TO authenticated USING ((
 
 CREATE POLICY rbac_insert ON audit_logs FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
 
+CREATE OR REPLACE FUNCTION public.secure_audit_log_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $function$
+DECLARE
+  v_jwt_email TEXT;
+  v_role TEXT;
+BEGIN
+  BEGIN
+    v_jwt_email := NULLIF(LOWER(TRIM(auth.jwt() ->> 'email')), '');
+  EXCEPTION WHEN OTHERS THEN
+    v_jwt_email := NULL;
+  END;
+
+  NEW.user_email := COALESCE(
+    (SELECT email FROM auth.users WHERE id = auth.uid()),
+    v_jwt_email,
+    NEW.user_email,
+    'system@nu.edu.eg'
+  );
+
+  IF auth.uid() IS NOT NULL THEN
+    v_role := public.current_user_role();
+
+    IF NEW.action IN ('Database Hygiene Audit', 'Database Hygiene Rollback') AND v_role <> 'admin' THEN
+      RAISE EXCEPTION 'Access denied: only admin or automation can log %', NEW.action;
+    END IF;
+
+    IF public.role_level(v_role) < public.role_level('accountant') AND NEW.details IS NOT NULL THEN
+      NEW.details := NEW.details - 'revert_data' - 'revert_snapshot' - 'drive_folder_url';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+REVOKE EXECUTE ON FUNCTION public.secure_audit_log_insert() FROM public, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_secure_audit_log_insert ON public.audit_logs;
+CREATE TRIGGER trg_secure_audit_log_insert
+  BEFORE INSERT ON public.audit_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION public.secure_audit_log_insert();
+
 CREATE POLICY rbac_insert ON item_mappings FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('accountant')));
 CREATE POLICY rbac_update ON item_mappings FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('accountant'))) WITH CHECK ((SELECT public.has_min_role('accountant')));
 CREATE POLICY rbac_delete ON item_mappings FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
@@ -413,7 +490,7 @@ CREATE POLICY rbac_insert ON manual_fixes FOR INSERT TO authenticated WITH CHECK
 CREATE POLICY rbac_update ON manual_fixes FOR UPDATE TO authenticated USING ((SELECT public.has_min_role('accountant'))) WITH CHECK ((SELECT public.has_min_role('accountant')));
 CREATE POLICY rbac_delete ON manual_fixes FOR DELETE TO authenticated USING ((SELECT public.has_min_role('admin')));
 
--- 12. Auth.Users Sync Function & Trigger
+-- 12. Auth.Users Sync Function, User Management RPCs & Trigger
 CREATE OR REPLACE FUNCTION public.sync_auth_users()
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -424,36 +501,43 @@ DECLARE
   v_inserted INTEGER := 0;
   v_total    INTEGER := 0;
 BEGIN
+  IF NOT (
+       public.has_min_role('admin')
+       OR COALESCE(auth.jwt() ->> 'role', '') = 'service_role'
+       OR session_user IN ('postgres', 'supabase_admin')
+     ) THEN
+    RAISE EXCEPTION 'Access denied: admin role required';
+  END IF;
+
   WITH ins AS (
-    INSERT INTO public.user_roles (email, role, updated_by, updated_at)
+    INSERT INTO public.user_roles (email, role, is_active, updated_by, updated_at)
     SELECT
       LOWER(TRIM(u.email)),
       CASE WHEN LOWER(TRIM(u.email)) = 'ammahmoud@nu.edu.eg' THEN 'admin' ELSE 'viewer' END,
+      (u.banned_until IS NULL OR u.banned_until <= NOW()) AND LOWER(TRIM(u.email)) LIKE '%@nu.edu.eg',
       'auth.users sync',
       NOW()
     FROM auth.users u
     WHERE u.email IS NOT NULL AND TRIM(u.email) <> ''
-    ON CONFLICT (email) DO NOTHING
+    ON CONFLICT (email) DO UPDATE SET
+      is_active = CASE
+        WHEN LOWER(TRIM(public.user_roles.email)) = 'ammahmoud@nu.edu.eg' THEN TRUE
+        WHEN EXCLUDED.is_active IS FALSE AND public.user_roles.is_active IS TRUE
+             AND EXISTS (SELECT 1 FROM auth.users b
+                         WHERE LOWER(TRIM(b.email)) = LOWER(TRIM(public.user_roles.email))
+                           AND b.banned_until > NOW()) THEN FALSE
+        ELSE public.user_roles.is_active
+      END
     RETURNING 1
   )
   SELECT COUNT(*) INTO v_inserted FROM ins;
-
-  INSERT INTO public.user_roles (email, role, updated_by, updated_at)
-  SELECT DISTINCT LOWER(TRIM(user_email)), 'viewer', 'history sync', NOW()
-  FROM (
-    SELECT user_email FROM public.import_batches WHERE user_email IS NOT NULL AND user_email <> 'System' AND user_email LIKE '%@%'
-    UNION
-    SELECT user_email FROM public.audit_logs WHERE user_email IS NOT NULL AND user_email <> 'System' AND user_email LIKE '%@%'
-  ) h
-  WHERE LOWER(TRIM(user_email)) <> 'ammahmoud@nu.edu.eg'
-  ON CONFLICT (email) DO NOTHING;
 
   SELECT COUNT(*) INTO v_total FROM public.user_roles;
   RETURN jsonb_build_object('inserted', v_inserted, 'total', v_total);
 END;
 $$;
-
-GRANT EXECUTE ON FUNCTION public.sync_auth_users() TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.sync_auth_users() FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.sync_auth_users() TO authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
 RETURNS TRIGGER
@@ -461,12 +545,15 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_email TEXT := LOWER(TRIM(COALESCE(NEW.email, '')));
 BEGIN
-  IF NEW.email IS NOT NULL AND TRIM(NEW.email) <> '' THEN
-    INSERT INTO public.user_roles (email, role, updated_by, updated_at)
+  IF v_email <> '' THEN
+    INSERT INTO public.user_roles (email, role, is_active, updated_by, updated_at)
     VALUES (
-      LOWER(TRIM(NEW.email)),
-      CASE WHEN LOWER(TRIM(NEW.email)) = 'ammahmoud@nu.edu.eg' THEN 'admin' ELSE 'viewer' END,
+      v_email,
+      CASE WHEN v_email = 'ammahmoud@nu.edu.eg' THEN 'admin' ELSE 'viewer' END,
+      (v_email LIKE '%@nu.edu.eg'),
       'auth.signup',
       NOW()
     )
@@ -475,12 +562,130 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+REVOKE EXECUTE ON FUNCTION public.handle_new_auth_user() FROM public, anon, authenticated;
 
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_auth_user();
+
+CREATE OR REPLACE FUNCTION public.admin_set_user_active(target_email TEXT, active BOOLEAN)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_caller      TEXT;
+  v_email       TEXT;
+  v_user_id     UUID;
+  v_ban_until   TIMESTAMPTZ;
+BEGIN
+  IF NOT public.has_min_role('admin') THEN
+    RAISE EXCEPTION 'Permission denied: Admin role required';
+  END IF;
+
+  v_caller := LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', 'Admin')));
+  v_email  := LOWER(TRIM(COALESCE(target_email, '')));
+
+  IF v_email = '' OR POSITION('@' IN v_email) = 0 THEN
+    RAISE EXCEPTION 'Valid target email is required';
+  END IF;
+  IF v_email = 'ammahmoud@nu.edu.eg' AND active = FALSE THEN
+    RAISE EXCEPTION 'Primary Admin account cannot be deactivated';
+  END IF;
+  IF v_email = v_caller AND active = FALSE THEN
+    RAISE EXCEPTION 'You cannot deactivate your own active Admin account';
+  END IF;
+
+  v_ban_until := CASE WHEN active THEN NULL ELSE '2099-12-31T23:59:59Z'::timestamptz END;
+
+  INSERT INTO public.user_roles (email, role, is_active, updated_by, updated_at)
+  VALUES (
+    v_email,
+    CASE WHEN v_email = 'ammahmoud@nu.edu.eg' THEN 'admin' ELSE 'viewer' END,
+    active,
+    v_caller,
+    NOW()
+  )
+  ON CONFLICT (email) DO UPDATE SET
+    is_active  = active,
+    updated_by = v_caller,
+    updated_at = NOW();
+
+  SELECT id INTO v_user_id
+  FROM auth.users
+  WHERE LOWER(TRIM(email)) = v_email
+  LIMIT 1;
+
+  IF v_user_id IS NOT NULL THEN
+    UPDATE auth.users
+    SET banned_until = v_ban_until,
+        updated_at   = NOW()
+    WHERE id = v_user_id;
+
+    IF active = FALSE THEN
+      DELETE FROM auth.sessions WHERE user_id = v_user_id;
+    END IF;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'email', v_email,
+    'is_active', active,
+    'auth_user_found', v_user_id IS NOT NULL
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_user(target_email TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_caller       TEXT;
+  v_email        TEXT;
+  v_deleted_auth INTEGER := 0;
+BEGIN
+  IF NOT public.has_min_role('admin') THEN
+    RAISE EXCEPTION 'Permission denied: Admin role required';
+  END IF;
+
+  v_caller := LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', 'Admin')));
+  v_email  := LOWER(TRIM(COALESCE(target_email, '')));
+
+  IF v_email = '' OR POSITION('@' IN v_email) = 0 THEN
+    RAISE EXCEPTION 'Valid target email is required';
+  END IF;
+  IF v_email = 'ammahmoud@nu.edu.eg' THEN
+    RAISE EXCEPTION 'Primary Admin account cannot be deleted';
+  END IF;
+  IF v_email = v_caller THEN
+    RAISE EXCEPTION 'You cannot delete your own active Admin account';
+  END IF;
+
+  DELETE FROM public.user_roles WHERE LOWER(TRIM(email)) = v_email;
+
+  WITH del AS (
+    DELETE FROM auth.users
+    WHERE LOWER(TRIM(email)) = v_email
+    RETURNING id
+  )
+  SELECT COUNT(*) INTO v_deleted_auth FROM del;
+
+  RETURN jsonb_build_object(
+    'email', v_email,
+    'deleted_auth_users', v_deleted_auth
+  );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.admin_set_user_active(TEXT, BOOLEAN) FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.admin_set_user_active(TEXT, BOOLEAN) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_delete_user(TEXT) FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.admin_delete_user(TEXT) TO authenticated;
 
 -- 13. Bulk Rule Fields Update RPC (accelerates Bulk Manual Fixes, Auto-Matcher & Re-apply Rules)
 CREATE OR REPLACE FUNCTION public.bulk_update_rule_fields(p_updates jsonb)
@@ -562,7 +767,7 @@ CREATE INDEX IF NOT EXISTS idx_foreign_tx_id_status  ON public.foreign_transacti
 ALTER TABLE public.foreign_transactions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS foreign_tx_select ON public.foreign_transactions;
-CREATE POLICY foreign_tx_select ON public.foreign_transactions FOR SELECT TO authenticated USING (true);
+CREATE POLICY foreign_tx_select ON public.foreign_transactions FOR SELECT TO authenticated USING ((SELECT public.has_min_role('viewer')));
 
 DROP POLICY IF EXISTS foreign_tx_insert ON public.foreign_transactions;
 CREATE POLICY foreign_tx_insert ON public.foreign_transactions FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
@@ -587,7 +792,7 @@ CREATE TABLE IF NOT EXISTS public.exchange_rates (
 ALTER TABLE public.exchange_rates ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS exchange_rates_select ON public.exchange_rates;
-CREATE POLICY exchange_rates_select ON public.exchange_rates FOR SELECT TO authenticated USING (true);
+CREATE POLICY exchange_rates_select ON public.exchange_rates FOR SELECT TO authenticated USING ((SELECT public.has_min_role('viewer')));
 
 DROP POLICY IF EXISTS exchange_rates_insert ON public.exchange_rates;
 CREATE POLICY exchange_rates_insert ON public.exchange_rates FOR INSERT TO authenticated WITH CHECK ((SELECT public.has_min_role('operator')));
@@ -624,7 +829,7 @@ DROP POLICY IF EXISTS "rbac_delete" ON public.settlement_batches;
 
 CREATE POLICY "rbac_select" ON public.settlement_batches
   FOR SELECT TO authenticated
-  USING (true);
+  USING ((SELECT public.has_min_role('viewer')));
 
 CREATE POLICY "rbac_insert" ON public.settlement_batches
   FOR INSERT TO authenticated
@@ -680,6 +885,7 @@ DECLARE
   v_invalid_id_tx INTEGER;
   v_identical_dups INTEGER;
   v_dup_mappings INTEGER;
+  v_conflicting_mappings INTEGER;
   v_dup_fixes INTEGER;
   v_cleaned_mappings INTEGER := 0;
   v_cleaned_fixes INTEGER := 0;
@@ -712,12 +918,23 @@ BEGIN
     HAVING count(*) > 1
   ) s;
 
+  -- True duplicates: same name ignoring case/spaces AND the same mapping values.
   SELECT COALESCE(sum(c - 1), 0) INTO v_dup_mappings
   FROM (
     SELECT count(*) as c
     FROM item_mappings
-    GROUP BY LOWER(TRIM(item_name))
+    GROUP BY LOWER(TRIM(item_name)),
+             COALESCE(adjusted_item_name, ''), COALESCE(mapping, ''), COALESCE(second_mapping, '')
     HAVING count(*) > 1
+  ) s;
+
+  -- Case variants that map DIFFERENTLY: reported for a human to resolve, never auto-deleted.
+  SELECT COALESCE(count(*), 0) INTO v_conflicting_mappings
+  FROM (
+    SELECT 1
+    FROM item_mappings
+    GROUP BY LOWER(TRIM(item_name))
+    HAVING count(DISTINCT (COALESCE(adjusted_item_name, ''), COALESCE(mapping, ''), COALESCE(second_mapping, ''))) > 1
   ) s;
 
   SELECT COALESCE(sum(c - 1), 0) INTO v_dup_fixes
@@ -730,7 +947,10 @@ BEGIN
 
   IF p_clean THEN
     WITH dups AS (
-      SELECT id, ROW_NUMBER() OVER (PARTITION BY LOWER(TRIM(item_name)) ORDER BY id ASC) as rn
+      SELECT id, ROW_NUMBER() OVER (
+               PARTITION BY LOWER(TRIM(item_name)),
+                            COALESCE(adjusted_item_name, ''), COALESCE(mapping, ''), COALESCE(second_mapping, '')
+               ORDER BY id ASC) as rn
       FROM item_mappings
     ),
     del_m AS (
@@ -775,6 +995,7 @@ BEGIN
       'unmapped_items', v_unmapped_tx,
       'identical_tx_duplicates', v_identical_dups,
       'duplicate_mappings', v_dup_mappings,
+      'conflicting_case_mappings', v_conflicting_mappings,
       'duplicate_fixes', v_dup_fixes,
       'cleaned_mappings', v_cleaned_mappings,
       'cleaned_fixes', v_cleaned_fixes,
@@ -797,6 +1018,7 @@ BEGIN
     'unmapped_items', v_unmapped_tx,
     'identical_tx_duplicates', v_identical_dups,
     'duplicate_mappings', v_dup_mappings,
+    'conflicting_case_mappings', v_conflicting_mappings,
     'duplicate_fixes', v_dup_fixes,
     'cleaned_mappings', v_cleaned_mappings,
     'cleaned_fixes', v_cleaned_fixes,

@@ -1,5 +1,22 @@
 /* Workspace UI Chrome Enhancements — Works cleanly alongside app.js */
 (function () {
+    // 0. Service Worker registration & global error reporting
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(reg => console.log('Service Worker Registered!', reg))
+                .catch(err => console.error('Service Worker Registration Failed!', err));
+        });
+    }
+    if (typeof window !== 'undefined') {
+        window.onerror = function (msg, url, line) {
+            console.error('JS Error: ' + msg + ' at line ' + line);
+        };
+        window.addEventListener('unhandledrejection', function (event) {
+            console.error('Promise Error: ' + (event.reason && event.reason.message ? event.reason.message : event.reason));
+        });
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         if (window.lucide) window.lucide.createIcons();
 

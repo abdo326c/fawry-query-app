@@ -735,11 +735,19 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.get_dashboard_summary');
     expect(schemaSql).toContain('idx_transactions_mapping_trgm');
     expect(schemaSql).toContain('(SELECT public.has_min_role(');
+    expect(schemaSql).toContain('CREATE TRIGGER trg_secure_audit_log_insert');
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.admin_set_user_active');
+    expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.admin_delete_user');
+    expect(schemaSql).toContain('conflicting_case_mappings');
 
-    // Verify head libraries use defer so initial render is unblocked
+    // Verify head libraries use defer + SRI hashes and no inline <script> blocks remain in index.html
     const deferredScripts = Array.from(document.querySelectorAll('head script[src]'));
     expect(deferredScripts.length).toBeGreaterThan(0);
     expect(deferredScripts.every(s => s.hasAttribute('defer'))).toBe(true);
+    expect(deferredScripts.every(s => /^sha384-/.test(s.getAttribute('integrity') || ''))).toBe(true);
+    expect(deferredScripts.every(s => s.getAttribute('crossorigin') === 'anonymous')).toBe(true);
+    const inlineScripts = Array.from(document.querySelectorAll('script:not([src])'));
+    expect(inlineScripts.length).toBe(0);
 });
 
 test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, theme toggle, and SW cache integrity', async () => {
@@ -769,6 +777,9 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
     // 2. Service Worker cache consistency: every cached asset resolves to a real file
     expect(swSrc).toContain('styles.css?v=3.0.7');
     expect(swSrc).toContain('ui-chrome.js?v=1.0.0');
+    for (const mod of ['app-utils.js', 'dashboard.js', 'auto-matcher.js', 'erp-export.js', 'admin-audit.js', 'rules.js']) {
+        expect(swSrc).toContain(`./${mod}`);
+    }
     const urlMatches = [...swSrc.matchAll(/'\.\/([^'?]+)(?:\?[^']*)?'/g)].map(m => m[1]);
     for (const rel of urlMatches) {
         if (!rel) continue;
