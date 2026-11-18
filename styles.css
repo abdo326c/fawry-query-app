@@ -1811,3 +1811,37 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
     .header-actions { flex-direction: column; align-items: stretch; }
     .header .btn { width: 100%; }
 }
+
+/* Inline one-click copy button & Quick Search keyboard highlight */
+.inline-copy-btn {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 2px 3px;
+    margin-left: 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    opacity: 0.35;
+    transition: opacity 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+}
+
+tr:hover .inline-copy-btn,
+.inline-copy-btn:focus-visible {
+    opacity: 0.85;
+}
+
+.inline-copy-btn:hover {
+    opacity: 1 !important;
+    color: var(--primary);
+    background: var(--primary-soft);
+}
+
+.search-result-item.kbd-active {
+    background: var(--primary-soft);
+    outline: 1px solid var(--primary-border);
+}

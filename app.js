@@ -413,7 +413,9 @@ class App {
         this.applyRolePermissionsToUI();
         renderIcons();
         this.fetchUniqueFilters();
-        this.loadTransactions();
+        if (!this.restoreActiveTabFromUrl()) {
+            this.loadTransactions();
+        }
         this.updateSidebarBadges();
         if (this.hasRole('admin')) {
             this.checkAndShowHygieneReportModal();
@@ -861,6 +863,14 @@ class App {
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
+                // Persist active tab in URL hash & sessionStorage so refresh restores exact page
+                try {
+                    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('spdb-active-tab', tabId);
+                    if (typeof window !== 'undefined' && window.history?.replaceState && window.location.hash !== `#${tabId}`) {
+                        window.history.replaceState(null, '', `#${tabId}`);
+                    }
+                } catch (_e) { /* ignore history restrictions */ }
+
                 if (tabId === 'settlement') {
                     try {
                         if (typeof window.SettlementProcessor === 'undefined') {
@@ -896,6 +906,54 @@ class App {
                 }
             });
         });
+
+        window.addEventListener('hashchange', () => {
+            const hashTab = (window.location.hash || '').replace(/^#/, '').trim();
+            if (!hashTab) return;
+            const targetLink = document.querySelector(`.nav-link[data-tab="${hashTab}"]`);
+            if (targetLink && targetLink.style.display !== 'none' && !targetLink.classList.contains('active')) {
+                targetLink.click();
+            }
+        });
+    }
+
+    restoreActiveTabFromUrl() {
+        let desiredTab = '';
+        try {
+            desiredTab = (window.location.hash || '').replace(/^#/, '').trim();
+            if (!desiredTab && typeof sessionStorage !== 'undefined') {
+                desiredTab = (sessionStorage.getItem('spdb-active-tab') || '').trim();
+            }
+        } catch (_e) { /* ignore */ }
+        if (!desiredTab || desiredTab === 'transactions') return false;
+        const targetLink = document.querySelector(`.nav-link[data-tab="${desiredTab}"]`);
+        if (targetLink && targetLink.style.display !== 'none') {
+            targetLink.click();
+            return true;
+        }
+        return false;
+    }
+
+    async copyTextWithToast(text, label = 'Value') {
+        const val = String(text || '').trim();
+        if (!val) return;
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(val);
+            } else {
+                const ta = document.createElement('textarea');
+                ta.value = val;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            Toast.show(`Copied ${label}: ${val}`, 'success');
+        } catch (_e) {
+            Toast.show('Could not copy to clipboard', 'warning');
+        }
     }
 
 
@@ -1734,9 +1792,24 @@ class App {
             }
         });
 
-        // Save Fix (with live ID validation, duplicate protection, and reference rename cleanup)
+        // Save Fix (with live ID validation, duplicate protection, reference rename cleanup, and Save & Next Issue)
         const btnSaveFix = document.getElementById('btn-save-fix');
-        btnSaveFix.addEventListener('click', async () => {
+        const btnSaveFixNext = document.getElementById('btn-save-fix-next');
+        const findNextUnresolvedRef = (excludeRef) => {
+            const excl = String(excludeRef || '').trim();
+            if (this.unresolvedTxByRef instanceof Map && this.unresolvedTxByRef.size > 0) {
+                for (const [candidateRef] of this.unresolvedTxByRef.entries()) {
+                    if (candidateRef && candidateRef !== excl) return candidateRef;
+                }
+            }
+            for (const tx of (this.currentPageTransactions || [])) {
+                const r = String(tx?.reference_number || '').trim();
+                if (r && r !== excl && !isNonInvalidTransaction(tx)) return r;
+            }
+            return null;
+        };
+
+        const saveManualFixHandler = async (openNext = false) => {
             const ref = document.getElementById('fix-ref').value.trim();
             const correctId = document.getElementById('fix-id').value.trim();
             const correctName = normalizeItemName(document.getElementById('fix-name').value);
@@ -1760,6 +1833,7 @@ class App {
             }
 
             btnSaveFix.disabled = true;
+            if (btnSaveFixNext) btnSaveFixNext.disabled = true;
             try {
                 const isEditMode = document.getElementById('modal-fix-title').innerText === 'Edit Fix';
                 const oldEditingRef = this.editingFixOriginalRef;
@@ -1857,6 +1931,7 @@ class App {
                 if (lockedSkipped > 0) summaryMsg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged.`;
 
                 Toast.show(`Manual fix saved. ${summaryMsg}`, 'success');
+                const nextUnresolvedRef = openNext ? findNextUnresolvedRef(ref) : null;
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
 
@@ -1876,12 +1951,26 @@ class App {
                 if (document.getElementById('view-automatcher')?.classList.contains('active')) {
                     this.runAutoMatcher();
                 }
+
+                if (openNext) {
+                    if (nextUnresolvedRef) {
+                        await this.openQuickFixForRef(nextUnresolvedRef);
+                    } else {
+                        Toast.show('All visible unresolved issues have been addressed!', 'info');
+                    }
+                }
             } catch (err) {
                 Toast.show('Error saving fix: ' + err.message, 'error');
             } finally {
                 btnSaveFix.disabled = false;
+                if (btnSaveFixNext) btnSaveFixNext.disabled = false;
             }
-        });
+        };
+
+        btnSaveFix.addEventListener('click', () => saveManualFixHandler(false));
+        if (btnSaveFixNext) {
+            btnSaveFixNext.addEventListener('click', () => saveManualFixHandler(true));
+        }
     }
 
     initBulkUploads() {
@@ -2604,6 +2693,21 @@ class App {
 
         const searchInput = document.getElementById('search-input');
         let searchTimeout;
+        searchInput?.addEventListener('paste', (e) => {
+            const pasted = e.clipboardData?.getData('text');
+            if (pasted && /[\r\n\t]/.test(pasted)) {
+                e.preventDefault();
+                const normalized = pasted
+                    .split(/[\r\n\t,;]+/)
+                    .map(s => s.trim())
+                    .filter(Boolean)
+                    .join(', ');
+                searchInput.value = normalized;
+                clearTimeout(searchTimeout);
+                this.currentPage = 1;
+                this.loadTransactions();
+            }
+        });
         searchInput?.addEventListener('input', () => {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
@@ -2943,13 +3047,21 @@ class App {
             }
         }
 
-        // Unified Search (supports partial Reference Number, Student ID, Mobile, Item Name, Mapping, 2nd Mapping)
+        // Unified Search (supports multi-value Excel paste of Ref Numbers / Student IDs, or single partial search)
         if (search) {
-            const safeSearch = sanitizeForFilter(search);
-            if (safeSearch) {
-                query = query.or(
-                    `student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,customer_mobile.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%,mapping.ilike.%${safeSearch}%,second_mapping.ilike.%${safeSearch}%`
-                );
+            const rawTokens = search.split(/[\r\n\t,;]+/).map(t => sanitizeForFilter(t)).filter(Boolean);
+            const isMultiIdList = rawTokens.length >= 2 && rawTokens.every(t => /^[A-Za-z0-9_-]{3,40}$/.test(t));
+            if (isMultiIdList) {
+                const uniqueTokens = [...new Set(rawTokens)].slice(0, 150);
+                const inList = uniqueTokens.join(',');
+                query = query.or(`reference_number.in.(${inList}),student_id.in.(${inList})`);
+            } else {
+                const safeSearch = sanitizeForFilter(search);
+                if (safeSearch) {
+                    query = query.or(
+                        `student_id.ilike.%${safeSearch}%,reference_number.ilike.%${safeSearch}%,customer_mobile.ilike.%${safeSearch}%,item_name.ilike.%${safeSearch}%,mapping.ilike.%${safeSearch}%,second_mapping.ilike.%${safeSearch}%`
+                    );
+                }
             }
         }
         return query;
@@ -3471,11 +3583,13 @@ class App {
 
             const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(t));
 
+            const refVal = String(t.reference_number || '').trim();
+            const sidVal = String(t.student_id || '').trim();
             return `
                 <tr data-tx-row-idx="${idx}" style="cursor: pointer;" title="Click to inspect transaction details">
-                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
+                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong>${refVal ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(refVal)}" data-copy-label="Reference" title="Copy Reference Number">${inlineIcon('copy', 12)}</button>` : ''}</td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date))}</td>
-                    <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong>${stuLevelBadge}</td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong>${sidVal ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(sidVal)}" data-copy-label="Student ID" title="Copy Student ID">${inlineIcon('copy', 12)}</button>` : ''}${stuLevelBadge}</td>
                     <td style="white-space: nowrap;">EGP ${formatMoney(t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 200px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.item_name)}</td>
                     <td style="white-space: nowrap;">${mappingCell}</td>
@@ -3497,6 +3611,12 @@ class App {
         if (!tbody.dataset.delegatedBound) {
             tbody.dataset.delegatedBound = '1';
             tbody.addEventListener('click', (e) => {
+                const copyBtn = e.target.closest('[data-copy-text]');
+                if (copyBtn) {
+                    e.stopPropagation();
+                    this.copyTextWithToast(copyBtn.getAttribute('data-copy-text'), copyBtn.getAttribute('data-copy-label') || 'Value');
+                    return;
+                }
                 const fixBtn = e.target.closest('[data-quick-fix-ref]');
                 if (fixBtn) {
                     e.stopPropagation();
@@ -7334,8 +7454,42 @@ class App {
             if (e.target === overlay) closeSearch();
         });
 
+        let activeResultIdx = -1;
+        const updateActiveResult = (nextIdx) => {
+            const items = Array.from(resultsContainer.querySelectorAll('.search-result-item'));
+            if (items.length === 0) {
+                activeResultIdx = -1;
+                return;
+            }
+            activeResultIdx = ((nextIdx % items.length) + items.length) % items.length;
+            items.forEach((el, i) => {
+                el.classList.toggle('kbd-active', i === activeResultIdx);
+                if (i === activeResultIdx && typeof el.scrollIntoView === 'function') {
+                    el.scrollIntoView({ block: 'nearest' });
+                }
+            });
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                updateActiveResult(activeResultIdx + 1);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                updateActiveResult(activeResultIdx <= 0 ? resultsContainer.querySelectorAll('.search-result-item').length - 1 : activeResultIdx - 1);
+            } else if (e.key === 'Enter') {
+                const items = Array.from(resultsContainer.querySelectorAll('.search-result-item'));
+                if (items.length > 0) {
+                    e.preventDefault();
+                    const target = items[activeResultIdx >= 0 ? activeResultIdx : 0];
+                    if (target) target.click();
+                }
+            }
+        });
+
         let searchTimeout;
         input.addEventListener('input', (e) => {
+            activeResultIdx = -1;
             clearTimeout(searchTimeout);
             const query = e.target.value.trim();
             if (query.length < 2) {
@@ -8461,12 +8615,14 @@ class App {
 
             const rowCurrency = t.currency || currency;
             const stuLevelBadge = this.renderStudentLevelBadge(this.getTransactionStudentLevel(t));
+            const refVal = String(t.reference_number || '').trim();
+            const sidVal = String(t.student_id || '').trim();
 
             return `
                 <tr class="foreign-tx-row" data-idx="${idx}" style="cursor: pointer;" title="Click to inspect full transaction details">
-                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong></td>
+                    <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong>${refVal ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(refVal)}" data-copy-label="Reference" title="Copy Reference Number">${inlineIcon('copy', 12)}</button>` : ''}</td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.value_date || t.payment_date || t.transaction_date))}</td>
-                    <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id || '')}</strong>${stuLevelBadge}</td>
+                    <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id || '')}</strong>${sidVal ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(sidVal)}" data-copy-label="Student ID" title="Copy Student ID">${inlineIcon('copy', 12)}</button>` : ''}${stuLevelBadge}</td>
                     <td style="white-space: nowrap;">${escapeHTML(rowCurrency)} ${formatMoney(t.amount ?? t.item_price)}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 260px; font-size: 0.8rem; line-height: 1.3;">${escapeHTML(t.description || t.item_name || '')}</td>
                     <td style="white-space: nowrap;">${escapeHTML(t.mapping || DEFAULT_FOREIGN_MAPPING)}</td>
@@ -8483,6 +8639,13 @@ class App {
                 </tr>
             `;
         }).join('');
+
+        tbody.querySelectorAll('[data-copy-text]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.copyTextWithToast(btn.getAttribute('data-copy-text'), btn.getAttribute('data-copy-label') || 'Value');
+            });
+        });
 
         tbody.querySelectorAll('.foreign-fix-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {

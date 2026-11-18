@@ -98,13 +98,46 @@
 
         if (!globalListenersBound) {
             globalListenersBound = true;
-            document.addEventListener('click', () => {
+            document.addEventListener('click', (e) => {
                 document.querySelectorAll('.action-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+                // Click outside non-alert modal content closes the modal
+                const target = e.target;
+                if (target && target.classList && target.classList.contains('modal') && !target.classList.contains('modal-dialog-alert') && !target.classList.contains('hidden')) {
+                    target.classList.add('hidden');
+                }
             });
 
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     document.querySelectorAll('.action-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+                    // If customConfirm is open, let its own Escape handler resolve(false)
+                    const customConfirmModal = document.getElementById('modal-custom-confirm');
+                    if (customConfirmModal && !customConfirmModal.classList.contains('hidden')) return;
+                    // Close topmost visible modal
+                    const openModals = Array.from(document.querySelectorAll('.modal:not(.hidden)'));
+                    if (openModals.length > 0) {
+                        openModals[openModals.length - 1].classList.add('hidden');
+                    }
+                } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    // Ctrl+Enter submits the active edit modal
+                    const modalSubmitMap = [
+                        ['modal-fix', e.shiftKey ? 'btn-save-fix-next' : 'btn-save-fix'],
+                        ['modal-foreign-fix', 'btn-save-foreign-fix'],
+                        ['modal-mapping', 'btn-save-mapping'],
+                        ['modal-student', 'btn-save-student'],
+                        ['modal-link', 'btn-save-link']
+                    ];
+                    for (const [modalId, btnId] of modalSubmitMap) {
+                        const modal = document.getElementById(modalId);
+                        if (modal && !modal.classList.contains('hidden')) {
+                            const btn = document.getElementById(btnId);
+                            if (btn && !btn.disabled) {
+                                e.preventDefault();
+                                btn.click();
+                            }
+                            break;
+                        }
+                    }
                 }
             });
         }

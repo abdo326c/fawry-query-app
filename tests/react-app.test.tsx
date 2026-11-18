@@ -243,5 +243,28 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     settlementNav?.click();
     expect((window as unknown as { SettlementProcessor?: unknown }).SettlementProcessor).toBeDefined();
     expect((window as unknown as { settlementApp?: unknown }).settlementApp).toBeDefined();
+
+    // Verify UX #1: active tab persisted in URL hash & sessionStorage
+    expect(window.location.hash).toBe('#settlement');
+    expect(sessionStorage.getItem('spdb-active-tab')).toBe('settlement');
+
+    // Verify UX #3: multi-ID Excel paste builds an .in() OR query for reference_number & student_id
+    const searchInput = document.getElementById('search-input') as HTMLInputElement | null;
+    expect(searchInput).not.toBeNull();
+    if (searchInput) searchInput.value = '9706847770, 9706887951';
+    const orCalls: string[] = [];
+    const fakeQuery = {
+      gte: vi.fn().mockReturnThis(),
+      lte: vi.fn().mockReturnThis(),
+      ilike: vi.fn().mockReturnThis(),
+      in: vi.fn().mockReturnThis(),
+      or: vi.fn((clause: string) => { orCalls.push(clause); return fakeQuery; })
+    };
+    (app.applyTransactionFiltersToQuery as (q: unknown) => unknown)(fakeQuery);
+    expect(orCalls.some(c => c.includes('reference_number.in.(9706847770,9706887951)') && c.includes('student_id.in.(9706847770,9706887951)'))).toBe(true);
+    if (searchInput) searchInput.value = '';
+
+    // Verify UX #5: Save & Next Issue button exists in Manual Fix modal
+    expect(document.getElementById('btn-save-fix-next')).not.toBeNull();
   });
 });
