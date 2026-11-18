@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fawry-app-cache-v55';
+const CACHE_NAME = 'fawry-app-cache-v56';
 const urlsToCache = [
   './',
   './index.html',
@@ -57,6 +57,10 @@ self.addEventListener('fetch', event => {
   const isHtmlNav = event.request.mode === 'navigate' ||
     (event.request.headers.get('accept') || '').includes('text/html');
   const reqObjUrl = new URL(reqUrl);
+  // Only cache same-origin assets in the Service Worker; let the browser's native HTTP cache handle third-party CDNs
+  if (reqObjUrl.origin !== self.location.origin) {
+    return;
+  }
   const isSameOriginCode = reqObjUrl.origin === self.location.origin &&
     /\.(?:js|css)$/i.test(reqObjUrl.pathname);
 

@@ -117,6 +117,7 @@ class App {
         this.initUsersAndRoles();
         this.initHygieneReportModal();
         this.initForeignTransactions();
+        renderIcons();
         this.initAuth();
     }
 
@@ -409,6 +410,7 @@ class App {
         document.getElementById('user-profile-section').style.display = 'flex';
         document.getElementById('user-email-display').innerText = user.email;
         this.applyRolePermissionsToUI();
+        renderIcons();
         this.fetchUniqueFilters();
         this.loadTransactions();
         this.updateSidebarBadges();

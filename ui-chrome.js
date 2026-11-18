@@ -4,7 +4,10 @@
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js')
-                .then(reg => console.log('Service Worker Registered!', reg))
+                .then(reg => {
+                    console.log('Service Worker Registered!', reg);
+                    try { reg.update(); } catch (_e) { /* ignore */ }
+                })
                 .catch(err => console.error('Service Worker Registration Failed!', err));
         });
     }
@@ -18,9 +21,31 @@
     }
 
     let globalListenersBound = false;
+    let lucideRetryTimer = null;
+
+    function ensureLucideIcons() {
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+            if (lucideRetryTimer) {
+                clearInterval(lucideRetryTimer);
+                lucideRetryTimer = null;
+            }
+            return true;
+        }
+        return false;
+    }
 
     function initUiChrome() {
-        if (window.lucide) window.lucide.createIcons();
+        if (!ensureLucideIcons() && !lucideRetryTimer && typeof window !== 'undefined') {
+            let attempts = 0;
+            lucideRetryTimer = setInterval(() => {
+                attempts++;
+                if (ensureLucideIcons() || attempts >= 30) {
+                    clearInterval(lucideRetryTimer);
+                    lucideRetryTimer = null;
+                }
+            }, 120);
+        }
 
         // 1. Sidebar Collapse Toggle
         const appLayout = document.querySelector('.app-layout');
@@ -87,6 +112,7 @@
 
     if (typeof window !== 'undefined') {
         window.initUiChrome = initUiChrome;
+        window.addEventListener('load', ensureLucideIcons);
     }
 
     document.addEventListener('DOMContentLoaded', initUiChrome);

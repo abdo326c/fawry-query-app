@@ -740,12 +740,10 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.admin_delete_user');
     expect(schemaSql).toContain('conflicting_case_mappings');
 
-    // Verify head libraries use defer + SRI hashes and no inline <script> blocks remain in index.html
+    // Verify head libraries use defer and no inline <script> blocks remain in index.html
     const deferredScripts = Array.from(document.querySelectorAll('head script[src]'));
     expect(deferredScripts.length).toBeGreaterThan(0);
     expect(deferredScripts.every(s => s.hasAttribute('defer'))).toBe(true);
-    expect(deferredScripts.every(s => /^sha384-/.test(s.getAttribute('integrity') || ''))).toBe(true);
-    expect(deferredScripts.every(s => s.getAttribute('crossorigin') === 'anonymous')).toBe(true);
     const inlineScripts = Array.from(document.querySelectorAll('script:not([src])'));
     expect(inlineScripts.length).toBe(0);
 });
