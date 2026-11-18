@@ -6751,7 +6751,24 @@ class App {
                     }
                 }
                 const sid = escapeHTML(this.currentProfileSid);
+                const levelTag = formatStudentLevelTag(getStudentProgramLevel(st)) || '';
+                const arabicName = escapeHTML(st.arabic_name || '');
                 [name, email, phone, college, program] = [name, email, phone, college, program].map(v => escapeHTML(v));
+
+                const txs = Array.isArray(this.currentProfileTransactions) ? this.currentProfileTransactions : [];
+                let totalEgp = 0;
+                let totalUsd = 0;
+                let settledCount = 0;
+                txs.forEach(t => {
+                    totalEgp += parseFloat(t.item_price || 0) || 0;
+                    if (isSameDaySettlementBank(t)) totalUsd += parseFloat(t.raw_usd ?? t.amount ?? 0) || 0;
+                    if (t.is_settled || isSameDaySettlementBank(t)) settledCount++;
+                });
+                const stmtDate = toDateOnly(new Date());
+                const stmtRef = `STMT-${stmtDate.replace(/-/g, '')}-${String(this.currentProfileSid).replace(/[^A-Za-z0-9]/g, '')}`;
+
+                // Remove interactive copy buttons from cloned printable ledger
+                profileContent.querySelectorAll('button, .btn-icon').forEach(b => b.remove());
 
                 const printWindow = window.open('', '_blank');
                 if (!printWindow) {
@@ -6759,38 +6776,73 @@ class App {
                     return;
                 }
                 printWindow.document.write(`
+                    <!DOCTYPE html>
                     <html>
                     <head>
-                        <title>Student Statement of Payments - ${sid}</title>
+                        <title>Official Student Statement - ${sid}</title>
                         <style>
-                            @page { margin: 0; }
-                            body { font-family: 'Inter', sans-serif; padding: 2rem; color: #111; max-width: 900px; margin: 0 auto; }
-                            h1 { font-size: 1.5rem; text-align: center; margin-bottom: 0.2rem; }
-                            h2 { font-size: 1.2rem; text-align: center; color: #555; margin-bottom: 2rem; font-weight: normal; }
-                            .header-info { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid #ddd; }
-                            table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-size: 0.85rem; }
-                            th, td { padding: 0.65rem; border: 1px solid #ddd; text-align: left; }
-                            th { background-color: #f5f5f5; font-weight: 600; }
-                            td { background-color: #fff; }
-                            .text-right { text-align: right; }
-                            h3 { font-size: 1.1rem; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
-                            .custom-footer { margin-top: 4rem; text-align: center; color: #666; font-size: 0.9rem; border-top: 1px solid #ddd; padding-top: 1rem; }
-                            @media print {
-                                body { padding: 1.5cm; }
-                            }
+                            @page { size: A4; margin: 14mm; }
+                            * { box-sizing: border-box; }
+                            body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; max-width: 900px; margin: 0 auto; padding: 1.5rem; font-size: 12.5px; line-height: 1.45; }
+                            .brand-bar { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2.5px solid #0f766e; padding-bottom: 0.9rem; margin-bottom: 1.25rem; }
+                            .brand-title { font-size: 1.35rem; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -0.02em; }
+                            .brand-sub { font-size: 0.8rem; color: #475569; margin: 0.2rem 0 0 0; }
+                            .stmt-meta { text-align: right; font-size: 0.78rem; color: #475569; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+                            .stmt-meta strong { color: #0f172a; display: block; font-size: 0.85rem; }
+                            .dossier-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 1.5rem; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.9rem 1.1rem; margin-bottom: 1rem; }
+                            .dossier-row { display: flex; gap: 0.45rem; font-size: 0.82rem; }
+                            .dossier-row .lbl { color: #64748b; font-weight: 600; min-width: 92px; }
+                            .dossier-row .val { color: #0f172a; font-weight: 600; }
+                            .summary-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1.35rem; }
+                            .summary-box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.7rem 0.9rem; background: #ffffff; }
+                            .summary-box.primary { border-color: #0f766e; background: #f0fdfa; }
+                            .summary-box .k { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; font-weight: 700; }
+                            .summary-box .v { font-size: 1.12rem; font-weight: 800; color: #0f172a; font-family: ui-monospace, Menlo, monospace; margin-top: 0.2rem; }
+                            table { width: 100%; border-collapse: collapse; margin-bottom: 1.35rem; font-size: 0.78rem; }
+                            th, td { padding: 0.5rem 0.6rem; border: 1px solid #cbd5e1; text-align: left; }
+                            th { background-color: #f1f5f9; font-weight: 700; color: #1e293b; text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
+                            td { background-color: #fff; font-variant-numeric: tabular-nums; }
+                            .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #e2e8f0; color: #0f172a; font-weight: 600; font-size: 0.72rem; }
+                            h3 { font-size: 0.95rem; margin: 1.1rem 0 0.55rem 0; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.3rem; }
+                            .custom-footer { margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; color: #64748b; font-size: 0.75rem; border-top: 1px solid #cbd5e1; padding-top: 0.75rem; }
+                            @media print { body { padding: 0; } }
                         </style>
                     </head>
                     <body>
-                        <h2>Statement of Payments</h2>
-                        <div class="header-info">
-                            <h3 style="margin:0 0 0.5rem 0;">${name} (${sid})</h3>
-                            <p style="margin:0; font-size: 0.9rem; color: #444;">${email} | ${phone}</p>
-                            <p style="margin:0.25rem 0 0 0; font-size: 0.9rem; color: #444;">${college} / ${program}</p>
-                            <p style="margin-top:1rem; font-size:0.8rem; color:#888;">Generated on: ${new Date().toLocaleString()}</p>
+                        <div class="brand-bar">
+                            <div>
+                                <h1 class="brand-title">Statement of Student Payments</h1>
+                                <p class="brand-sub">NU Finance Department — Verified Payment Ledger</p>
+                            </div>
+                            <div class="stmt-meta">
+                                <strong>${escapeHTML(stmtRef)}</strong>
+                                <span>Issued: ${escapeHTML(stmtDate)}</span>
+                            </div>
+                        </div>
+                        <div class="dossier-grid">
+                            <div class="dossier-row"><span class="lbl">Student Name:</span><span class="val">${name}${arabicName ? ` — ${arabicName}` : ''}</span></div>
+                            <div class="dossier-row"><span class="lbl">Student ID:</span><span class="val" style="font-family:monospace;">${sid} ${escapeHTML(levelTag)}</span></div>
+                            <div class="dossier-row"><span class="lbl">Faculty / Prog:</span><span class="val">${college} / ${program}</span></div>
+                            <div class="dossier-row"><span class="lbl">Contact:</span><span class="val">${email} | ${phone}</span></div>
+                        </div>
+                        <div class="summary-strip">
+                            <div class="summary-box primary">
+                                <div class="k">Total Verified Paid (EGP Eq.)</div>
+                                <div class="v">EGP ${formatMoney(totalEgp)}</div>
+                            </div>
+                            <div class="summary-box">
+                                <div class="k">Foreign Currency (USD)</div>
+                                <div class="v">${totalUsd > 0 ? `USD ${formatMoney(totalUsd)}` : '—'}</div>
+                            </div>
+                            <div class="summary-box">
+                                <div class="k">Recorded Payments</div>
+                                <div class="v">${txs.length} (${settledCount} settled)</div>
+                            </div>
                         </div>
                         ${profileContent.innerHTML}
                         <div class="custom-footer">
-                            Finance Team | Abdelrahman Mohamed
+                            <span>NU Finance Team · Official Computer-Generated Statement</span>
+                            <span>Generated: ${escapeHTML(new Date().toLocaleString())}</span>
                         </div>
                     </body>
                     </html>

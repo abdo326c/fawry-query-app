@@ -1778,3 +1778,119 @@ REVOKE ALL ON FUNCTION public.classify_program_student_level(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.classify_program_student_level(TEXT) TO authenticated;
 REVOKE ALL ON FUNCTION public.resolve_student_level(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.resolve_student_level(TEXT) TO authenticated;
+
+-- 22. Table-Driven Primary Admin & Cold-Storage Archiving (v2.11.3)
+ALTER TABLE public.user_roles
+  ADD COLUMN IF NOT EXISTS is_primary_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE public.user_roles
+SET is_primary_admin = TRUE, role = 'admin', is_active = TRUE
+WHERE LOWER(TRIM(email)) = 'ammahmoud@nu.edu.eg';
+
+CREATE TABLE IF NOT EXISTS public.transactions_archive (
+  LIKE public.transactions INCLUDING DEFAULTS INCLUDING CONSTRAINTS,
+  archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tx_archive_payment_date ON public.transactions_archive (payment_date);
+CREATE INDEX IF NOT EXISTS idx_tx_archive_student_id ON public.transactions_archive (student_id);
+CREATE INDEX IF NOT EXISTS idx_tx_archive_reference ON public.transactions_archive (reference_number);
+
+ALTER TABLE public.transactions_archive ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rbac_select ON public.transactions_archive;
+CREATE POLICY rbac_select ON public.transactions_archive
+  FOR SELECT TO authenticated
+  USING ((SELECT public.has_min_role('viewer')));
+
+DROP POLICY IF EXISTS rbac_admin_write ON public.transactions_archive;
+CREATE POLICY rbac_admin_write ON public.transactions_archive
+  FOR ALL TO authenticated
+  USING ((SELECT public.has_min_role('admin')))
+  WITH CHECK ((SELECT public.has_min_role('admin')));
+
+CREATE OR REPLACE FUNCTION public.archive_settled_transactions(
+  p_before_date DATE,
+  p_dry_run BOOLEAN DEFAULT TRUE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $function$
+DECLARE
+  v_email TEXT;
+  v_eligible_count BIGINT := 0;
+  v_eligible_amount NUMERIC := 0;
+  v_archived_count BIGINT := 0;
+BEGIN
+  IF NOT public.is_admin_or_automation() THEN
+    RAISE EXCEPTION 'Access denied: Admin role required to archive transactions';
+  END IF;
+
+  IF p_before_date IS NULL OR p_before_date > (CURRENT_DATE - INTERVAL '90 days') THEN
+    RAISE EXCEPTION 'Safety guard: cutoff date must be at least 90 days in the past';
+  END IF;
+
+  SELECT COUNT(*), COALESCE(SUM(item_price), 0)
+  INTO v_eligible_count, v_eligible_amount
+  FROM public.transactions
+  WHERE payment_date < p_before_date
+    AND COALESCE(is_settled, FALSE) = TRUE
+    AND NULLIF(BTRIM(COALESCE(erp_batch_number, '')), '') IS NOT NULL;
+
+  IF p_dry_run THEN
+    RETURN jsonb_build_object(
+      'dry_run', TRUE,
+      'before_date', p_before_date,
+      'eligible_count', v_eligible_count,
+      'eligible_amount_egp', v_eligible_amount
+    );
+  END IF;
+
+  BEGIN
+    v_email := COALESCE(NULLIF(auth.jwt() ->> 'email', ''), 'system@nu.edu.eg');
+  EXCEPTION WHEN OTHERS THEN
+    v_email := 'system@nu.edu.eg';
+  END;
+
+  WITH moved AS (
+    DELETE FROM public.transactions
+    WHERE payment_date < p_before_date
+      AND COALESCE(is_settled, FALSE) = TRUE
+      AND NULLIF(BTRIM(COALESCE(erp_batch_number, '')), '') IS NOT NULL
+    RETURNING *
+  ),
+  ins AS (
+    INSERT INTO public.transactions_archive
+    SELECT m.*, NOW(), v_email
+    FROM moved m
+    ON CONFLICT DO NOTHING
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_archived_count FROM ins;
+
+  INSERT INTO public.audit_logs (user_email, action, affected_references, details)
+  VALUES (
+    v_email,
+    'Cold-Storage Archive Completed',
+    'Before ' || p_before_date::TEXT || ' (' || v_archived_count || ' rows)',
+    jsonb_build_object(
+      'before_date', p_before_date,
+      'archived_count', v_archived_count,
+      'archived_amount_egp', v_eligible_amount
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'dry_run', FALSE,
+    'before_date', p_before_date,
+    'archived_count', v_archived_count,
+    'archived_amount_egp', v_eligible_amount
+  );
+END;
+$function$;
+
+REVOKE EXECUTE ON FUNCTION public.archive_settled_transactions(DATE, BOOLEAN) FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.archive_settled_transactions(DATE, BOOLEAN) TO authenticated, service_role;

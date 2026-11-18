@@ -1515,6 +1515,49 @@ class DashboardMixin {
                 }
             }
 
+            // Render Executive Insights (UG vs PG Split & Prior Period Delta)
+            const execInsightsEl = document.getElementById('dashboard-exec-insights');
+            if (execInsightsEl) {
+                const pills = [];
+                const lvl = summaryRpcData?.levels;
+                if (lvl && (Number(lvl.ug_total || 0) > 0 || Number(lvl.pg_total || 0) > 0)) {
+                    const ugAmt = Number(lvl.ug_total || 0);
+                    const pgAmt = Number(lvl.pg_total || 0);
+                    const lvlTotal = ugAmt + pgAmt;
+                    const ugPct = lvlTotal > 0 ? ((ugAmt / lvlTotal) * 100).toFixed(0) : '0';
+                    const pgPct = lvlTotal > 0 ? ((pgAmt / lvlTotal) * 100).toFixed(0) : '0';
+                    pills.push(
+                        `<span class="badge" style="background: var(--primary-soft); color: var(--text-main); border: 1px solid var(--primary-border); padding: 0.22rem 0.6rem; font-size: 0.72rem; font-family: var(--font-mono);" title="Undergraduate vs Postgraduate Fawry collections in this period">` +
+                        `UG ${ugPct}% (EGP ${formatMoney(ugAmt)}) • PG ${pgPct}% (EGP ${formatMoney(pgAmt)})</span>`
+                    );
+                    summaryAoa.push(
+                        [],
+                        ['Student Level Mix (Fawry)', 'Transactions', 'Total (EGP)', '% Share', ''],
+                        ['Undergraduate (UG)', Number(lvl.ug_count || 0), Number(ugAmt.toFixed(2)), `${ugPct}%`, ''],
+                        ['Postgraduate (PG)', Number(lvl.pg_count || 0), Number(pgAmt.toFixed(2)), `${pgPct}%`, '']
+                    );
+                }
+                const prevPeriod = summaryRpcData?.prev_period;
+                if (prevPeriod && Number(prevPeriod.total_egp || 0) > 0) {
+                    const prevVal = Number(prevPeriod.total_egp);
+                    const curFawryVal = cb136Val + ib64Val;
+                    const deltaPct = ((curFawryVal - prevVal) / prevVal) * 100;
+                    const isUp = deltaPct >= 0;
+                    const arrow = isUp ? '▲' : '▼';
+                    const color = isUp ? 'var(--success)' : 'var(--danger)';
+                    pills.push(
+                        `<span class="badge" style="background: ${isUp ? 'var(--success-bg)' : 'var(--danger-bg)'}; color: ${color}; border: 1px solid ${isUp ? 'var(--success-border)' : 'var(--danger-border)'}; padding: 0.22rem 0.6rem; font-size: 0.72rem; font-family: var(--font-mono);" title="Compared to prior period (${escapeHTML(prevPeriod.start_date)} to ${escapeHTML(prevPeriod.end_date)}: EGP ${formatMoney(prevVal)})">` +
+                        `${arrow} ${Math.abs(deltaPct).toFixed(1)}% vs prior period</span>`
+                    );
+                    summaryAoa.push(
+                        [],
+                        ['Period-over-Period Comparison', 'Current Period (EGP)', 'Prior Period (EGP)', 'Change (%)', 'Prior Window'],
+                        ['Fawry Collections', Number(curFawryVal.toFixed(2)), Number(prevVal.toFixed(2)), `${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%`, `${prevPeriod.start_date} to ${prevPeriod.end_date}`]
+                    );
+                }
+                execInsightsEl.innerHTML = pills.join('');
+            }
+
             this.updateSidebarBadges();
             this.markTabLoaded('dashboard');
             renderIcons(document.getElementById('view-dashboard'));

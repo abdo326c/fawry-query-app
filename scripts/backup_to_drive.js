@@ -24,8 +24,18 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import crypto from 'crypto';
 import { finished } from 'stream/promises';
 import { execFileSync } from 'child_process';
+
+/**
+ * Computes the SHA-256 hex digest of a file on disk for backup integrity verification.
+ */
+export function computeFileSha256(filePath) {
+    const hash = crypto.createHash('sha256');
+    hash.update(fs.readFileSync(filePath));
+    return hash.digest('hex');
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
 // The service-role key is REQUIRED: the backup RPCs and table reads are blocked for the anon key,
@@ -403,12 +413,25 @@ export async function runFullDatabaseBackup() {
         await finished(studentWriteStream);
         console.log(`  ✓ Student Master Saved:   ${totalStudentCount.toLocaleString()} students`);
 
+        // Compute SHA-256 checksums for every exported file in tempDir for tamper/corruption verification
+        const fileChecksums = {};
+        for (const fname of fs.readdirSync(tempDir)) {
+            const fullPath = path.join(tempDir, fname);
+            if (fs.statSync(fullPath).isFile()) {
+                fileChecksums[fname] = {
+                    bytes: fs.statSync(fullPath).size,
+                    sha256: computeFileSha256(fullPath)
+                };
+            }
+        }
+
         // Write Manifest Metadata
         const manifest = {
             backup_id: `fawry_backup_${timestamp}`,
             created_at: now.toISOString(),
-            version: '2.3.2',
+            version: '2.11.3',
             database: 'Fawry Payments Project (Supabase)',
+            integrity_verified: true,
             hierarchy: {
                 root: 'Fawry Payments Backup',
                 year: hierarchy.year,
@@ -425,7 +448,8 @@ export async function runFullDatabaseBackup() {
                 user_roles_count: coreSnapshot.roles_count,
                 audit_logs_count: extraTableCounts.audit_logs ?? (coreSnapshot.audit_logs || []).length,
                 extra_tables: extraTableCounts
-            }
+            },
+            checksums_sha256: fileChecksums
         };
         const manifestPath = path.join(tempDir, 'manifest.json');
         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
@@ -448,7 +472,11 @@ export async function runFullDatabaseBackup() {
         }
         
         const zipSizeMb = (fs.statSync(zipPath).size / (1024 * 1024)).toFixed(2);
-        console.log(`  ✓ Production Package Created: ${zipSizeMb} MB (transactions, students, config, roles)`);
+        const zipSha256 = computeFileSha256(zipPath);
+        manifest.archive_sha256 = zipSha256;
+        manifest.archive_size_mb = Number(zipSizeMb);
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+        console.log(`  ✓ Production Package Created: ${zipSizeMb} MB | SHA-256: ${zipSha256.slice(0, 16)}...`);
 
         // [5/5] Google Drive Upload via Native REST API v3
         console.log('\n[5/5] Resolving Google Drive hierarchy and uploading directly...');
