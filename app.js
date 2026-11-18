@@ -6758,11 +6758,9 @@ class App {
                 const txs = Array.isArray(this.currentProfileTransactions) ? this.currentProfileTransactions : [];
                 let totalEgp = 0;
                 let totalUsd = 0;
-                let settledCount = 0;
                 txs.forEach(t => {
                     totalEgp += parseFloat(t.item_price || 0) || 0;
                     if (isSameDaySettlementBank(t)) totalUsd += parseFloat(t.raw_usd ?? t.amount ?? 0) || 0;
-                    if (t.is_settled || isSameDaySettlementBank(t)) settledCount++;
                 });
                 const stmtDate = toDateOnly(new Date());
                 const stmtRef = `STMT-${stmtDate.replace(/-/g, '')}-${String(this.currentProfileSid).replace(/[^A-Za-z0-9]/g, '')}`;
@@ -6836,7 +6834,7 @@ class App {
                             </div>
                             <div class="summary-box">
                                 <div class="k">Recorded Payments</div>
-                                <div class="v">${txs.length} (${settledCount} settled)</div>
+                                <div class="v">${txs.length}</div>
                             </div>
                         </div>
                         ${profileContent.innerHTML}
@@ -6939,12 +6937,8 @@ class App {
             this.currentProfileTransactions = txs;
 
             let totalPaid = 0;
-            let settledCount = 0;
-            let erpPostedCount = 0;
             txs.forEach(t => {
                 totalPaid += parseFloat(t.item_price || 0) || 0;
-                if (t.is_settled) settledCount++;
-                if (t.erp_batch_number && String(t.erp_batch_number).trim() !== '') erpPostedCount++;
             });
             const latestDate = txs.length > 0 ? (toDateOnly(txs[0].payment_date) || '-') : 'No payments';
 
@@ -7021,11 +7015,6 @@ class App {
                                 <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Total Paid</div>
                                 <div style="font-size: 1.4rem; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', ui-monospace, monospace; margin-top: 0.15rem;">${formatMoney(totalPaid)} <span style="font-size: 0.82rem; font-weight: 600;">EGP</span></div>
                                 <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem;">${txs.length} transaction(s)</div>
-                            </div>
-                            <div class="student-kpi-box">
-                                <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Reconciliation</div>
-                                <div style="font-size: 0.98rem; font-weight: 700; color: var(--text-main); margin-top: 0.22rem;">${settledCount} / ${txs.length} Settled</div>
-                                <div style="font-size: 0.76rem; color: var(--primary); margin-top: 0.18rem;">${erpPostedCount} posted to ERP</div>
                             </div>
                             <div class="student-kpi-box">
                                 <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Latest Payment</div>
