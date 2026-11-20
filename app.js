@@ -453,34 +453,67 @@ class App {
         }
     }
 
+    markLocalTxMutation() {
+        this._lastLocalTxMutationAt = Date.now();
+    }
+
+    refreshActiveViewFromRealtime() {
+        const views = document.querySelectorAll('.view.active');
+        if (views.length > 0) {
+            const activeId = views[0].id;
+            if (activeId === 'view-transactions') {
+                Toast.show('New activity detected. Refreshing data...', 'info');
+                this.loadTransactions();
+            } else if (activeId === 'view-dashboard') {
+                this.loadDashboard();
+            } else if (activeId === 'view-erp-export') {
+                this.loadErpExport({ refresh: true });
+            }
+        }
+        this.updateSidebarBadges({ force: true });
+    }
+
     initRealtime() {
+        if (!this._visibilityListenerBound && typeof document !== 'undefined') {
+            this._visibilityListenerBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && this._pendingRealtimeRefresh) {
+                    this._pendingRealtimeRefresh = false;
+                    this.refreshActiveViewFromRealtime();
+                }
+            });
+        }
         if (this.realtimeChannel) return;
         this.realtimeChannel = supabase.channel('table-db-changes')
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'transactions' },
-                (payload) => {
-                    console.log('Realtime update received!', payload);
-                    
-                    // Throttle reloads to prevent spamming the database
+                () => {
+                    this.invalidateTabs('dashboard', 'transactions', 'erp-export', 'history');
+                    this._badgeCache = null;
+
+                    // Skip self-echoes right after local imports or bulk edits
+                    if (this.isImporting || (Date.now() - (this._lastLocalTxMutationAt || 0) < 4000)) {
+                        return;
+                    }
+
+                    // Skip background refreshes when tab is hidden; refresh when user returns
+                    if (typeof document !== 'undefined' && document.hidden) {
+                        this._pendingRealtimeRefresh = true;
+                        return;
+                    }
+
+                    // Stagger refreshes across concurrent users (3.0s - 5.5s jitter)
                     if (this.realtimeTimeout) clearTimeout(this.realtimeTimeout);
+                    const jitterMs = 3000 + Math.floor(Math.random() * 2500);
                     this.realtimeTimeout = setTimeout(() => {
-                        this.invalidateTabs('dashboard', 'transactions', 'erp-export', 'history');
-                        // Refresh the active view dynamically
-                        const views = document.querySelectorAll('.view.active');
-                        if (views.length > 0) {
-                            const activeId = views[0].id;
-                            if (activeId === 'view-transactions') {
-                                Toast.show('New activity detected. Refreshing data...', 'info');
-                                this.loadTransactions();
-                            } else if (activeId === 'view-dashboard') {
-                                this.loadDashboard();
-                            } else if (activeId === 'view-erp-export') {
-                                this.loadErpExport({ refresh: true });
-                            }
+                        this.realtimeTimeout = null;
+                        if (typeof document !== 'undefined' && document.hidden) {
+                            this._pendingRealtimeRefresh = true;
+                            return;
                         }
-                        this.updateSidebarBadges();
-                    }, 2000); // Wait 2s after last event before refreshing
+                        this.refreshActiveViewFromRealtime();
+                    }, jitterMs);
                 }
             )
             .subscribe();
@@ -862,8 +895,9 @@ class App {
                 }
             }
 
+            this.markLocalTxMutation();
             this.invalidateDistinctCache();
-            this.updateSidebarBadges();
+            this.updateSidebarBadges({ force: true });
 
             const actionBar = document.getElementById('import-action-bar');
             if (actionBar) {
@@ -966,6 +1000,7 @@ class App {
         });
         const updated = open.length > 0 ? await updateRuleFields(open) : 0;
         if (updated > 0) {
+            this.markLocalTxMutation();
             this.invalidateDistinctCache();
             this.invalidateTabs('dashboard', 'transactions', 'erp-export');
         }
@@ -2268,11 +2303,12 @@ class App {
             const idStatusEl = document.getElementById('tx-bulk-id-status');
             if (idStatusEl) idStatusEl.textContent = '';
 
+            this.markLocalTxMutation();
             this.updateTxBulkSelectionUI();
             this.invalidateDistinctCache();
             this.invalidateTabs('dashboard', 'transactions', 'fixes', 'erp-export');
             await this.loadTransactions();
-            this.updateSidebarBadges();
+            this.updateSidebarBadges({ force: true });
 
             Toast.show(`Assigned Student ID ${newId} to ${updatedCount || openRows.length} transaction(s).`, 'success');
         } catch (err) {
@@ -2818,37 +2854,66 @@ class App {
         });
     }
 
-    updateSidebarBadges() {
+    updateSidebarBadges({ force = false } = {}) {
         clearTimeout(this._badgeUpdateTimer);
+        if (typeof document !== 'undefined' && document.hidden && !force) {
+            return;
+        }
+        const badge = document.getElementById('sidebar-automatch-badge');
+        const applyBadgeCount = (count) => {
+            if (!badge || typeof count !== 'number' || !Number.isFinite(count)) return;
+            if (count > 0) {
+                badge.textContent = count > 999 ? '999+' : count;
+                badge.style.display = 'inline-flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        };
+
+        if (!force && this._badgeCache && (Date.now() - this._badgeCache.ts < 60000)) {
+            applyBadgeCount(this._badgeCache.count);
+            return;
+        }
+
+        const delayMs = force ? 0 : 250;
         this._badgeUpdateTimer = setTimeout(async () => {
-            const badge = document.getElementById('sidebar-automatch-badge');
-            if (!badge) return;
+            const targetBadge = document.getElementById('sidebar-automatch-badge');
+            if (!targetBadge) return;
             try {
-                const [totalRes, exemptRes] = await Promise.all([
-                    supabase
-                        .from('transactions')
-                        .select('*', { count: 'exact', head: true })
-                        .neq('id_status', 'Valid'),
-                    supabase
-                        .from('transactions')
-                        .select('*', { count: 'exact', head: true })
-                        .neq('id_status', 'Valid')
-                        .or(SUPABASE_EXEMPT_OR_FILTER)
-                ]);
-                if (!totalRes.error && totalRes.count !== null && totalRes.count !== undefined) {
-                    const exemptCnt = (!exemptRes.error && exemptRes.count) ? exemptRes.count : 0;
-                    const count = Math.max(0, totalRes.count - exemptCnt);
-                    if (count > 0) {
-                        badge.textContent = count > 999 ? '999+' : count;
-                        badge.style.display = 'inline-flex';
-                    } else {
-                        badge.style.display = 'none';
+                let count = null;
+                if (typeof supabase.rpc === 'function') {
+                    const { data: rpcCount, error: rpcErr } = await supabase.rpc('get_unresolved_tx_count');
+                    if (!rpcErr && typeof rpcCount === 'number' && Number.isFinite(rpcCount)) {
+                        count = Math.max(0, rpcCount);
                     }
+                }
+
+                if (count === null) {
+                    const [totalRes, exemptRes] = await Promise.all([
+                        supabase
+                            .from('transactions')
+                            .select('*', { count: 'exact', head: true })
+                            .neq('id_status', 'Valid'),
+                        supabase
+                            .from('transactions')
+                            .select('*', { count: 'exact', head: true })
+                            .neq('id_status', 'Valid')
+                            .or(SUPABASE_EXEMPT_OR_FILTER)
+                    ]);
+                    if (!totalRes.error && totalRes.count !== null && totalRes.count !== undefined) {
+                        const exemptCnt = (!exemptRes.error && exemptRes.count) ? exemptRes.count : 0;
+                        count = Math.max(0, totalRes.count - exemptCnt);
+                    }
+                }
+
+                if (count !== null) {
+                    this._badgeCache = { count, ts: Date.now() };
+                    applyBadgeCount(count);
                 }
             } catch (err) {
                 console.warn('Could not update sidebar badge:', err);
             }
-        }, 250);
+        }, delayMs);
     }
 
     initGlobalSearch() {

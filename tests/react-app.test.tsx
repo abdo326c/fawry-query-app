@@ -168,7 +168,7 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     const requiredMethods = [
       // Core & Auth / RBAC
       'initAuth', 'getRoleLevel', 'hasRole', 'requireRole', 'fetchUserRole', 'applyRolePermissionsToUI',
-      'initNavigation', 'initTheme', 'initDatePickers', 'initGlobalSearch', 'updateSidebarBadges',
+      'initNavigation', 'initTheme', 'initDatePickers', 'initGlobalSearch', 'updateSidebarBadges', 'markLocalTxMutation',
       // Dashboard (dashboard.js)
       'initDashboard', 'drillDownFromDashboard', 'exportDashboardPivotExcel', 'updateDashboardFxUI',
       'scheduleDailyFxNoonSync', 'syncDashboardFxRates', 'loadDashboard',
@@ -184,7 +184,7 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'updateAutoMatchSelectionUI', 'renderAutoMatcherPage', 'applyAutoMatches',
       // Payment Links & Students
       'initPaymentLinks', 'openPaymentLinkModal', 'loadPaymentLinks', 'renderPaymentLinksPage',
-      'initStudentMaster', 'openStudentModal', 'loadStudents', 'renderStudentsPage',
+      'initStudentMaster', 'invalidateStudentMasterLocalCache', 'openStudentModal', 'loadStudents', 'renderStudentsPage',
       'loadStudentProfile', 'exportStudentStatement',
       // ERP Export (erp-export.js)
       'initErpExport', 'initErpFilterPresets', 'applyErpFilterPreset', 'updateErpDropdowns',
@@ -193,7 +193,7 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'erpAmount', 'erpAccount', 'erpDayShort', 'resolveErpExportDate', 'downloadErpExport',
       'openErpDateChoiceModal', 'generateErpExcel', 'recordErpReferences',
       // Admin, Audit, Double-Payments & Hygiene (admin-audit.js)
-      'initUsersAndRoles', 'initAccountingPeriodLock', 'loadClosedPeriods', 'renderClosedPeriodsCard',
+      'initUsersAndRoles', 'loadDatabaseStorageStats', 'initAccountingPeriodLock', 'loadClosedPeriods', 'renderClosedPeriodsCard',
       'isDateInClosedPeriod', 'initColdStorageArchive', 'loadUsersAndRoles', 'renderUserRolesTable',
       'renderAuditLogsTable', 'revertAuditLogEntry', 'initDoublePaymentsDetector', 'loadDoublePayments',
       'renderDoublePaymentsTable', 'exportDoublePayments', 'initHygieneReportModal',
@@ -459,5 +459,41 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     btnClearSel?.click();
     expect(selMap?.size).toBe(0);
     expect(bulkBar?.classList.contains('hidden')).toBe(true);
+
+    // Verify Stage 1 Performance: Live DB Storage Meter & 1-ms Sidebar Badge RPC
+    expect(document.querySelectorAll('.modal').length).toBe(18);
+    expect(document.getElementById('admin-db-storage-card')).not.toBeNull();
+    expect(document.getElementById('btn-refresh-db-storage')).not.toBeNull();
+
+    rpcMock.mockClear();
+    rpcMock.mockResolvedValueOnce({
+      data: {
+        used_mb: 135.4,
+        limit_mb: 500,
+        pct_used: 27.1,
+        tables: [{ table_name: 'transactions', est_rows: 39665, table_mb: 19, indexes_mb: 44.6, total_mb: 63.6 }]
+      },
+      error: null
+    });
+
+    await (app.loadDatabaseStorageStats as (opts?: { silent?: boolean }) => Promise<unknown>)({ silent: false });
+    expect(document.getElementById('db-storage-used-label')?.textContent).toContain('135.4 MB / 500 MB');
+    expect(document.getElementById('db-storage-pct-badge')?.textContent).toBe('27.1%');
+    expect(document.getElementById('db-storage-tables-list')?.textContent).toContain('transactions');
+
+    const tempBadge = document.createElement('span');
+    tempBadge.id = 'sidebar-automatch-badge';
+    document.body.appendChild(tempBadge);
+    try {
+      rpcMock.mockClear();
+      rpcMock.mockResolvedValueOnce({ data: 42, error: null });
+      (app.updateSidebarBadges as (opts?: { force?: boolean }) => void)({ force: true });
+      await vi.waitFor(() => {
+        expect(document.getElementById('sidebar-automatch-badge')?.textContent).toBe('42');
+      });
+      expect(rpcMock).toHaveBeenCalledWith('get_unresolved_tx_count');
+    } finally {
+      tempBadge.remove();
+    }
   });
 });

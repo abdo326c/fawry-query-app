@@ -315,5 +315,91 @@ export function deleteFilterPreset(presets, id) {
     return presets.filter(p => p.id !== id);
 }
 
+const IDB_CACHE_DB = 'spdb-local-cache-v1';
+const IDB_CACHE_STORE = 'kv';
+
+function openLocalCacheDb() {
+    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+    return new Promise((resolve) => {
+        try {
+            const req = indexedDB.open(IDB_CACHE_DB, 1);
+            req.onupgradeneeded = () => {
+                const db = req.result;
+                if (!db.objectStoreNames.contains(IDB_CACHE_STORE)) {
+                    db.createObjectStore(IDB_CACHE_STORE);
+                }
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+        } catch (_e) {
+            resolve(null);
+        }
+    });
+}
+
+/**
+ * Reads a cached entry from IndexedDB safely (returns null if unavailable).
+ */
+export async function readIndexedDbCache(key) {
+    if (!key) return null;
+    const db = await openLocalCacheDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(IDB_CACHE_STORE, 'readonly');
+            const store = tx.objectStore(IDB_CACHE_STORE);
+            const req = store.get(key);
+            req.onsuccess = () => resolve(req.result ?? null);
+            req.onerror = () => resolve(null);
+            tx.oncomplete = () => { try { db.close(); } catch (_e) {} };
+        } catch (_e) {
+            try { db.close(); } catch (_err) {}
+            resolve(null);
+        }
+    });
+}
+
+/**
+ * Writes a cached entry to IndexedDB safely (returns false if unavailable).
+ */
+export async function writeIndexedDbCache(key, value) {
+    if (!key) return false;
+    const db = await openLocalCacheDb();
+    if (!db) return false;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(IDB_CACHE_STORE, 'readwrite');
+            const store = tx.objectStore(IDB_CACHE_STORE);
+            store.put(value, key);
+            tx.oncomplete = () => { try { db.close(); } catch (_e) {} resolve(true); };
+            tx.onerror = () => { try { db.close(); } catch (_e) {} resolve(false); };
+        } catch (_e) {
+            try { db.close(); } catch (_err) {}
+            resolve(false);
+        }
+    });
+}
+
+/**
+ * Clears a cached entry from IndexedDB safely (returns false if unavailable).
+ */
+export async function clearIndexedDbCache(key) {
+    if (!key) return false;
+    const db = await openLocalCacheDb();
+    if (!db) return false;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(IDB_CACHE_STORE, 'readwrite');
+            const store = tx.objectStore(IDB_CACHE_STORE);
+            store.delete(key);
+            tx.oncomplete = () => { try { db.close(); } catch (_e) {} resolve(true); };
+            tx.onerror = () => { try { db.close(); } catch (_e) {} resolve(false); };
+        } catch (_e) {
+            try { db.close(); } catch (_err) {}
+            resolve(false);
+        }
+    });
+}
+
 window.Toast = Toast;
 window.withDropdownTaskProgress = withDropdownTaskProgress;

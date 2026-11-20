@@ -101,6 +101,74 @@ class AdminAuditMixin {
 
         this.initAccountingPeriodLock();
         this.initColdStorageArchive();
+
+        document.getElementById('btn-refresh-db-storage')?.addEventListener('click', () => {
+            this.loadDatabaseStorageStats({ silent: false });
+        });
+    }
+
+    async loadDatabaseStorageStats({ silent = false } = {}) {
+        const usedEl = document.getElementById('db-storage-used-label');
+        const pctBadge = document.getElementById('db-storage-pct-badge');
+        const headroomEl = document.getElementById('db-storage-headroom-label');
+        const barEl = document.getElementById('db-storage-progress-bar');
+        const tablesEl = document.getElementById('db-storage-tables-list');
+        if (!usedEl) return null;
+
+        try {
+            if (typeof supabase.rpc !== 'function') throw new Error('RPC unavailable');
+            const { data, error } = await supabase.rpc('get_database_storage_stats');
+            if (error) throw error;
+            if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.used_mb !== 'number') {
+                throw new Error('Migration 2.11.6 not applied yet');
+            }
+
+            const usedMb = Number(data.used_mb || 0);
+            const limitMb = Number(data.limit_mb || 500);
+            const pct = Number(data.pct_used ?? Math.round((usedMb / Math.max(1, limitMb)) * 1000) / 10);
+            const estRemaining = Math.max(0, Math.floor(((limitMb - usedMb) * 1024) / 1.6));
+
+            usedEl.textContent = `${usedMb.toFixed(1)} MB / ${limitMb} MB`;
+            if (pctBadge) {
+                pctBadge.textContent = `${pct.toFixed(1)}%`;
+                if (pct >= 85) {
+                    pctBadge.style.background = 'rgba(239, 68, 68, 0.16)';
+                    pctBadge.style.color = 'var(--danger)';
+                } else if (pct >= 65) {
+                    pctBadge.style.background = 'rgba(245, 158, 11, 0.16)';
+                    pctBadge.style.color = 'var(--warning, #f59e0b)';
+                } else {
+                    pctBadge.style.background = 'rgba(16, 185, 129, 0.16)';
+                    pctBadge.style.color = 'var(--success, #10b981)';
+                }
+            }
+            if (headroomEl) {
+                headroomEl.textContent = `(~${estRemaining.toLocaleString()} more transactions fit before ${limitMb} MB cap)`;
+            }
+            if (barEl) {
+                barEl.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+                barEl.style.background = pct >= 85 ? 'var(--danger)' : (pct >= 65 ? 'var(--warning, #f59e0b)' : 'var(--primary)');
+            }
+            if (tablesEl) {
+                const tables = Array.isArray(data.tables) ? data.tables : [];
+                tablesEl.innerHTML = tables.map(t => (
+                    `<span class="badge" style="background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-color); font-size: 0.74rem; padding: 0.22rem 0.5rem;">` +
+                    `<strong>${escapeHTML(t.table_name)}</strong>: ${Number(t.total_mb || 0).toFixed(1)} MB ` +
+                    `<span style="color: var(--text-muted);">(${Number(t.est_rows || 0).toLocaleString()} rows)</span>` +
+                    `</span>`
+                )).join('');
+            }
+            return data;
+        } catch (err) {
+            if (!silent && tablesEl) {
+                usedEl.textContent = '-- MB / 500 MB';
+                if (pctBadge) pctBadge.textContent = '--%';
+                if (headroomEl) headroomEl.textContent = '';
+                if (barEl) barEl.style.width = '0%';
+                tablesEl.innerHTML = `<span style="color: var(--text-muted);">Storage stats unavailable (${escapeHTML(err.message)}). Run migration <code>2.11.6_multiuser_performance_and_storage_meter.sql</code> in Supabase SQL Editor.</span>`;
+            }
+            return null;
+        }
     }
 
     isDateInClosedPeriod(dateInput) {
@@ -466,7 +534,8 @@ class AdminAuditMixin {
         const [rolesRes, logsRes] = await Promise.all([
             supabase.from('user_roles').select('*').order('updated_at', { ascending: false }),
             supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200),
-            this.loadClosedPeriods({ silent: false })
+            this.loadClosedPeriods({ silent: false }),
+            this.loadDatabaseStorageStats({ silent: false })
         ]);
 
         if (rolesRes.error) {

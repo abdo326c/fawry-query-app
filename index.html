@@ -2219,6 +2219,33 @@
                     </table>
                 </div>
 
+                <!-- Live Database Storage & Capacity Meter (Admin Only) -->
+                <div class="glass-card" id="admin-db-storage-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.6rem;">
+                        <div>
+                            <h3 style="margin: 0 0 0.25rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <i data-lucide="hard-drive" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                                Database Storage &amp; Capacity
+                            </h3>
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
+                                Live PostgreSQL disk consumption against Supabase Free Plan&rsquo;s 500 MB cap.
+                            </p>
+                        </div>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-db-storage" style="height: 28px; padding: 0 0.75rem; font-size: 0.78rem;">
+                            <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i> Refresh
+                        </button>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+                        <strong id="db-storage-used-label" style="font-size: 1rem; color: var(--text-main);">-- MB / 500 MB</strong>
+                        <span id="db-storage-pct-badge" class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted);">--%</span>
+                        <span id="db-storage-headroom-label" style="font-size: 0.78rem; color: var(--text-muted);"></span>
+                    </div>
+                    <div class="progress-bar" style="margin: 0.55rem 0 0.75rem;">
+                        <div class="progress-fill" id="db-storage-progress-bar" style="width: 0%;"></div>
+                    </div>
+                    <div id="db-storage-tables-list" style="display: flex; flex-wrap: wrap; gap: 0.45rem; font-size: 0.78rem; color: var(--text-muted);"></div>
+                </div>
+
                 <!-- Accounting Period Lock / Month-End Close (Admin Only) -->
                 <div class="glass-card" id="admin-period-lock-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.9rem;">

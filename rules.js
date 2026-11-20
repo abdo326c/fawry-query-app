@@ -294,7 +294,7 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
                     if (bounds.length === 0) return allData;
                     const numericCursor = typeof sampleCursor === 'number' && Number.isFinite(sampleCursor);
                     const coerceBound = (val) => (numericCursor ? Number(val) : val);
-                    const PARALLEL_CHUNKS = 12;
+                    const PARALLEL_CHUNKS = 4;
                     let loadedCount = allData.length;
 
                     const fetchBoundRange = async (bound) => {
@@ -409,7 +409,7 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
 /**
  * Fetch every row whose `column` is in `values`, chunking the IN list and paginating each chunk in parallel.
  */
-export async function fetchByIn(table, selectCols, column, values, orderByCol = 'id', chunkSize = 350, concurrency = 8) {
+export async function fetchByIn(table, selectCols, column, values, orderByCol = 'id', chunkSize = 350, concurrency = 4) {
     const unique = [...new Set((values || []).filter(v => v !== null && v !== undefined && v !== '').map(String))];
     if (unique.length === 0) return [];
 
@@ -565,7 +565,7 @@ export async function recomputeTransactions(txs, { mappings, fixes, links, inclu
  * @returns {Promise<number>} rows updated
  * @throws on the first error
  */
-export async function updateRuleFields(updates, { idChunkSize = 300, concurrency = 12 } = {}) {
+export async function updateRuleFields(updates, { idChunkSize = 300, concurrency = 4 } = {}) {
     const groups = new Map();
     const rpcRows = [];
 

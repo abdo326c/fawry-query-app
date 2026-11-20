@@ -21,6 +21,9 @@ import {
     runConcurrent,
     renderIcons,
     formatMoney,
+    readIndexedDbCache,
+    writeIndexedDbCache,
+    clearIndexedDbCache,
     Toast
 } from './app-utils.js';
 
@@ -66,6 +69,39 @@ class StudentsUiMixin {
         return this.studentMasterByIdMap;
     }
 
+    async fetchStudentMasterVersion() {
+        try {
+            if (typeof supabase.rpc !== 'function') return null;
+            const { data, error } = await supabase.rpc('get_student_master_version');
+            if (error || !data || typeof data !== 'object' || typeof data.row_count !== 'number') {
+                return null;
+            }
+            return {
+                row_count: data.row_count,
+                max_student_id: String(data.max_student_id || ''),
+                max_updated_at: data.max_updated_at ? String(data.max_updated_at) : ''
+            };
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    isStudentMasterCacheValid(cached, liveVer) {
+        if (!cached || !Array.isArray(cached.rows) || cached.rows.length === 0) return false;
+        if (liveVer && typeof liveVer.row_count === 'number') {
+            const cVer = cached.version;
+            if (!cVer || typeof cVer.row_count !== 'number') return false;
+            return cVer.row_count === liveVer.row_count
+                && String(cVer.max_student_id || '') === String(liveVer.max_student_id || '')
+                && String(cVer.max_updated_at || '') === String(liveVer.max_updated_at || '');
+        }
+        return typeof cached.savedAt === 'number' && (Date.now() - cached.savedAt < 15 * 60 * 1000);
+    }
+
+    async invalidateStudentMasterLocalCache() {
+        await clearIndexedDbCache('student_master_v1');
+    }
+
     async ensureFullStudentMaster({ forceReload = false, onProgress = null } = {}) {
         if (!forceReload && Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
             this.syncStudentMasterMapFromCache();
@@ -87,6 +123,18 @@ class StudentsUiMixin {
         }
         this._fullStudentMasterPromise = (async () => {
             try {
+                const [cached, liveVer] = await Promise.all([
+                    !forceReload ? readIndexedDbCache('student_master_v1') : Promise.resolve(null),
+                    this.fetchStudentMasterVersion()
+                ]);
+
+                if (!forceReload && this.isStudentMasterCacheValid(cached, liveVer)) {
+                    this.allStudentsData = cached.rows.map(s => this.indexStudentRecord({ ...s }));
+                    this.allStudents = this.allStudentsData;
+                    this.rebuildStudentMasterMap(this.allStudentsData);
+                    return this.allStudentsData;
+                }
+
                 const data = await fetchAll(
                     'student_master',
                     'student_id, full_name, arabic_name, national_id, email, personal_email, mobile, guardian_name, guardian_mobile, college, program, source',
@@ -107,7 +155,13 @@ class StudentsUiMixin {
                     }
                 );
                 if (Array.isArray(data) && data.length > 0) {
-                    this.allStudentsData = data.map(s => this.indexStudentRecord(s));
+                    const freshVer = liveVer || await this.fetchStudentMasterVersion();
+                    writeIndexedDbCache('student_master_v1', {
+                        version: freshVer,
+                        savedAt: Date.now(),
+                        rows: data
+                    });
+                    this.allStudentsData = data.map(s => this.indexStudentRecord({ ...s }));
                     this.allStudents = this.allStudentsData;
                     this.rebuildStudentMasterMap(this.allStudentsData);
                 } else if (!this.allStudentsData) {
@@ -138,6 +192,18 @@ class StudentsUiMixin {
         }
         this._studentLevelMapPromise = (async () => {
             try {
+                const [cached, liveVer] = await Promise.all([
+                    readIndexedDbCache('student_master_v1'),
+                    this.fetchStudentMasterVersion()
+                ]);
+                if (this.isStudentMasterCacheValid(cached, liveVer)) {
+                    if (!this.allStudents || this.allStudents.length === 0) {
+                        this.allStudents = cached.rows;
+                    }
+                    this.rebuildStudentMasterMap(cached.rows);
+                    return this.studentMasterByIdMap;
+                }
+
                 const rows = await fetchAll('student_master', 'student_id, full_name, arabic_name, guardian_name, college, program, mobile', null, 'student_id');
                 if (Array.isArray(rows) && rows.length > 0) {
                     if (!this.allStudents || this.allStudents.length === 0) {
@@ -333,6 +399,7 @@ class StudentsUiMixin {
                     const { error } = await supabase.from('student_master').upsert([payload], { onConflict: 'student_id' });
                     if (error) throw error;
 
+                    await this.invalidateStudentMasterLocalCache();
                     await this.logAudit(existing ? 'UPDATE' : 'CREATE', 'student_master', normSid, existing || null, payload);
                     Toast.show(existing ? `Updated student ${normSid}` : `Added student ${normSid}`, 'success');
                     document.getElementById('modal-student')?.classList.add('hidden');
@@ -812,6 +879,7 @@ class StudentsUiMixin {
 
             if (rowsToUpdate.length > 0) {
                 await this.upsertStudentMasterBatches(rowsToUpdate);
+                await this.invalidateStudentMasterLocalCache();
             }
 
             this.rebuildStudentMasterMap(allRows || []);
@@ -1198,6 +1266,8 @@ class StudentsUiMixin {
                     if (delErr) throw delErr;
                 }
             }
+
+            await this.invalidateStudentMasterLocalCache();
 
             const unchangedCount = mergedRecords.length - recordsToUpsert.length;
             if (this.currentUser) {
