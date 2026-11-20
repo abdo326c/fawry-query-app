@@ -234,6 +234,21 @@ export const supabase = {
       return { error: null };
     },
 
+    async adminCreateUser({ email, password, role }) {
+      const res = await apiFetch('/api/auth', { action: 'admin_create_user', email, password, role });
+      return { data: res._raw || null, error: res.error };
+    },
+
+    async adminResetPassword({ email, newPassword }) {
+      const res = await apiFetch('/api/auth', { action: 'admin_reset_password', email, newPassword });
+      return { data: res._raw || null, error: res.error };
+    },
+
+    async changePassword({ currentPassword, newPassword }) {
+      const res = await apiFetch('/api/auth', { action: 'change_password', currentPassword, newPassword });
+      return { data: res._raw || null, error: res.error };
+    },
+
     onAuthStateChange(callback) {
       if (typeof callback === 'function') authListeners.add(callback);
       return {

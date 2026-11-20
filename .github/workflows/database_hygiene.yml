@@ -34,9 +34,8 @@ jobs:
       - name: Run Auto-Deduplication & Health Audit
         env:
           GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co' }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
           # Scheduled runs only INSPECT. Deleting rows needs a manual run with apply_fixes ticked
           # (on a schedule the input is empty, which previously fell through to --fix every night).

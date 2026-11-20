@@ -1,7 +1,7 @@
 /**
  * Fawry Direct-to-Cloud Automated Backup (Zero Local Disk Footprint)
- * Compatible with Local Environments and GitHub Actions Cloud Cron
- * 
+ * Compatible with Local Environments and GitHub Actions Cloud Cron (Turso / libSQL)
+ *
  * Hierarchy on Google Drive:
  *   Fawry Payments Backup
  *     └── > Year (e.g. 2026)
@@ -9,14 +9,7 @@
  *               └── >>> Week (e.g. Week 44 (Oct 26 - Nov 01))
  *                    ├── fawry_backup_YYYYMMDD_HHmmss.zip (All transactions, students, rules, roles, audit)
  *                    └── manifest.json (Inspectable metadata & financial verification summary)
- * 
- * Features:
- * 1. Streams 100% of raw database records directly to ephemeral OS temp storage.
- * 2. Compresses all files into a single production zip archive (cross-platform Windows & Linux).
- * 3. Uploads directly into Google Drive via native REST API v3 (0 CLI dependency).
- * 4. Automatically purges all local temporary files immediately after upload (0 MB left on disk).
- * 5. Logs backup event into database audit trail (`audit_logs`) and GitHub Step Summary.
- * 
+ *
  * Usage:
  *   npm run backup
  */
@@ -27,6 +20,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { finished } from 'stream/promises';
 import { execFileSync } from 'child_process';
+import { createClient } from '@libsql/client';
+import { withDbRetry } from '../api/_lib/db.js';
+import { TABLE_BOOLEAN_COLS, TABLE_JSON_COLS } from '../api/_lib/rbac.js';
 
 /**
  * Computes the SHA-256 hex digest of a file on disk for backup integrity verification.
@@ -37,46 +33,76 @@ export function computeFileSha256(filePath) {
     return hash.digest('hex');
 }
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://hjtxdyuevxcezxzbiiqk.supabase.co';
-// The service-role key is REQUIRED: the backup RPCs and table reads are blocked for the anon key,
-// and falling back to it made every run "succeed" with an authorization error swallowed.
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-const headers = {
-    'apikey': SUPABASE_KEY,
-    'Authorization': `Bearer ${SUPABASE_KEY}`,
-    'Content-Type': 'application/json'
-};
-
-function assertServiceKey() {
-    if (!SUPABASE_KEY) {
-        throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set. Add it as a repository secret (Settings -> Secrets -> Actions).');
+function getTursoClient() {
+    const url = process.env.TURSO_DATABASE_URL || '';
+    if (!url) {
+        throw new Error('TURSO_DATABASE_URL is not set. Add it as a repository secret (Settings -> Secrets -> Actions).');
     }
+    return createClient({
+        url,
+        authToken: process.env.TURSO_AUTH_TOKEN || undefined
+    });
+}
+
+function parseOrderBySql(orderBy) {
+    if (!orderBy) return '';
+    const parts = String(orderBy)
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(part => {
+            const [col, dirRaw] = part.split('.');
+            const safeCol = String(col || '').replace(/[^a-zA-Z0-9_]/g, '');
+            const dir = String(dirRaw || 'asc').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+            return `"${safeCol}" ${dir}`;
+        });
+    return parts.length > 0 ? `ORDER BY ${parts.join(', ')}` : '';
+}
+
+function normalizeBackupRow(table, row) {
+    if (!row || typeof row !== 'object') return row;
+    const boolCols = TABLE_BOOLEAN_COLS[table];
+    const jsonCols = TABLE_JSON_COLS[table];
+    const out = {};
+    for (const [k, v] of Object.entries(row)) {
+        if (boolCols && boolCols.has(k)) {
+            out[k] = v === null || v === undefined ? null : Boolean(v);
+        } else if (jsonCols && jsonCols.has(k)) {
+            if (typeof v === 'string') {
+                try { out[k] = JSON.parse(v); } catch { out[k] = v; }
+            } else {
+                out[k] = v;
+            }
+        } else {
+            out[k] = v;
+        }
+    }
+    return out;
 }
 
 /**
- * Reads every row of a table through PostgREST with the service-role key (bypasses RLS),
- * paging with LIMIT/OFFSET on a stable order. Used for tables the backup RPCs don't cover.
+ * Reads every row of a Turso table in deterministic order using LIMIT/OFFSET paging.
  */
-export async function fetchTableAll(table, orderBy, pageSize = 1000) {
+export async function fetchTableAll(table, orderBy = 'id.asc', pageSize = 2000) {
+    const db = getTursoClient();
+    const safeTable = String(table).replace(/[^a-zA-Z0-9_]/g, '');
+    const orderSql = parseOrderBySql(orderBy);
     const rows = [];
+
     for (let offset = 0; ; offset += pageSize) {
-        const url = `${SUPABASE_URL}/rest/v1/${encodeURIComponent(table)}?select=*&order=${encodeURIComponent(orderBy)}&limit=${pageSize}&offset=${offset}`;
-        const res = await fetch(url, { headers });
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`Reading table ${table} failed: ${res.status} ${text}`);
-        }
-        const page = await res.json();
-        for (const r of page) rows.push(r);
-        if (page.length < pageSize) break;
+        const res = await withDbRetry(() => db.execute({
+            sql: `SELECT * FROM "${safeTable}" ${orderSql} LIMIT ? OFFSET ?`,
+            args: [pageSize, offset]
+        }));
+        for (const r of res.rows) rows.push(normalizeBackupRow(safeTable, r));
+        if (res.rows.length < pageSize) break;
     }
     return rows;
 }
 
-// Tables not included in export_database_backup_payload / the chunk RPCs.
-// audit_logs is re-read here in full because the payload RPC caps it at 500 rows.
 const EXTRA_BACKUP_TABLES = [
+    { table: 'closed_periods', orderBy: 'period_month.asc' },
+    { table: 'transactions_archive', orderBy: 'id.asc' },
     { table: 'foreign_transactions', orderBy: 'id.asc' },
     { table: 'settlement_batches', orderBy: 'id.asc' },
     { table: 'links', orderBy: 'id.asc' },
@@ -85,19 +111,6 @@ const EXTRA_BACKUP_TABLES = [
     { table: 'exchange_rates', orderBy: 'rate_date.asc,currency_pair.asc' },
     { table: 'audit_logs', orderBy: 'id.asc' }
 ];
-
-async function fetchRpc(fn, body = {}) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body)
-    });
-    if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`RPC ${fn} failed: ${res.status} ${text}`);
-    }
-    return await res.json();
-}
 
 /**
  * Calculates current Year, Month, and Week hierarchy labels
@@ -110,34 +123,28 @@ export function getFolderHierarchy(date = new Date()) {
         '09 - September', '10 - October', '11 - November', '12 - December'
     ];
     const month = monthNames[date.getMonth()];
-    
-    // ISO Week Calculation (starts Monday)
+
     const tempDate = new Date(date.getTime());
     tempDate.setHours(0, 0, 0, 0);
     tempDate.setDate(tempDate.getDate() + 3 - (tempDate.getDay() + 6) % 7);
     const week1 = new Date(tempDate.getFullYear(), 0, 4);
     const weekNumber = 1 + Math.round(((tempDate.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-    
-    // Week date span
+
     const day = date.getDay();
     const diffToMonday = date.getDate() - day + (day === 0 ? -6 : 1);
     const monday = new Date(date.getFullYear(), date.getMonth(), diffToMonday);
     const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
-    
+
     const pad = (n) => String(n).padStart(2, '0');
     const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const span = `${shortMonths[monday.getMonth()]} ${pad(monday.getDate())} - ${shortMonths[sunday.getMonth()]} ${pad(sunday.getDate())}`;
-    
+
     const week = `Week ${pad(weekNumber)} (${span})`;
     return { year, month, week };
 }
 
 /**
  * Resolves Google Drive OAuth2 Credentials
- * Supports:
- *   1. GDRIVE_TOKEN_JSON environment variable (Single string secret in CI/GitHub)
- *   2. GDRIVE_REFRESH_TOKEN / GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET env vars
- *   3. Local token.json from Antigravity plugin storage
  */
 export function getGoogleCredentials() {
     if (process.env.GDRIVE_TOKEN_JSON) {
@@ -208,14 +215,14 @@ export async function getDriveAccessToken(creds) {
  * Resolves or creates a Google Drive folder via pure REST API v3
  */
 export async function getOrCreateDriveFolderRest(accessToken, name, parentId = null) {
-    const safeName = String(name).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const safeName = String(name).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const qParts = [
         `name = '${safeName}'`,
         `mimeType = 'application/vnd.google-apps.folder'`,
         `trashed = false`
     ];
     if (parentId) {
-        const safeParent = String(parentId).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const safeParent = String(parentId).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         qParts.push(`'${safeParent}' in parents`);
     }
     const q = qParts.join(' and ');
@@ -227,7 +234,6 @@ export async function getOrCreateDriveFolderRest(accessToken, name, parentId = n
         return searchJson.files[0];
     }
 
-    // Create Folder
     const body = {
         name,
         mimeType: 'application/vnd.google-apps.folder'
@@ -292,7 +298,7 @@ export async function uploadFileToDriveRest(accessToken, filePath, fileName, mim
 }
 
 /**
- * Main Direct-to-Drive Backup Runner
+ * Main Direct-to-Drive Backup Runner (Turso)
  */
 export async function runFullDatabaseBackup() {
     console.log('='.repeat(75));
@@ -303,8 +309,7 @@ export async function runFullDatabaseBackup() {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    
-    // Calculate Year > Month > Week Hierarchy
+
     const hierarchy = getFolderHierarchy(now);
     console.log(`\n📅 Target Destination:`);
     console.log(`   > Root:   Fawry Payments Backup`);
@@ -312,9 +317,8 @@ export async function runFullDatabaseBackup() {
     console.log(`   >> Month: ${hierarchy.month}`);
     console.log(`   >>> Week: ${hierarchy.week}`);
 
-    assertServiceKey();
+    const db = getTursoClient();
 
-    // Verify Google Credentials upfront
     const creds = getGoogleCredentials();
     if (!creds || !creds.refreshToken) {
         throw new Error('Google Drive credentials not found. Please provide GDRIVE_TOKEN_JSON or authenticate via gdrive auth login');
@@ -322,7 +326,6 @@ export async function runFullDatabaseBackup() {
     const driveAccessToken = await getDriveAccessToken(creds);
     console.log('  ✓ Google Drive REST API authenticated successfully');
 
-    // Create Ephemeral Working Directory in OS Temp
     const tempDir = path.join(os.tmpdir(), `fawry_backup_temp_${timestamp}`);
     fs.mkdirSync(tempDir, { recursive: true });
 
@@ -332,22 +335,34 @@ export async function runFullDatabaseBackup() {
     let uploadedManifest = null;
 
     try {
-        // [1/4] Core Configuration Snapshot
         console.log('\n[1/4] Fetching core configuration tables (Mappings, Fixes, Roles)...');
-        const coreSnapshot = await fetchRpc('export_database_backup_payload');
-        
-        fs.writeFileSync(path.join(tempDir, 'item_mappings.json'), JSON.stringify(coreSnapshot.mappings, null, 2), 'utf-8');
-        fs.writeFileSync(path.join(tempDir, 'manual_fixes.json'), JSON.stringify(coreSnapshot.manual_fixes, null, 2), 'utf-8');
-        fs.writeFileSync(path.join(tempDir, 'user_roles.json'), JSON.stringify(coreSnapshot.user_roles, null, 2), 'utf-8');
-        fs.writeFileSync(path.join(tempDir, 'audit_logs.json'), JSON.stringify(coreSnapshot.audit_logs, null, 2), 'utf-8');
-        fs.writeFileSync(path.join(tempDir, 'transactions_monthly_summary.json'), JSON.stringify(coreSnapshot.transactions_monthly_summary, null, 2), 'utf-8');
+        const [mappings, manualFixes, userRoles, latestAuditRes, monthlySummaryRes] = await Promise.all([
+            fetchTableAll('item_mappings', 'id.asc'),
+            fetchTableAll('manual_fixes', 'id.asc'),
+            fetchTableAll('user_roles', 'email.asc'),
+            withDbRetry(() => db.execute({ sql: 'SELECT * FROM audit_logs ORDER BY id DESC LIMIT 500' })),
+            withDbRetry(() => db.execute({
+                sql: `SELECT substr(payment_date, 1, 7) AS month, bank, COUNT(*) AS tx_count, COALESCE(SUM(item_price), 0) AS total_amount
+                      FROM transactions
+                      GROUP BY 1, bank
+                      ORDER BY 1 DESC, bank ASC`
+            }))
+        ]);
 
-        console.log(`  ✓ Item Mappings: ${coreSnapshot.mappings_count.toLocaleString()} rules`);
-        console.log(`  ✓ Manual Fixes:  ${coreSnapshot.fixes_count.toLocaleString()} rules`);
-        console.log(`  ✓ User Roles:    ${coreSnapshot.roles_count.toLocaleString()} users`);
-        console.log(`  ✓ Audit Logs:    ${(coreSnapshot.audit_logs || []).length.toLocaleString()} entries (latest; full log below)`);
+        const latestAuditLogs = latestAuditRes.rows.map(r => normalizeBackupRow('audit_logs', r));
+        const monthlySummary = monthlySummaryRes.rows;
 
-        // [1b] Tables not covered by the backup RPCs (full copies, service-role REST paging)
+        fs.writeFileSync(path.join(tempDir, 'item_mappings.json'), JSON.stringify(mappings, null, 2), 'utf-8');
+        fs.writeFileSync(path.join(tempDir, 'manual_fixes.json'), JSON.stringify(manualFixes, null, 2), 'utf-8');
+        fs.writeFileSync(path.join(tempDir, 'user_roles.json'), JSON.stringify(userRoles, null, 2), 'utf-8');
+        fs.writeFileSync(path.join(tempDir, 'audit_logs.json'), JSON.stringify(latestAuditLogs, null, 2), 'utf-8');
+        fs.writeFileSync(path.join(tempDir, 'transactions_monthly_summary.json'), JSON.stringify(monthlySummary, null, 2), 'utf-8');
+
+        console.log(`  ✓ Item Mappings: ${mappings.length.toLocaleString()} rules`);
+        console.log(`  ✓ Manual Fixes:  ${manualFixes.length.toLocaleString()} rules`);
+        console.log(`  ✓ User Roles:    ${userRoles.length.toLocaleString()} users`);
+        console.log(`  ✓ Audit Logs:    ${latestAuditLogs.length.toLocaleString()} entries (latest; full log below)`);
+
         const extraTableCounts = {};
         for (const { table, orderBy } of EXTRA_BACKUP_TABLES) {
             const rows = await fetchTableAll(table, orderBy);
@@ -357,31 +372,35 @@ export async function runFullDatabaseBackup() {
             console.log(`  ✓ ${table}: ${rows.length.toLocaleString()} rows`);
         }
 
-        // [2/4] Stream All Raw Transactions (in chunks of 5,000)
-        console.log('\n[2/4] Streaming all raw transactions from database...');
+        console.log('\n[2/4] Streaming all raw transactions from Turso...');
         const txFilePath = path.join(tempDir, 'transactions.jsonl');
         const txWriteStream = fs.createWriteStream(txFilePath, { encoding: 'utf-8' });
-        
-        let txOffset = 0;
+
         const chunkSize = 5000;
+        let lastTxId = 0;
         let totalTxCount = 0;
         let totalTxAmount = 0;
         let totalSettledCount = 0;
 
         while (true) {
-            const chunk = await fetchRpc('get_transactions_backup_chunk', { p_offset: txOffset, p_limit: chunkSize });
+            const res = await withDbRetry(() => db.execute({
+                sql: 'SELECT * FROM transactions WHERE id > ? ORDER BY id ASC LIMIT ?',
+                args: [lastTxId, chunkSize]
+            }));
+            const chunk = res.rows;
             if (!chunk || chunk.length === 0) break;
 
-            for (const row of chunk) {
+            for (const rawRow of chunk) {
+                const row = normalizeBackupRow('transactions', rawRow);
                 txWriteStream.write(JSON.stringify(row) + '\n');
                 totalTxAmount += parseFloat(row.item_price || 0) || 0;
                 if (row.is_settled) totalSettledCount++;
             }
 
+            lastTxId = Number(chunk[chunk.length - 1].id);
             totalTxCount += chunk.length;
             process.stdout.write(`  ... streamed ${totalTxCount.toLocaleString()} transactions\r`);
             if (chunk.length < chunkSize) break;
-            txOffset += chunkSize;
         }
         txWriteStream.end();
         await finished(txWriteStream);
@@ -389,31 +408,35 @@ export async function runFullDatabaseBackup() {
         console.log(`  ✓ Total Transactions Amount: EGP ${totalTxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
         console.log(`  ✓ Settled Transactions:     ${totalSettledCount.toLocaleString()}`);
 
-        // [3/4] Stream All Student Master Records
         console.log('\n[3/4] Streaming Student Master directory...');
         const studentsFilePath = path.join(tempDir, 'student_master.jsonl');
         const studentWriteStream = fs.createWriteStream(studentsFilePath, { encoding: 'utf-8' });
 
-        let stuOffset = 0;
+        let lastStudentId = null;
         let totalStudentCount = 0;
 
         while (true) {
-            const chunk = await fetchRpc('get_students_backup_chunk', { p_offset: stuOffset, p_limit: chunkSize });
+            const res = await withDbRetry(() => db.execute({
+                sql: lastStudentId === null
+                    ? 'SELECT * FROM student_master ORDER BY student_id ASC LIMIT ?'
+                    : 'SELECT * FROM student_master WHERE student_id > ? ORDER BY student_id ASC LIMIT ?',
+                args: lastStudentId === null ? [chunkSize] : [lastStudentId, chunkSize]
+            }));
+            const chunk = res.rows;
             if (!chunk || chunk.length === 0) break;
 
             for (const s of chunk) {
                 studentWriteStream.write(JSON.stringify(s) + '\n');
             }
 
+            lastStudentId = String(chunk[chunk.length - 1].student_id);
             totalStudentCount += chunk.length;
             if (chunk.length < chunkSize) break;
-            stuOffset += chunkSize;
         }
         studentWriteStream.end();
         await finished(studentWriteStream);
         console.log(`  ✓ Student Master Saved:   ${totalStudentCount.toLocaleString()} students`);
 
-        // Compute SHA-256 checksums for every exported file in tempDir for tamper/corruption verification
         const fileChecksums = {};
         for (const fname of fs.readdirSync(tempDir)) {
             const fullPath = path.join(tempDir, fname);
@@ -425,12 +448,11 @@ export async function runFullDatabaseBackup() {
             }
         }
 
-        // Write Manifest Metadata
         const manifest = {
             backup_id: `fawry_backup_${timestamp}`,
             created_at: now.toISOString(),
-            version: '2.11.3',
-            database: 'Fawry Payments Project (Supabase)',
+            version: '2.11.6-turso',
+            database: 'Fawry Payments Project (Turso / libSQL)',
             integrity_verified: true,
             hierarchy: {
                 root: 'Fawry Payments Backup',
@@ -443,10 +465,10 @@ export async function runFullDatabaseBackup() {
                 transactions_total_amount_egp: Math.round(totalTxAmount * 100) / 100,
                 settled_transactions_count: totalSettledCount,
                 students_count: totalStudentCount,
-                mappings_count: coreSnapshot.mappings_count,
-                manual_fixes_count: coreSnapshot.fixes_count,
-                user_roles_count: coreSnapshot.roles_count,
-                audit_logs_count: extraTableCounts.audit_logs ?? (coreSnapshot.audit_logs || []).length,
+                mappings_count: mappings.length,
+                manual_fixes_count: manualFixes.length,
+                user_roles_count: userRoles.length,
+                audit_logs_count: extraTableCounts.audit_logs ?? latestAuditLogs.length,
                 extra_tables: extraTableCounts
             },
             checksums_sha256: fileChecksums
@@ -454,10 +476,9 @@ export async function runFullDatabaseBackup() {
         const manifestPath = path.join(tempDir, 'manifest.json');
         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
 
-        // Package Everything into Single Zip Archive (Cross-Platform)
         console.log('\n[4/5] Packaging database into compressed archive...');
         zipPath = path.join(os.tmpdir(), `fawry_backup_${timestamp}.zip`);
-        
+
         if (process.platform === 'win32') {
             const safeSrc = `${tempDir}\\*`.replace(/'/g, "''");
             const safeDst = zipPath.replace(/'/g, "''");
@@ -467,10 +488,9 @@ export async function runFullDatabaseBackup() {
                 `Compress-Archive -Path '${safeSrc}' -DestinationPath '${safeDst}' -Force`
             ]);
         } else {
-            // Linux / macOS (GitHub Actions runner)
             execFileSync('zip', ['-q', '-r', zipPath, '.'], { cwd: tempDir });
         }
-        
+
         const zipSizeMb = (fs.statSync(zipPath).size / (1024 * 1024)).toFixed(2);
         const zipSha256 = computeFileSha256(zipPath);
         manifest.archive_sha256 = zipSha256;
@@ -478,7 +498,6 @@ export async function runFullDatabaseBackup() {
         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
         console.log(`  ✓ Production Package Created: ${zipSizeMb} MB | SHA-256: ${zipSha256.slice(0, 16)}...`);
 
-        // [5/5] Google Drive Upload via Native REST API v3
         console.log('\n[5/5] Resolving Google Drive hierarchy and uploading directly...');
         const rootFolder = await getOrCreateDriveFolderRest(driveAccessToken, 'Fawry Payments Backup');
         const yearFolder = await getOrCreateDriveFolderRest(driveAccessToken, hierarchy.year, rootFolder.id);
@@ -506,25 +525,23 @@ export async function runFullDatabaseBackup() {
         console.log('  ✓ Manifest uploaded to Google Drive!');
         console.log(`    File ID: ${uploadedManifest.id}`);
 
-        // Record Audit Log in Supabase
         try {
-            await fetch(`${SUPABASE_URL}/rest/v1/audit_logs`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    user_email: 'system@nu.edu.eg',
-                    action: 'DRIVE_BACKUP_COMPLETED',
-                    affected_references: `Full Database (${totalTxCount.toLocaleString()} txs)`,
-                    details: {
+            await withDbRetry(() => db.execute({
+                sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
+                args: [
+                    'system@nu.edu.eg',
+                    'DRIVE_BACKUP_COMPLETED',
+                    `Full Database (${totalTxCount.toLocaleString()} txs)`,
+                    JSON.stringify({
                         archive_name: `fawry_backup_${timestamp}.zip`,
                         size_mb: zipSizeMb,
                         hierarchy: `Fawry Payments Backup > ${hierarchy.year} > ${hierarchy.month} > ${hierarchy.week}`,
                         drive_folder_url: weekFolder.webViewLink,
                         financial_total_egp: totalTxAmount,
                         runner: process.env.GITHUB_ACTIONS ? 'github-actions-cloud' : 'local-runtime'
-                    }
-                })
-            });
+                    })
+                ]
+            }));
             console.log('  ✓ Logged backup event to database audit trail');
         } catch (_auditErr) {
             // Ignore non-fatal audit log failure
@@ -535,12 +552,11 @@ export async function runFullDatabaseBackup() {
         console.log(`🎉 BACKUP UPLOADED DIRECTLY TO GOOGLE DRIVE IN ${(duration / 1000).toFixed(1)}s!`);
         console.log(`   Transactions:  ${totalTxCount.toLocaleString()} rows (EGP ${totalTxAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })})`);
         console.log(`   Students:      ${totalStudentCount.toLocaleString()} rows`);
-        console.log(`   Rules & Fixes: ${coreSnapshot.mappings_count} mappings, ${coreSnapshot.fixes_count} fixes, ${coreSnapshot.roles_count} roles`);
+        console.log(`   Rules & Fixes: ${mappings.length} mappings, ${manualFixes.length} fixes, ${userRoles.length} roles`);
         console.log(`   Cloud Folder:  ${weekFolder.webViewLink}`);
         console.log(`   Local Storage: 0 MB (all temporary files purged from disk)`);
         console.log('='.repeat(75));
 
-        // GitHub Actions Step Summary
         if (process.env.GITHUB_STEP_SUMMARY) {
             try {
                 const summaryMarkdown = `
@@ -566,7 +582,6 @@ export async function runFullDatabaseBackup() {
             hierarchy
         };
     } finally {
-        // Enforce Zero Local Disk Storage by purging temporary files
         try {
             if (fs.existsSync(tempDir)) {
                 fs.rmSync(tempDir, { recursive: true, force: true });
@@ -584,10 +599,8 @@ export async function runFullDatabaseBackup() {
     }
 }
 
-// Direct CLI execution
 if (process.argv[1] && process.argv[1].endsWith('backup_to_drive.js')) {
     runFullDatabaseBackup().catch(err => {
-        // Exit non-zero so the GitHub Actions job is marked FAILED instead of green.
         console.error('❌ Backup failed:', err);
         process.exit(1);
     });

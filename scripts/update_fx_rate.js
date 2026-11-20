@@ -1,8 +1,10 @@
 /**
  * Daily USD -> EGP FX rate updater scheduled for 12:00 PM Africa/Cairo time.
- * Fetches the live USD -> EGP rate and upserts it into Supabase `exchange_rates`.
+ * Fetches the live USD -> EGP rate and upserts it into Turso `exchange_rates`.
  * Intended to run from GitHub Actions (`0 9,10 * * *` UTC) or manually with `--force`.
  */
+import { createClient } from '@libsql/client';
+import { withDbRetry } from '../api/_lib/db.js';
 import {
     EGYPT_DAILY_FX_HOUR,
     fetchUsdToEgpRateForDate,
@@ -13,8 +15,8 @@ const args = new Set(process.argv.slice(2));
 const force = args.has('--force');
 const overwriteManual = args.has('--overwrite-manual');
 
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
+const TURSO_URL = process.env.TURSO_DATABASE_URL || '';
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN || '';
 
 async function main() {
     const now = new Date();
@@ -27,55 +29,42 @@ async function main() {
         return;
     }
 
-    if (!SUPABASE_URL || !SUPABASE_KEY) {
-        throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variable.');
+    if (!TURSO_URL) {
+        throw new Error('Missing TURSO_DATABASE_URL environment variable.');
     }
+
+    const db = createClient({
+        url: TURSO_URL,
+        authToken: TURSO_TOKEN || undefined
+    });
 
     const res = await fetchUsdToEgpRateForDate('latest', fetch, egyptNow.dateStr);
     if (!res || !(res.rate > 0)) {
         throw new Error('Failed to fetch a valid USD -> EGP exchange rate from all upstream providers.');
     }
 
-    const headers = {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
-    };
-
     if (!overwriteManual) {
-        const checkUrl = `${SUPABASE_URL}/rest/v1/exchange_rates?rate_date=eq.${encodeURIComponent(egyptNow.dateStr)}&currency_pair=eq.USD_EGP&select=rate_date,rate,source`;
-        const checkRes = await fetch(checkUrl, { headers });
-        if (checkRes.ok) {
-            const rows = await checkRes.json();
-            if (Array.isArray(rows) && rows[0]?.source === 'manual') {
-                console.log(`[fx-cron] Preserving manual USD -> EGP override (${rows[0].rate}) for ${egyptNow.dateStr}.`);
-                return;
-            }
+        const existing = await withDbRetry(() => db.execute({
+            sql: "SELECT rate_date, rate, source FROM exchange_rates WHERE rate_date = ? AND currency_pair = 'USD_EGP' LIMIT 1",
+            args: [egyptNow.dateStr]
+        }));
+        if (existing.rows.length > 0 && existing.rows[0]?.source === 'manual') {
+            console.log(`[fx-cron] Preserving manual USD -> EGP override (${existing.rows[0].rate}) for ${egyptNow.dateStr}.`);
+            return;
         }
     }
 
     const nowIso = now.toISOString();
-    const upsertUrl = `${SUPABASE_URL}/rest/v1/exchange_rates?on_conflict=rate_date,currency_pair`;
-    const upsertRes = await fetch(upsertUrl, {
-        method: 'POST',
-        headers: {
-            ...headers,
-            Prefer: 'resolution=merge-duplicates,return=representation'
-        },
-        body: JSON.stringify([{
-            rate_date: egyptNow.dateStr,
-            currency_pair: 'USD_EGP',
-            rate: res.rate,
-            source: 'auto',
-            updated_by: 'daily-cron-12pm-egypt',
-            updated_at: nowIso
-        }])
-    });
-
-    if (!upsertRes.ok) {
-        const errText = await upsertRes.text();
-        throw new Error(`Supabase upsert failed (${upsertRes.status}): ${errText}`);
-    }
+    await withDbRetry(() => db.execute({
+        sql: `INSERT INTO exchange_rates (rate_date, currency_pair, rate, source, updated_by, updated_at)
+              VALUES (?, 'USD_EGP', ?, 'auto', 'daily-cron-12pm-egypt', ?)
+              ON CONFLICT(rate_date, currency_pair) DO UPDATE SET
+                rate = excluded.rate,
+                source = excluded.source,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at`,
+        args: [egyptNow.dateStr, res.rate, nowIso]
+    }));
 
     console.log(
         `[fx-cron] Updated USD -> EGP rate for ${egyptNow.dateStr} at 12:00 PM Egypt: ${res.rate} (provider: ${res.provider})`

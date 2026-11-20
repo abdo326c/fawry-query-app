@@ -663,4 +663,64 @@ describe('Turso / Vercel API Backend (Auth, RBAC Query, RPCs)', () => {
     const afterOut = await supabase.auth.getSession();
     expect(afterOut.data.session).toBeNull();
   });
+
+  test('supabase.auth adminCreateUser, adminResetPassword, and changePassword work end-to-end', async () => {
+    globalThis.fetch = async (url, init) => {
+      const parsedBody = JSON.parse(init?.body || '{}');
+      const headers = init?.headers || {};
+      const token = headers.Authorization ? headers.Authorization.replace(/^Bearer\s+/i, '') : null;
+      let handler = null;
+      if (String(url).endsWith('/api/auth')) handler = authHandler;
+      else if (String(url).endsWith('/api/query')) handler = queryHandler;
+      else if (String(url).endsWith('/api/rpc')) handler = rpcHandler;
+      const out = await callApi(handler, parsedBody, token);
+      return new Response(JSON.stringify(out.body), {
+        status: out.status,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    // Sign in as admin and create a colleague account
+    const adminSignIn = await supabase.auth.signInWithPassword({
+      email: 'ammahmoud@nu.edu.eg',
+      password: 'AdminPass123!'
+    });
+    expect(adminSignIn.error).toBeNull();
+
+    const createRes = await supabase.auth.adminCreateUser({
+      email: 'colleague@nu.edu.eg',
+      password: 'InitPassword1!',
+      role: 'accountant'
+    });
+    expect(createRes.error).toBeNull();
+
+    // Admin resets password for that colleague
+    const resetRes = await supabase.auth.adminResetPassword({
+      email: 'colleague@nu.edu.eg',
+      newPassword: 'ResetPassword2!'
+    });
+    expect(resetRes.error).toBeNull();
+
+    // Colleague signs in with reset password and changes their own password
+    await supabase.auth.signOut();
+    const colSignIn = await supabase.auth.signInWithPassword({
+      email: 'colleague@nu.edu.eg',
+      password: 'ResetPassword2!'
+    });
+    expect(colSignIn.error).toBeNull();
+    expect(colSignIn.data.session.user.role).toBe('accountant');
+
+    const chRes = await supabase.auth.changePassword({
+      currentPassword: 'ResetPassword2!',
+      newPassword: 'SelfPassword3!'
+    });
+    expect(chRes.error).toBeNull();
+
+    await supabase.auth.signOut();
+    const finalSignIn = await supabase.auth.signInWithPassword({
+      email: 'colleague@nu.edu.eg',
+      password: 'SelfPassword3!'
+    });
+    expect(finalSignIn.error).toBeNull();
+  });
 });

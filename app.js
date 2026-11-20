@@ -194,9 +194,64 @@ class App {
 
         // Logout
         document.getElementById('btn-logout').addEventListener('click', async () => {
+            document.getElementById('change-password-popover')?.classList.add('hidden');
             await supabase.auth.signOut();
             Toast.show('Signed out', 'info');
         });
+
+        // Self-service Change Password popover
+        const btnChangePw = document.getElementById('btn-change-password');
+        const cpPopover = document.getElementById('change-password-popover');
+        const cpForm = document.getElementById('change-password-form');
+        const clearCpInputs = () => {
+            ['cp-current-password', 'cp-new-password', 'cp-confirm-password'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+        };
+        if (btnChangePw && cpPopover) {
+            btnChangePw.addEventListener('click', () => {
+                const willShow = cpPopover.classList.contains('hidden');
+                clearCpInputs();
+                cpPopover.classList.toggle('hidden', !willShow);
+                if (willShow) document.getElementById('cp-current-password')?.focus();
+            });
+        }
+        document.getElementById('btn-cancel-change-password')?.addEventListener('click', () => {
+            clearCpInputs();
+            cpPopover?.classList.add('hidden');
+        });
+        if (cpForm) {
+            cpForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const currentPassword = String(document.getElementById('cp-current-password')?.value || '');
+                const newPassword = String(document.getElementById('cp-new-password')?.value || '');
+                const confirmPassword = String(document.getElementById('cp-confirm-password')?.value || '');
+
+                if (newPassword.length < 8) {
+                    Toast.show('New password must be at least 8 characters.', 'warning');
+                    return;
+                }
+                if (newPassword !== confirmPassword) {
+                    Toast.show('New password and confirmation do not match.', 'warning');
+                    return;
+                }
+
+                const submitBtn = document.getElementById('btn-submit-change-password');
+                if (submitBtn) submitBtn.disabled = true;
+                try {
+                    const { error } = await supabase.auth.changePassword({ currentPassword, newPassword });
+                    if (error) throw error;
+                    clearCpInputs();
+                    cpPopover?.classList.add('hidden');
+                    Toast.show('Your password has been updated.', 'success');
+                } catch (err) {
+                    Toast.show('Password update failed: ' + err.message, 'error');
+                } finally {
+                    if (submitBtn) submitBtn.disabled = false;
+                }
+            });
+        }
     }
 
     getRoleLevel(role) {

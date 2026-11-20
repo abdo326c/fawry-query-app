@@ -26,8 +26,10 @@ class AdminAuditMixin {
             btnSaveRole.addEventListener('click', async () => {
                 if (!this.requireRole('admin', 'assign user roles')) return;
                 const emailInput = document.getElementById('role-user-email');
+                const passwordInput = document.getElementById('role-user-password');
                 const roleSelect = document.getElementById('role-user-select');
                 const email = String(emailInput?.value || '').trim().toLowerCase();
+                const password = String(passwordInput?.value || '');
                 const role = String(roleSelect?.value || 'viewer').trim().toLowerCase();
 
                 if (!email || !email.includes('@')) {
@@ -39,19 +41,32 @@ class AdminAuditMixin {
                     if (roleSelect) roleSelect.value = 'admin';
                     return;
                 }
+                if (password && password.length < 8) {
+                    Toast.show('Password must be at least 8 characters.', 'warning');
+                    passwordInput?.focus();
+                    return;
+                }
 
                 btnSaveRole.disabled = true;
                 try {
-                    const { error } = await supabase.from('user_roles').upsert({
-                        email,
-                        role,
-                        updated_by: this.currentUser?.email || 'Admin',
-                        updated_at: new Date().toISOString()
-                    }, { onConflict: 'email' });
-                    if (error) throw error;
+                    if (password) {
+                        const { error } = await supabase.auth.adminCreateUser({ email, password, role });
+                        if (error) throw error;
+                        if (passwordInput) passwordInput.value = '';
+                        await this.logAudit('User Account / Password Updated', email, { target_email: email, assigned_role: role });
+                        Toast.show(`Saved ${role.toUpperCase()} role & password for ${email}`, 'success');
+                    } else {
+                        const { error } = await supabase.from('user_roles').upsert({
+                            email,
+                            role,
+                            updated_by: this.currentUser?.email || 'Admin',
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'email' });
+                        if (error) throw error;
 
-                    await this.logAudit('User Role Assigned', email, { target_email: email, assigned_role: role });
-                    Toast.show(`Assigned ${role.toUpperCase()} role to ${email}`, 'success');
+                        await this.logAudit('User Role Assigned', email, { target_email: email, assigned_role: role });
+                        Toast.show(`Assigned ${role.toUpperCase()} role to ${email}`, 'success');
+                    }
                     if (emailInput) emailInput.value = '';
                     if (this.currentUser && String(this.currentUser.email).toLowerCase() === email) {
                         this.userRole = role;
@@ -86,11 +101,11 @@ class AdminAuditMixin {
                     const inserted = data?.inserted || 0;
                     const total = data?.total || (this.allUserRoles?.length || 0);
                     Toast.show(inserted > 0
-                        ? `Synced ${inserted} new user(s) from Supabase Auth (Total: ${total}).`
+                        ? `Synced ${inserted} new user(s) from User Directory (Total: ${total}).`
                         : `All registered accounts are already in the directory (Total: ${total}).`, 'success');
                     await this.loadUsersAndRoles({ skipSync: true });
                 } catch (err) {
-                    Toast.show('Sync error: ' + err.message + ' (Run migration 2.3.1_sync_auth_users.sql in Supabase SQL editor)', 'warning');
+                    Toast.show('Sync error: ' + err.message, 'warning');
                 } finally {
                     btnSyncUsers.innerHTML = origHtml;
                     btnSyncUsers.disabled = false;
@@ -737,6 +752,9 @@ class AdminAuditMixin {
                             <button type="button" class="btn btn-outline btn-sm" data-edit-user-role="${escapeHTML(email)}" data-role="${escapeHTML(r.role)}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem;">
                                 Edit Role
                             </button>
+                            <button type="button" class="btn btn-outline btn-sm" data-reset-user-password="${escapeHTML(email)}" data-role="${escapeHTML(r.role)}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem;">
+                                Reset Password
+                            </button>
                             ${(!isPrimaryAdmin && !isSelf) ? `
                             <button type="button" class="btn btn-outline btn-sm" data-toggle-user-active="${escapeHTML(email)}" data-active="${isActive ? '1' : '0'}" style="padding: 0.2rem 0.55rem; font-size: 0.76rem; ${isActive ? 'color: var(--warning);' : 'color: var(--success);'}">
                                 ${isActive ? 'Deactivate' : 'Reactivate'}
@@ -762,6 +780,23 @@ class AdminAuditMixin {
                     emailInput.focus();
                 }
                 if (roleSelect) roleSelect.value = role;
+            });
+        });
+
+        tbody.querySelectorAll('[data-reset-user-password]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const email = btn.getAttribute('data-reset-user-password');
+                const role = btn.getAttribute('data-role') || 'viewer';
+                const emailInput = document.getElementById('role-user-email');
+                const roleSelect = document.getElementById('role-user-select');
+                const passwordInput = document.getElementById('role-user-password');
+                if (emailInput) emailInput.value = email;
+                if (roleSelect) roleSelect.value = role;
+                if (passwordInput) {
+                    passwordInput.value = '';
+                    passwordInput.focus();
+                }
+                Toast.show(`Enter a new password (8+ chars) for ${email} and click Save Role / Password`, 'info');
             });
         });
 
@@ -824,7 +859,7 @@ class AdminAuditMixin {
                 if (!email || email === 'ammahmoud@nu.edu.eg') return;
 
                 const confirmed = await window.customConfirm(
-                    `Permanently delete user "${email}"? This deletes their account from Supabase Auth and removes all access.`,
+                    `Permanently delete user "${email}"? This deletes their login account and removes all access.`,
                     'Delete User',
                     'Cancel'
                 );
