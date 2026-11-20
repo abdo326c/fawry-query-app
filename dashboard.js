@@ -1,28 +1,26 @@
 import { supabase } from './supabase.js';
-import { FawryProcessor } from './csv-processor.js';
 import {
-    validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction,
-    fetchAll, fetchByIn, recomputeTransactions, updateRuleFields, diffTransaction,
-    buildMappingLookup, normalizeItemName, originalItemName, isLockedTransaction,
-    escapeHTML, sanitizeExcelValue, sanitizeExcelRows, toDateOnly, dateToExcelSerial,
-    calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate,
-    normalizeStudentIdValue, getStudentProgramLevel, formatStudentLevelTag,
-    ensureProgramHasLevelPrefix, normalizePhoneKey, buildStudentLookupIndex,
-    matchTransactionToStudent, classifyStudentEmails, mergeStudentEmails,
-    getStudentDisplayEmails, writeCompressedExcel
+    getEffectiveIdStatus,
+    isNonInvalidTransaction,
+    fetchAll,
+    escapeHTML,
+    sanitizeExcelValue,
+    toDateOnly,
+    writeCompressedExcel
 } from './rules.js';
+import { DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING } from './foreign-transactions.js';
 import {
-    parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages,
-    matchForeignDepositsToStudents, normalizePersonName, DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING
-} from './foreign-transactions.js';
-import {
-    loadFxStore, saveFxStore, resolveUsdToEgpRate, convertUsdToEgp, syncMissingFxRates,
-    setManualFxRate, getEgyptDateTimeParts, getMsUntilNextEgyptNoon, isRateStaleForEgyptNoon
+    loadFxStore,
+    saveFxStore,
+    resolveUsdToEgpRate,
+    convertUsdToEgp,
+    syncMissingFxRates,
+    setManualFxRate,
+    getEgyptDateTimeParts,
+    getMsUntilNextEgyptNoon,
+    isRateStaleForEgyptNoon
 } from './fx-rates.js';
-import {
-    runConcurrent, loadScriptOnce, renderIcons, SUPABASE_EXEMPT_OR_FILTER,
-    formatIdStatusMeta, formatMoney, sanitizeForFilter, Toast, withDropdownTaskProgress
-} from './app-utils.js';
+import { renderIcons, SUPABASE_EXEMPT_OR_FILTER, Toast } from './app-utils.js';
 
 class DashboardMixin {
     initDashboard() {

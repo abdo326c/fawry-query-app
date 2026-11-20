@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fawry-app-cache-v61';
+const CACHE_NAME = 'fawry-app-cache-v62';
 const urlsToCache = [
   './',
   './index.html',
@@ -10,6 +10,10 @@ const urlsToCache = [
   './automatcher.worker.js',
   './erp-export.js',
   './admin-audit.js',
+  './foreign-ui.js',
+  './payment-links-ui.js',
+  './students-ui.js',
+  './mappings-fixes-ui.js',
   './ui-chrome.js?v=1.0.0',
   './rules.js',
   './csv-processor.js',

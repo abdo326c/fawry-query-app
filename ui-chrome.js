@@ -54,7 +54,7 @@
             if (localStorage.getItem('spdb-sidebar-rail') === 'collapsed' && appLayout) {
                 appLayout.classList.add('sidebar-collapsed');
             }
-        } catch (e) { /* ignore */ }
+        } catch (_e) { /* ignore */ }
 
         if (btnCollapse && appLayout && !btnCollapse.dataset.chromeBound) {
             btnCollapse.dataset.chromeBound = '1';
@@ -65,7 +65,7 @@
                         'spdb-sidebar-rail',
                         appLayout.classList.contains('sidebar-collapsed') ? 'collapsed' : 'expanded'
                     );
-                } catch (e) { /* ignore */ }
+                } catch (_e) { /* ignore */ }
             });
         }
 

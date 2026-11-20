@@ -2173,6 +2173,34 @@
                     </table>
                 </div>
 
+                <!-- Cold-Storage Transaction Archiving (Admin Only) -->
+                <div class="glass-card" id="admin-archive-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+                        <div style="max-width: 560px;">
+                            <h3 style="margin: 0 0 0.4rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <i data-lucide="archive" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                                Cold-Storage Transaction Archiving
+                            </h3>
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
+                                Safely moves <strong>settled &amp; ERP-posted</strong> transactions older than the cutoff date (minimum 90 days ago) from the active ledger into <code>transactions_archive</code> to keep queries fast.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: flex-end;">
+                            <div class="form-group" style="margin: 0; min-width: 170px;">
+                                <label for="archive-cutoff-date" style="font-size: 0.75rem;">Archive Before Date</label>
+                                <input type="date" id="archive-cutoff-date" class="input-text" style="padding: 0.42rem 0.65rem; font-size: 0.85rem;">
+                            </div>
+                            <button type="button" class="btn btn-outline" id="btn-archive-dry-run" style="padding: 0.46rem 0.95rem; font-size: 0.84rem;">
+                                <i data-lucide="search"></i> Preview Eligible Rows (Dry Run)
+                            </button>
+                            <button type="button" class="btn btn-primary" id="btn-archive-execute" disabled style="padding: 0.46rem 1rem; font-size: 0.84rem;">
+                                <i data-lucide="archive"></i> Archive to Cold Storage
+                            </button>
+                        </div>
+                    </div>
+                    <div id="archive-status-result" style="margin-top: 0.85rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
+                </div>
+
                 <!-- System Audit Log Table -->
                 <div class="table-container glass-card">
                     <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">

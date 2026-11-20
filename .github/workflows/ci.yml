@@ -26,8 +26,42 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: ESLint Code Quality Check
+        run: npm run lint
+
+      - name: React View Sync Check
+        run: npm run sync:views:check
+
       - name: TypeScript & Vite Production Build Check
         run: npm run build
 
       - name: Run Test Suite
         run: npm test
+
+  e2e:
+    name: Playwright Browser Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Production Bundle
+        run: npm run build
+
+      - name: Run Playwright Smoke Tests
+        run: npm run test:e2e

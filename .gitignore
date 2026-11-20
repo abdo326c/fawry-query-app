@@ -21,6 +21,8 @@ desktop.ini
 # Test/scratch files
 *.log
 scratch_*.js
+playwright-report/
+test-results/
 
 # Local database backups & cold storage archives
 backups/

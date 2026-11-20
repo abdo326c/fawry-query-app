@@ -33,6 +33,7 @@ vi.mock('../supabase.js', () => ({
   }
 }));
 
+import { supabase } from '../supabase.js';
 import { App } from '../src/App';
 import { mountReactApp } from '../src/main';
 import { AppProvider, useAppContext } from '../src/context/AppContext';
@@ -177,7 +178,7 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'openQuickMapForItem', 'openTransactionDetailsModal', 'loadMappings', 'renderMappingsPage',
       'deduplicateItemMappings', 'loadFixes', 'renderFixesPage', 'deduplicateManualFixes',
       // Auto-Matcher (auto-matcher.js)
-      'handleTargetedMatcherImport', 'runAutoMatcher', 'getFilteredAutoMatchProposals',
+      'handleTargetedMatcherImport', 'runAutoMatcher', 'runAutoMatcherInWorker', 'getFilteredAutoMatchProposals',
       'updateAutoMatchSelectionUI', 'renderAutoMatcherPage', 'applyAutoMatches',
       // Payment Links & Students
       'initPaymentLinks', 'openPaymentLinkModal', 'loadPaymentLinks', 'renderPaymentLinksPage',
@@ -189,7 +190,7 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'erpAmount', 'erpAccount', 'erpDayShort', 'resolveErpExportDate', 'downloadErpExport',
       'openErpDateChoiceModal', 'generateErpExcel', 'recordErpReferences',
       // Admin, Audit, Double-Payments & Hygiene (admin-audit.js)
-      'initUsersAndRoles', 'loadUsersAndRoles', 'renderUserRolesTable', 'renderAuditLogsTable',
+      'initUsersAndRoles', 'initColdStorageArchive', 'loadUsersAndRoles', 'renderUserRolesTable', 'renderAuditLogsTable',
       'revertAuditLogEntry', 'initDoublePaymentsDetector', 'loadDoublePayments',
       'renderDoublePaymentsTable', 'exportDoublePayments', 'initHygieneReportModal',
       'checkAndShowHygieneReportModal',
@@ -266,5 +267,44 @@ describe('React 19 + TypeScript Migration Architecture', () => {
 
     // Verify UX #5: Save & Next Issue button exists in Manual Fix modal
     expect(document.getElementById('btn-save-fix-next')).not.toBeNull();
+
+    // Verify Cold-Storage Archiving UI (#admin-archive-card) in Users & Roles view
+    const archiveCard = document.getElementById('admin-archive-card');
+    const cutoffInput = document.getElementById('archive-cutoff-date') as HTMLInputElement | null;
+    const btnDryRun = document.getElementById('btn-archive-dry-run') as HTMLButtonElement | null;
+    const btnExecute = document.getElementById('btn-archive-execute') as HTMLButtonElement | null;
+    const statusEl = document.getElementById('archive-status-result');
+
+    expect(archiveCard).not.toBeNull();
+    expect(cutoffInput).not.toBeNull();
+    expect(btnDryRun).not.toBeNull();
+    expect(btnExecute).not.toBeNull();
+    expect(statusEl).not.toBeNull();
+    expect(btnExecute?.disabled).toBe(true);
+
+    (app as { userRole?: string }).userRole = 'admin';
+    const rpcMock = supabase.rpc as ReturnType<typeof vi.fn>;
+    rpcMock.mockClear();
+    rpcMock.mockResolvedValueOnce({
+      data: { eligible_count: 12, eligible_amount_egp: 54000 },
+      error: null
+    });
+
+    btnDryRun?.click();
+    await vi.waitFor(() => {
+      expect(btnExecute?.disabled).toBe(false);
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith('archive_settled_transactions', {
+      p_before_date: cutoffInput?.value,
+      p_dry_run: true
+    });
+    expect(statusEl?.textContent).toContain('12');
+    expect(statusEl?.textContent).toContain('54,000');
+
+    if (cutoffInput) {
+      fireEvent.change(cutoffInput, { target: { value: '2025-01-01' } });
+    }
+    expect(btnExecute?.disabled).toBe(true);
   });
 });

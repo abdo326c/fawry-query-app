@@ -526,7 +526,7 @@ export async function runFullDatabaseBackup() {
                 })
             });
             console.log('  ✓ Logged backup event to database audit trail');
-        } catch (auditErr) {
+        } catch (_auditErr) {
             // Ignore non-fatal audit log failure
         }
 
@@ -554,7 +554,7 @@ export async function runFullDatabaseBackup() {
 - **Archive ID**: \`${uploadedArchive.id}\`
 `;
                 fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryMarkdown);
-            } catch (sumErr) {
+            } catch (_sumErr) {
                 // Ignore summary write errors
             }
         }
@@ -578,7 +578,7 @@ export async function runFullDatabaseBackup() {
             if (fs.existsSync(localBackupsDir)) {
                 fs.rmSync(localBackupsDir, { recursive: true, force: true });
             }
-        } catch (cleanupErr) {
+        } catch (_cleanupErr) {
             // Silent cleanup error
         }
     }

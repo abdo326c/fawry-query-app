@@ -1,28 +1,19 @@
 import { supabase } from './supabase.js';
-import { FawryProcessor } from './csv-processor.js';
 import {
-    validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction,
-    fetchAll, fetchByIn, recomputeTransactions, updateRuleFields, diffTransaction,
-    buildMappingLookup, normalizeItemName, originalItemName, isLockedTransaction,
-    escapeHTML, sanitizeExcelValue, sanitizeExcelRows, toDateOnly, dateToExcelSerial,
-    calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate,
-    normalizeStudentIdValue, getStudentProgramLevel, formatStudentLevelTag,
-    ensureProgramHasLevelPrefix, normalizePhoneKey, buildStudentLookupIndex,
-    matchTransactionToStudent, classifyStudentEmails, mergeStudentEmails,
-    getStudentDisplayEmails, writeCompressedExcel
+    validateID,
+    isNonInvalidTransaction,
+    fetchAll,
+    fetchByIn,
+    isLockedTransaction,
+    escapeHTML,
+    toDateOnly,
+    normalizeStudentIdValue,
+    getStudentProgramLevel,
+    normalizePhoneKey,
+    buildStudentLookupIndex,
+    matchTransactionToStudent
 } from './rules.js';
-import {
-    parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages,
-    matchForeignDepositsToStudents, normalizePersonName, DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING
-} from './foreign-transactions.js';
-import {
-    loadFxStore, saveFxStore, resolveUsdToEgpRate, convertUsdToEgp, syncMissingFxRates,
-    setManualFxRate, getEgyptDateTimeParts, getMsUntilNextEgyptNoon, isRateStaleForEgyptNoon
-} from './fx-rates.js';
-import {
-    runConcurrent, loadScriptOnce, renderIcons, SUPABASE_EXEMPT_OR_FILTER,
-    formatIdStatusMeta, formatMoney, sanitizeForFilter, Toast, withDropdownTaskProgress
-} from './app-utils.js';
+import { runConcurrent, renderIcons, Toast } from './app-utils.js';
 
 class AutoMatcherMixin {
     async handleTargetedMatcherImport(file) {
@@ -46,6 +37,63 @@ class AutoMatcherMixin {
         } catch(err) {
             status.innerText = 'Error: ' + err.message;
         }
+    }
+
+    runAutoMatcherInWorker({ transactions, students, linksMap, fixesList, enableNameMatch, sharedMobileList, onProgress }) {
+        return new Promise((resolve, reject) => {
+            if (typeof Worker === 'undefined') {
+                reject(new Error('Web Worker not supported'));
+                return;
+            }
+            if (!this._automatcherWorker) {
+                this._automatcherWorker = new Worker(new URL('./automatcher.worker.js', import.meta.url), { type: 'module' });
+                this._workerStudentsRef = null;
+                this._workerStudentsLen = -1;
+            }
+            const worker = this._automatcherWorker;
+            const shouldSendStudents = this._workerStudentsRef !== students || this._workerStudentsLen !== (students?.length || 0);
+
+            const cleanup = () => {
+                worker.removeEventListener('message', onMessage);
+                worker.removeEventListener('error', onError);
+            };
+            const onMessage = (event) => {
+                const msg = event.data || {};
+                if (msg.type === 'PROGRESS') {
+                    if (typeof onProgress === 'function') onProgress(msg.current, msg.total);
+                } else if (msg.type === 'DONE') {
+                    cleanup();
+                    this._workerStudentsRef = students;
+                    this._workerStudentsLen = students?.length || 0;
+                    resolve(msg.proposals || []);
+                } else if (msg.type === 'ERROR') {
+                    cleanup();
+                    reject(new Error(msg.message || 'Auto-Matcher worker failed'));
+                }
+            };
+            const onError = (err) => {
+                cleanup();
+                try { worker.terminate(); } catch (_e) { /* ignore */ }
+                this._automatcherWorker = null;
+                this._workerStudentsRef = null;
+                this._workerStudentsLen = -1;
+                reject(new Error(err?.message || 'Auto-Matcher worker crashed'));
+            };
+
+            worker.addEventListener('message', onMessage);
+            worker.addEventListener('error', onError);
+            worker.postMessage({
+                type: 'RUN_AUTOMATCH',
+                payload: {
+                    transactions,
+                    students: shouldSendStudents ? students : null,
+                    linksMap,
+                    fixesList,
+                    enableNameMatch: Boolean(enableNameMatch),
+                    sharedMobileList
+                }
+            });
+        });
     }
 
     async runAutoMatcher() {
@@ -158,64 +206,89 @@ class AutoMatcherMixin {
                 if (sigSet.size >= 3) sharedMobileSet.add(pk);
             }
 
-            if (
-                !this._studentLookupIndexCache ||
-                this._studentLookupIndexSource !== students ||
-                this._studentLookupIndexLen !== students.length
-            ) {
-                this._studentLookupIndexCache = buildStudentLookupIndex(students);
-                this._studentLookupIndexSource = students;
-                this._studentLookupIndexLen = students.length;
-            }
-            const studentLookupIndex = this._studentLookupIndexCache;
-
             this.automatchProposals = [];
 
-            let loopCount = 0;
-            let lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
-            for (const tx of filteredTx) {
-                loopCount++;
-                if ((loopCount & 63) === 0) {
-                    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-                    if (now - lastYield > 50) {
-                        btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
-                        await new Promise(r => setTimeout(r, 0));
-                        lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            let workerUsed = false;
+            if (typeof Worker !== 'undefined' && filteredTx.length >= 250) {
+                try {
+                    const workerProposals = await this.runAutoMatcherInWorker({
+                        transactions: filteredTx,
+                        students,
+                        linksMap,
+                        fixesList: this.allFixesData || [],
+                        enableNameMatch: Boolean(enableNameMatch),
+                        sharedMobileList: [...sharedMobileSet],
+                        onProgress: (current, total) => {
+                            btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${current}/${total}`;
+                        }
+                    });
+                    if (Array.isArray(workerProposals)) {
+                        this.automatchProposals = workerProposals;
+                        workerUsed = true;
                     }
+                } catch (workerErr) {
+                    console.warn('Auto-Matcher worker fallback to main thread:', workerErr?.message || workerErr);
                 }
+            }
 
-                const link = linksMap[tx.reference_number];
-                const existingFix = fixesMap.get(String(tx.reference_number || '').trim()) || null;
-                const rawTxSid = tx.student_id ? String(tx.student_id).trim() : '';
+            if (!workerUsed) {
+                if (
+                    !this._studentLookupIndexCache ||
+                    this._studentLookupIndexSource !== students ||
+                    this._studentLookupIndexLen !== students.length
+                ) {
+                    this._studentLookupIndexCache = buildStudentLookupIndex(students);
+                    this._studentLookupIndexSource = students;
+                    this._studentLookupIndexLen = students.length;
+                }
+                const studentLookupIndex = this._studentLookupIndexCache;
 
-                const { proposedStudent, matchReason, confidenceTier } = matchTransactionToStudent(tx, {
-                    index: studentLookupIndex,
-                    link,
-                    existingFix,
-                    enableNameMatch: Boolean(enableNameMatch),
-                    sharedMobileSet
-                });
+                let loopCount = 0;
+                let lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                for (const tx of filteredTx) {
+                    loopCount++;
+                    if ((loopCount & 63) === 0) {
+                        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                        if (now - lastYield > 50) {
+                            btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
+                            await new Promise(r => setTimeout(r, 0));
+                            lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                        }
+                    }
 
-                // Track for export & display
-                const proposalTx = {
-                    tx_id: tx.id,
-                    proposedStudent: proposedStudent,
-                    matchReason: matchReason,
-                    confidenceTier: proposedStudent ? confidenceTier : 'unmatched',
-                    original_ref: tx.reference_number,
-                    original_date: toDateOnly(tx.payment_date),
-                    original_student_id: rawTxSid,
-                    original_bank: tx.bank,
-                    original_mapping: tx.mapping,
-                    original_second_mapping: tx.second_mapping,
-                    original_item: tx.item_name,
-                    original_amount: tx.item_price,
-                    original_status: tx.id_status,
-                    locked: isLockedTransaction(tx),
-                    selected: false
-                };
+                    const link = linksMap[tx.reference_number];
+                    const existingFix = fixesMap.get(String(tx.reference_number || '').trim()) || null;
+                    const rawTxSid = tx.student_id ? String(tx.student_id).trim() : '';
 
-                this.automatchProposals.push(proposalTx);
+                    const { proposedStudent, matchReason, confidenceTier } = matchTransactionToStudent(tx, {
+                        index: studentLookupIndex,
+                        link,
+                        existingFix,
+                        enableNameMatch: Boolean(enableNameMatch),
+                        sharedMobileSet
+                    });
+
+                    // Track for export & display
+                    const proposalTx = {
+                        tx_id: tx.id,
+                        proposedStudent: proposedStudent,
+                        matchReason: matchReason,
+                        confidenceTier: proposedStudent ? confidenceTier : 'unmatched',
+                        original_ref: tx.reference_number,
+                        original_date: toDateOnly(tx.payment_date),
+                        original_student_id: rawTxSid,
+                        original_bank: tx.bank,
+                        original_mapping: tx.mapping,
+                        original_second_mapping: tx.second_mapping,
+                        original_item: tx.item_name,
+                        original_amount: tx.item_price,
+                        original_status: tx.id_status,
+                        locked: isLockedTransaction(tx),
+                        selected: false
+                    };
+
+                    this.automatchProposals.push(proposalTx);
+                }
             }
 
             // Second-pass sibling propagation: if one line item of a multi-item reference matched,

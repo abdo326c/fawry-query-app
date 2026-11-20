@@ -1,28 +1,12 @@
 import { supabase } from './supabase.js';
-import { FawryProcessor } from './csv-processor.js';
 import {
-    validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction,
-    fetchAll, fetchByIn, recomputeTransactions, updateRuleFields, diffTransaction,
-    buildMappingLookup, normalizeItemName, originalItemName, isLockedTransaction,
-    escapeHTML, sanitizeExcelValue, sanitizeExcelRows, toDateOnly, dateToExcelSerial,
-    calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate,
-    normalizeStudentIdValue, getStudentProgramLevel, formatStudentLevelTag,
-    ensureProgramHasLevelPrefix, normalizePhoneKey, buildStudentLookupIndex,
-    matchTransactionToStudent, classifyStudentEmails, mergeStudentEmails,
-    getStudentDisplayEmails, writeCompressedExcel
+    fetchAll,
+    escapeHTML,
+    sanitizeExcelRows,
+    toDateOnly,
+    writeCompressedExcel
 } from './rules.js';
-import {
-    parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages,
-    matchForeignDepositsToStudents, normalizePersonName, DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING
-} from './foreign-transactions.js';
-import {
-    loadFxStore, saveFxStore, resolveUsdToEgpRate, convertUsdToEgp, syncMissingFxRates,
-    setManualFxRate, getEgyptDateTimeParts, getMsUntilNextEgyptNoon, isRateStaleForEgyptNoon
-} from './fx-rates.js';
-import {
-    runConcurrent, loadScriptOnce, renderIcons, SUPABASE_EXEMPT_OR_FILTER,
-    formatIdStatusMeta, formatMoney, sanitizeForFilter, Toast, withDropdownTaskProgress
-} from './app-utils.js';
+import { renderIcons, formatMoney, Toast } from './app-utils.js';
 
 class AdminAuditMixin {
     initUsersAndRoles() {
@@ -111,6 +95,117 @@ class AdminAuditMixin {
         if (searchAudit) {
             searchAudit.addEventListener('input', () => this.renderAuditLogsTable());
         }
+
+        this.initColdStorageArchive();
+    }
+
+    initColdStorageArchive() {
+        const cutoffInput = document.getElementById('archive-cutoff-date');
+        const btnDryRun = document.getElementById('btn-archive-dry-run');
+        const btnExecute = document.getElementById('btn-archive-execute');
+        const statusEl = document.getElementById('archive-status-result');
+        if (!cutoffInput || !btnDryRun || !btnExecute) return;
+
+        if (!cutoffInput.value) {
+            const d = new Date();
+            d.setFullYear(d.getFullYear() - 1);
+            cutoffInput.value = toDateOnly(d);
+        }
+
+        this._lastArchivePreview = null;
+        btnExecute.disabled = true;
+
+        cutoffInput.addEventListener('change', () => {
+            this._lastArchivePreview = null;
+            btnExecute.disabled = true;
+            if (statusEl) statusEl.innerHTML = '';
+        });
+
+        btnDryRun.addEventListener('click', async () => {
+            if (!this.requireRole('admin', 'preview transaction archiving')) return;
+            const cutoff = String(cutoffInput.value || '').trim();
+            if (!cutoff) {
+                Toast.show('Select a cutoff date first.', 'warning');
+                return;
+            }
+            const origHtml = btnDryRun.innerHTML;
+            btnDryRun.disabled = true;
+            btnDryRun.innerHTML = '<i data-lucide="loader" class="spin"></i> Scanning...';
+            renderIcons(btnDryRun);
+            try {
+                const { data, error } = await supabase.rpc('archive_settled_transactions', {
+                    p_before_date: cutoff,
+                    p_dry_run: true
+                });
+                if (error) throw error;
+                const count = Number(data?.eligible_count || 0);
+                const amount = Number(data?.eligible_amount_egp || 0);
+                this._lastArchivePreview = { cutoff, count, amount };
+                btnExecute.disabled = count <= 0;
+                if (statusEl) {
+                    statusEl.innerHTML = count > 0
+                        ? `<span style="color: var(--warning); font-weight: 600;">Dry-run preview:</span> <strong>${count.toLocaleString()}</strong> settled &amp; ERP-posted transaction(s) before <code>${escapeHTML(cutoff)}</code> totaling <strong>EGP ${formatMoney(amount)}</strong> are eligible for cold-storage archiving.`
+                        : `<span style="color: var(--text-muted);">Dry-run preview: No settled &amp; ERP-posted transactions found before <code>${escapeHTML(cutoff)}</code>.</span>`;
+                }
+            } catch (err) {
+                this._lastArchivePreview = null;
+                btnExecute.disabled = true;
+                if (statusEl) {
+                    statusEl.innerHTML = `<span style="color: var(--danger);">${escapeHTML(err.message)}</span>`;
+                }
+                Toast.show('Archive preview failed: ' + err.message, 'error');
+            } finally {
+                btnDryRun.innerHTML = origHtml;
+                btnDryRun.disabled = false;
+                renderIcons(btnDryRun);
+            }
+        });
+
+        btnExecute.addEventListener('click', async () => {
+            if (!this.requireRole('admin', 'archive transactions to cold storage')) return;
+            const cutoff = String(cutoffInput.value || '').trim();
+            const preview = this._lastArchivePreview;
+            if (!cutoff || !preview || preview.cutoff !== cutoff || preview.count <= 0) {
+                Toast.show('Run a fresh Dry-Run Preview for this cutoff date first.', 'warning');
+                btnExecute.disabled = true;
+                return;
+            }
+            const ok = await window.customConfirm(
+                `Move ${preview.count.toLocaleString()} settled & ERP-posted transaction(s) before ${cutoff} (EGP ${formatMoney(preview.amount)}) to cold storage (transactions_archive)?`,
+                'Archive Transactions',
+                'Cancel'
+            );
+            if (!ok) return;
+
+            const origHtml = btnExecute.innerHTML;
+            btnExecute.disabled = true;
+            btnDryRun.disabled = true;
+            btnExecute.innerHTML = '<i data-lucide="loader" class="spin"></i> Archiving...';
+            renderIcons(btnExecute);
+            try {
+                const { data, error } = await supabase.rpc('archive_settled_transactions', {
+                    p_before_date: cutoff,
+                    p_dry_run: false
+                });
+                if (error) throw error;
+                const archivedCount = Number(data?.archived_count ?? preview.count);
+                const archivedAmt = Number(data?.archived_amount_egp ?? preview.amount);
+                Toast.show(`Archived ${archivedCount.toLocaleString()} transaction(s) to cold storage.`, 'success');
+                if (statusEl) {
+                    statusEl.innerHTML = `<span style="color: var(--success); font-weight: 600;">✓ Archived ${archivedCount.toLocaleString()} transaction(s)</span> before <code>${escapeHTML(cutoff)}</code> (<strong>EGP ${formatMoney(archivedAmt)}</strong>) into <code>transactions_archive</code>.`;
+                }
+                this._lastArchivePreview = null;
+                this.invalidateTabs('dashboard', 'transactions', 'users');
+                await this.loadUsersAndRoles({ skipSync: true });
+            } catch (err) {
+                Toast.show('Cold-storage archive failed: ' + err.message, 'error');
+                btnExecute.disabled = false;
+            } finally {
+                btnExecute.innerHTML = origHtml;
+                btnDryRun.disabled = false;
+                renderIcons(btnExecute);
+            }
+        });
     }
 
     async loadUsersAndRoles({ skipSync = false } = {}) {
@@ -124,7 +219,7 @@ class AdminAuditMixin {
             try {
                 await supabase.rpc('sync_auth_users');
                 this._authUsersSynced = true;
-            } catch (e) {
+            } catch (_e) {
                 // Ignore if migration 2.3.1 not yet run in Supabase
             }
         }
@@ -840,7 +935,7 @@ class AdminAuditMixin {
                         if (parsedUrl.protocol === 'https:' && (parsedUrl.hostname === 'drive.google.com' || parsedUrl.hostname === 'docs.google.com')) {
                             safeDriveUrl = parsedUrl.href;
                         }
-                    } catch (e) {
+                    } catch (_e) {
                         // Fall back to default URL
                     }
                 }

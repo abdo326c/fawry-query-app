@@ -75,6 +75,7 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
     console.log(`  • Settled Transactions:         ${(data.settled_transactions || 0).toLocaleString()}`);
     console.log(`  • Identical Duplicate Tx:        ${data.identical_tx_duplicates || 0}`);
     console.log(`  • Duplicate Mapping Rules:       ${data.duplicate_mappings || 0} (Cleaned: ${data.cleaned_mappings || 0})`);
+    console.log(`  • Conflicting Case Mappings:     ${data.conflicting_case_mappings || 0} (Manual review)`);
     console.log(`  • Duplicate Manual Fixes:        ${data.duplicate_fixes || 0} (Cleaned: ${data.cleaned_fixes || 0})`);
     console.log(`  • Transactions Missing Mapping:  ${data.unmapped_items || 0}`);
     console.log(`  • Missing / Invalid Student IDs: ${data.invalid_ids || 0}`);
@@ -144,14 +145,15 @@ ${driveReportUrl ? `- **Drive Report**: [Open in Google Drive](${driveReportUrl}
 | :--- | :--- | :--- |
 | **Total Transactions** | ${(data.total_transactions || 0).toLocaleString()} | — |
 | **Settled Transactions** | ${(data.settled_transactions || 0).toLocaleString()} | — |
-| **Identical Duplicate Transactions** | ${data.identical_tx_duplicates || 0} | ${data.identical_tx_duplicates || 0} |
+| **Identical Duplicate Transactions** | ${data.identical_tx_duplicates || 0} | — |
 | **Duplicate Mapping Rules** | ${data.duplicate_mappings || 0} | ${data.cleaned_mappings || 0} |
+| **Conflicting Case Mappings** | ${data.conflicting_case_mappings || 0} | Manual review |
 | **Duplicate Manual Fixes** | ${data.duplicate_fixes || 0} | ${data.cleaned_fixes || 0} |
 | **Transactions Missing Mapping** | ${data.unmapped_items || 0} | — |
 | **Invalid / Unmatched Student IDs** | ${data.invalid_ids || 0} | — |
 `;
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryMd);
-        } catch (sumErr) {
+        } catch (_sumErr) {
             // Ignore step summary error
         }
     }

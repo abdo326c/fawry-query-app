@@ -34,6 +34,8 @@ export function mountReactApp(container?: HTMLElement | null): Root | null {
       mountedRoot!.render(<App />);
     });
     if (typeof window !== 'undefined') {
+      const layout = document.querySelector('.app-layout') as HTMLElement | null;
+      if (layout) layout.dataset.appInitialized = '1';
       window.app = new (FawryApp as unknown as new () => FawryAppController)();
       (window as unknown as { initUiChrome?: () => void }).initUiChrome?.();
       window.lucide?.createIcons();

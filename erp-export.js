@@ -1,28 +1,19 @@
 import { supabase } from './supabase.js';
-import { FawryProcessor } from './csv-processor.js';
 import {
-    validateID, isIdValidationExempt, getEffectiveIdStatus, isNonInvalidTransaction,
-    fetchAll, fetchByIn, recomputeTransactions, updateRuleFields, diffTransaction,
-    buildMappingLookup, normalizeItemName, originalItemName, isLockedTransaction,
-    escapeHTML, sanitizeExcelValue, sanitizeExcelRows, toDateOnly, dateToExcelSerial,
-    calculateSettlementDate, isSameDaySettlementBank, resolveErpJournalDate,
-    normalizeStudentIdValue, getStudentProgramLevel, formatStudentLevelTag,
-    ensureProgramHasLevelPrefix, normalizePhoneKey, buildStudentLookupIndex,
-    matchTransactionToStudent, classifyStudentEmails, mergeStudentEmails,
-    getStudentDisplayEmails, writeCompressedExcel
+    getEffectiveIdStatus,
+    isNonInvalidTransaction,
+    fetchAll,
+    escapeHTML,
+    sanitizeExcelValue,
+    toDateOnly,
+    dateToExcelSerial,
+    calculateSettlementDate,
+    isSameDaySettlementBank,
+    resolveErpJournalDate,
+    writeCompressedExcel
 } from './rules.js';
-import {
-    parseBankStatementGrid, parseBanqueMisrPdfText, reconstructBanqueMisrPdfLinesFromPages,
-    matchForeignDepositsToStudents, normalizePersonName, DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING
-} from './foreign-transactions.js';
-import {
-    loadFxStore, saveFxStore, resolveUsdToEgpRate, convertUsdToEgp, syncMissingFxRates,
-    setManualFxRate, getEgyptDateTimeParts, getMsUntilNextEgyptNoon, isRateStaleForEgyptNoon
-} from './fx-rates.js';
-import {
-    runConcurrent, loadScriptOnce, renderIcons, SUPABASE_EXEMPT_OR_FILTER,
-    formatIdStatusMeta, formatMoney, sanitizeForFilter, Toast, withDropdownTaskProgress
-} from './app-utils.js';
+import { DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING } from './foreign-transactions.js';
+import { renderIcons, formatMoney, Toast } from './app-utils.js';
 
 class ErpExportMixin {
     initErpExport() {
@@ -132,7 +123,7 @@ class ErpExportMixin {
         
         // Item / Mapping only narrow the already-loaded rows – no new request
         if (itemNameFilter && window.TomSelect) {
-            this.erpItemNameSelect = new TomSelect(itemNameFilter, {
+            this.erpItemNameSelect = itemNameFilter.tomselect || new TomSelect(itemNameFilter, {
                 plugins: ['remove_button'],
                 placeholder: "All Items",
                 onChange: () => this.loadErpExport({ refresh: false })
@@ -142,7 +133,7 @@ class ErpExportMixin {
         }
 
         if (mappingFilter && window.TomSelect) {
-            this.erpMappingSelect = new TomSelect(mappingFilter, {
+            this.erpMappingSelect = mappingFilter.tomselect || new TomSelect(mappingFilter, {
                 plugins: ['remove_button'],
                 placeholder: "All Mappings",
                 onChange: () => this.loadErpExport({ refresh: false })

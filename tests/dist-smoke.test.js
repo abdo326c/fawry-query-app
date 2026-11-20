@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { computeFileSha256 } from '../scripts/backup_to_drive.js';
+import { syncOrCheckReactViews } from '../scripts/sync_react_views.mjs';
 
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
@@ -42,8 +43,17 @@ describe('Production dist/ Bundle, Governance & Disaster Recovery Smoke Tests', 
       expect(fs.existsSync(path.join(distDir, rel)), `Missing SW asset in dist/: ${rel}`).toBe(true);
     }
 
-    // Critical runtime assets
-    for (const critical of ['settlement.js', 'ui-chrome.js', 'automatcher.worker.js', 'manifest.json']) {
+    // Critical runtime assets & extracted domain modules
+    for (const critical of [
+      'settlement.js',
+      'ui-chrome.js',
+      'automatcher.worker.js',
+      'foreign-ui.js',
+      'payment-links-ui.js',
+      'students-ui.js',
+      'mappings-fixes-ui.js',
+      'manifest.json'
+    ]) {
       expect(fs.existsSync(path.join(distDir, critical)), `Missing critical dist/${critical}`).toBe(true);
     }
     const manifestJson = JSON.parse(fs.readFileSync(path.join(distDir, 'manifest.json'), 'utf8'));
@@ -76,5 +86,19 @@ describe('Production dist/ Bundle, Governance & Disaster Recovery Smoke Tests', 
     expect(schemaSql).toContain('is_primary_admin BOOLEAN NOT NULL DEFAULT FALSE');
     expect(schemaSql).toContain('CREATE TABLE IF NOT EXISTS public.transactions_archive');
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.archive_settled_transactions');
+  });
+
+  test('src/components React views and modals stay 100% synced with index.html', () => {
+    const { drifted, total } = syncOrCheckReactViews({ checkOnly: true });
+    expect(total).toBe(15);
+    expect(drifted).toEqual([]);
+  });
+
+  test('scripts/database_hygiene.js accurately reports conflicting_case_mappings and leaves identical duplicates uncleaned', () => {
+    const hygieneSrc = fs.readFileSync(path.join(rootDir, 'scripts/database_hygiene.js'), 'utf8');
+    expect(hygieneSrc).toContain('Conflicting Case Mappings');
+    expect(hygieneSrc).toContain('data.conflicting_case_mappings');
+    expect(hygieneSrc).toContain('| **Identical Duplicate Transactions** | ${data.identical_tx_duplicates || 0} | — |');
+    expect(hygieneSrc).toContain('| **Conflicting Case Mappings** | ${data.conflicting_case_mappings || 0} | Manual review |');
   });
 });

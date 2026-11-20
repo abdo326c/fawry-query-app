@@ -14,6 +14,7 @@ function copyRootStaticAssetsPlugin() {
       const entries = fs.readdirSync(rootDir, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isFile()) continue;
+        if (entry.name === 'eslint.config.js' || entry.name === 'playwright.config.ts' || entry.name === 'vite.config.ts') continue;
         if (/\.(?:js|css|png|svg|ico)$/i.test(entry.name) || entry.name === 'manifest.json') {
           fs.copyFileSync(
             path.join(rootDir, entry.name),
@@ -27,6 +28,12 @@ function copyRootStaticAssetsPlugin() {
 
 export default defineConfig({
   plugins: [react(), copyRootStaticAssetsPlugin()],
+  worker: {
+    format: 'es',
+    rollupOptions: {
+      external: [/^https?:\/\//]
+    }
+  },
   build: {
     outDir: 'dist',
     target: 'es2022',
@@ -59,11 +66,24 @@ export default defineConfig({
           if (id.endsWith('/settlement.js') || id.endsWith('\\settlement.js')) {
             return 'feature-settlement';
           }
+          if (id.endsWith('/foreign-ui.js') || id.endsWith('\\foreign-ui.js')) {
+            return 'feature-foreign';
+          }
+          if (id.endsWith('/students-ui.js') || id.endsWith('\\students-ui.js')) {
+            return 'feature-students';
+          }
+          if (id.endsWith('/mappings-fixes-ui.js') || id.endsWith('\\mappings-fixes-ui.js')) {
+            return 'feature-mappings-fixes';
+          }
+          if (id.endsWith('/payment-links-ui.js') || id.endsWith('\\payment-links-ui.js')) {
+            return 'feature-payment-links';
+          }
         }
       }
     }
   },
   test: {
-    environment: 'jsdom'
+    environment: 'jsdom',
+    exclude: ['e2e/**', '**/node_modules/**']
   }
 });
