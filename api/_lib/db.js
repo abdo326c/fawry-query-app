@@ -28,6 +28,43 @@ export function setDbClient(client) {
   cachedClient = client;
 }
 
+const RETRYABLE_DB_RE = /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked|econnreset|etimedout|fetch failed|connect timeout|UND_ERR_CONNECT_TIMEOUT/i;
+
+/**
+ * Returns true if an error is a transient SQLite lock or network/transport hiccup.
+ */
+export function isRetryableDbError(err) {
+  if (!err) return false;
+  const hay = [
+    err.code,
+    err.message,
+    err.cause?.code,
+    err.cause?.message
+  ].filter(Boolean).join(' ');
+  return RETRYABLE_DB_RE.test(hay);
+}
+
+/**
+ * Executes a DB operation with jittered exponential backoff for SQLITE_BUSY / transient errors.
+ */
+export async function withDbRetry(fn, { attempts = 5, baseDelayMs = 60 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableDbError(err) || i === attempts - 1) {
+        throw err;
+      }
+      const jitter = Math.floor(Math.random() * 40);
+      const delay = baseDelayMs * (2 ** i) + jitter;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Reads and parses a JSON request body safely in Vercel Node.js functions.
  */

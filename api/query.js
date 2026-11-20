@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb, readJsonBody, sendJson } from './_lib/db.js';
+import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
 import { clearRoleCache, getAuthUser } from './_lib/auth.js';
 import {
   assertPeriodsUnlocked,
@@ -329,7 +329,7 @@ export default async function handler(req, res) {
       if (body.head === true) {
         let totalCount = null;
         if (body.count === 'exact') {
-          const countRes = await db.execute({ sql: countSql, args: allArgs });
+          const countRes = await withDbRetry(() => db.execute({ sql: countSql, args: allArgs }));
           totalCount = Number(countRes.rows[0]?.cnt || 0);
         }
         return sendJson(res, 200, { data: null, count: totalCount });
@@ -350,14 +350,14 @@ export default async function handler(req, res) {
       let result;
 
       if (body.count === 'exact') {
-        const [countRes, selectRes] = await db.batch([
+        const [countRes, selectRes] = await withDbRetry(() => db.batch([
           { sql: countSql, args: allArgs },
           { sql: selectSql, args: allArgs }
-        ], 'read');
+        ], 'read'));
         totalCount = Number(countRes.rows[0]?.cnt || 0);
         result = selectRes;
       } else {
-        result = await db.execute({ sql: selectSql, args: allArgs });
+        result = await withDbRetry(() => db.execute({ sql: selectSql, args: allArgs }));
       }
       const rows = result.rows.map(r => normalizeRow(table, r));
 
@@ -426,58 +426,60 @@ export default async function handler(req, res) {
         assertValidColumn(table, c);
       }
 
-      const tx = await db.transaction('write');
-      try {
-        for (const row of processedRows) {
-          const cols = Object.keys(row).filter(c => allowedCols.has(c) && row[c] !== undefined);
-          if (cols.length === 0) continue;
+      const writeStmts = [];
+      const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
 
-          const colList = cols.map(quoteIdent).join(', ');
-          const placeholders = cols.map(() => '?').join(', ');
-          const args = cols.map(c => serializeValue(table, c, row[c]));
+      for (const row of processedRows) {
+        const cols = Object.keys(row).filter(c => allowedCols.has(c) && row[c] !== undefined);
+        if (cols.length === 0) continue;
 
-          let conflictClause = '';
-          if (operation === 'upsert' && onConflictCols.length > 0) {
-            const conflictTarget = onConflictCols.map(quoteIdent).join(', ');
-            if (body.ignoreDuplicates) {
-              conflictClause = `ON CONFLICT(${conflictTarget}) DO NOTHING`;
+        const colList = cols.map(quoteIdent).join(', ');
+        const placeholders = cols.map(() => '?').join(', ');
+        const args = cols.map(c => serializeValue(table, c, row[c]));
+
+        let conflictClause = '';
+        if (operation === 'upsert' && onConflictCols.length > 0) {
+          const conflictTarget = onConflictCols.map(quoteIdent).join(', ');
+          if (body.ignoreDuplicates) {
+            conflictClause = `ON CONFLICT(${conflictTarget}) DO NOTHING`;
+          } else {
+            const updateCols = cols.filter(c => !onConflictCols.includes(c));
+            if (updateCols.length > 0) {
+              const updates = updateCols.map(c => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`).join(', ');
+              conflictClause = `ON CONFLICT(${conflictTarget}) DO UPDATE SET ${updates}`;
             } else {
-              const updateCols = cols.filter(c => !onConflictCols.includes(c));
-              if (updateCols.length > 0) {
-                const updates = updateCols.map(c => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`).join(', ');
-                conflictClause = `ON CONFLICT(${conflictTarget}) DO UPDATE SET ${updates}`;
-              } else {
-                conflictClause = `ON CONFLICT(${conflictTarget}) DO NOTHING`;
-              }
+              conflictClause = `ON CONFLICT(${conflictTarget}) DO NOTHING`;
             }
-          }
-
-          const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
-          const sql = `INSERT INTO ${quoteIdent(table)} (${colList}) VALUES (${placeholders}) ${conflictClause} ${returningClause}`;
-          const resExec = await tx.execute({ sql, args });
-          if (body.returning && resExec.rows.length > 0) {
-            insertedRows.push(...resExec.rows.map(r => normalizeRow(table, r)));
           }
         }
 
-        if (table === 'student_master') {
-          for (const row of processedRows) {
-            if (!row.student_id) continue;
-            const sid = String(row.student_id).trim();
-            let lvl = classifyProgramStudentLevel(row.program);
-            if (!lvl) {
-              if (/^9\d{6}$/.test(sid)) lvl = 'PG';
-              else if (/^\d{9}$/.test(sid)) lvl = 'UG';
-            }
-            await tx.execute({ sql: 'UPDATE transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
-            await tx.execute({ sql: 'UPDATE foreign_transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
+        const sql = `INSERT INTO ${quoteIdent(table)} (${colList}) VALUES (${placeholders}) ${conflictClause} ${returningClause}`;
+        writeStmts.push({ stmt: { sql, args }, collectReturn: Boolean(body.returning) });
+      }
+
+      if (table === 'student_master') {
+        for (const row of processedRows) {
+          if (!row.student_id) continue;
+          const sid = String(row.student_id).trim();
+          let lvl = classifyProgramStudentLevel(row.program);
+          if (!lvl) {
+            if (/^9\d{6}$/.test(sid)) lvl = 'PG';
+            else if (/^\d{9}$/.test(sid)) lvl = 'UG';
+          }
+          writeStmts.push({ stmt: { sql: 'UPDATE transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] }, collectReturn: false });
+          writeStmts.push({ stmt: { sql: 'UPDATE foreign_transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] }, collectReturn: false });
+        }
+      }
+
+      const BATCH_SIZE = 200;
+      for (let i = 0; i < writeStmts.length; i += BATCH_SIZE) {
+        const chunk = writeStmts.slice(i, i + BATCH_SIZE);
+        const results = await withDbRetry(() => db.batch(chunk.map(item => item.stmt), 'write'));
+        for (let j = 0; j < chunk.length; j++) {
+          if (chunk[j].collectReturn && results[j]?.rows?.length > 0) {
+            insertedRows.push(...results[j].rows.map(r => normalizeRow(table, r)));
           }
         }
-
-        await tx.commit();
-      } catch (err) {
-        await tx.rollback();
-        throw err;
       }
 
       if (table === 'user_roles') {
@@ -524,7 +526,7 @@ export default async function handler(req, res) {
       const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
 
       const sql = `UPDATE ${quoteIdent(table)} SET ${setSql} ${whereSql} ${returningClause}`;
-      const result = await db.execute({ sql, args: [...setArgs, ...whereArgs] });
+      const result = await withDbRetry(() => db.execute({ sql, args: [...setArgs, ...whereArgs] }));
       const rows = result.rows ? result.rows.map(r => normalizeRow(table, r)) : [];
 
       if (table === 'user_roles') {
@@ -532,10 +534,11 @@ export default async function handler(req, res) {
       }
 
       if (table === 'student_master' && updates.program !== undefined) {
-        const affected = await db.execute({
+        const affected = await withDbRetry(() => db.execute({
           sql: `SELECT student_id, program FROM student_master ${whereSql}`,
           args: whereArgs
-        });
+        }));
+        const propStmts = [];
         for (const st of affected.rows) {
           const sid = String(st.student_id || '').trim();
           if (!sid) continue;
@@ -544,8 +547,12 @@ export default async function handler(req, res) {
             if (/^9\d{6}$/.test(sid)) lvl = 'PG';
             else if (/^\d{9}$/.test(sid)) lvl = 'UG';
           }
-          await db.execute({ sql: 'UPDATE transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
-          await db.execute({ sql: 'UPDATE foreign_transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
+          propStmts.push({ sql: 'UPDATE transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
+          propStmts.push({ sql: 'UPDATE foreign_transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
+        }
+        for (let i = 0; i < propStmts.length; i += 200) {
+          const slice = propStmts.slice(i, i + 200);
+          await withDbRetry(() => db.batch(slice, 'write'));
         }
       }
 
@@ -565,7 +572,7 @@ export default async function handler(req, res) {
 
       const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
       const sql = `DELETE FROM ${quoteIdent(table)} ${whereSql} ${returningClause}`;
-      const result = await db.execute({ sql, args: whereArgs });
+      const result = await withDbRetry(() => db.execute({ sql, args: whereArgs }));
       const rows = result.rows ? result.rows.map(r => normalizeRow(table, r)) : [];
 
       if (table === 'user_roles') {

@@ -1,4 +1,4 @@
-import { getDb, readJsonBody, sendJson } from './_lib/db.js';
+import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
 import { clearRoleCache, getAuthUser } from './_lib/auth.js';
 import { hasMinRole, resolveStudentLevelsBatch, roleLevel } from './_lib/rbac.js';
 
@@ -43,10 +43,10 @@ function parseDetailsJson(raw) {
 }
 
 async function executeHygieneRollback(db, user, auditId) {
-  const logRes = await db.execute({
+  const logRes = await withDbRetry(() => db.execute({
     sql: 'SELECT id, action, details FROM audit_logs WHERE id = ? LIMIT 1',
     args: [auditId]
-  });
+  }));
   if (!logRes.rows.length) {
     const err = new Error(`Audit log record ${auditId} not found`);
     err.status = 404;
@@ -65,53 +65,48 @@ async function executeHygieneRollback(db, user, auditId) {
     return { success: false, message: 'No snapshot found for this audit run.' };
   }
 
-  let restoredM = 0;
-  let restoredF = 0;
-  const tx = await db.transaction('write');
-  try {
-    for (const m of (snapshot.deleted_mappings || [])) {
-      await tx.execute({
-        sql: `INSERT OR IGNORE INTO item_mappings (item_name, adjusted_item_name, mapping, second_mapping)
-              VALUES (?, ?, ?, ?)`,
-        args: [m.item_name ?? null, m.adjusted_item_name ?? null, m.mapping ?? null, m.second_mapping ?? null]
-      });
-      restoredM++;
-    }
+  const deletedMappings = snapshot.deleted_mappings || [];
+  const deletedFixes = snapshot.deleted_fixes || [];
+  const restoredM = deletedMappings.length;
+  const restoredF = deletedFixes.length;
 
-    for (const f of (snapshot.deleted_fixes || [])) {
-      await tx.execute({
-        sql: `INSERT OR IGNORE INTO manual_fixes (reference_number, correct_id, item_name, mapping, second_mapping)
-              VALUES (?, ?, ?, ?, ?)`,
-        args: [f.reference_number ?? null, f.correct_id ?? null, f.item_name ?? null, f.mapping ?? null, f.second_mapping ?? null]
-      });
-      restoredF++;
-    }
-
-    const updatedDetails = { ...details, is_reverted: true };
-    await tx.execute({
-      sql: 'UPDATE audit_logs SET details = ? WHERE id = ?',
-      args: [JSON.stringify(updatedDetails), auditId]
+  const stmts = [];
+  for (const m of deletedMappings) {
+    stmts.push({
+      sql: `INSERT OR IGNORE INTO item_mappings (item_name, adjusted_item_name, mapping, second_mapping)
+            VALUES (?, ?, ?, ?)`,
+      args: [m.item_name ?? null, m.adjusted_item_name ?? null, m.mapping ?? null, m.second_mapping ?? null]
     });
-
-    await tx.execute({
-      sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
-      args: [
-        user.email,
-        'Database Hygiene Rollback',
-        `Audit #${auditId}`,
-        JSON.stringify({
-          target_audit_id: auditId,
-          restored_mappings: restoredM,
-          restored_fixes: restoredF,
-          reverted_at: new Date().toISOString()
-        })
-      ]
-    });
-    await tx.commit();
-  } catch (err) {
-    await tx.rollback();
-    throw err;
   }
+  for (const f of deletedFixes) {
+    stmts.push({
+      sql: `INSERT OR IGNORE INTO manual_fixes (reference_number, correct_id, item_name, mapping, second_mapping)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [f.reference_number ?? null, f.correct_id ?? null, f.item_name ?? null, f.mapping ?? null, f.second_mapping ?? null]
+    });
+  }
+
+  const updatedDetails = { ...details, is_reverted: true };
+  stmts.push({
+    sql: 'UPDATE audit_logs SET details = ? WHERE id = ?',
+    args: [JSON.stringify(updatedDetails), auditId]
+  });
+  stmts.push({
+    sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
+    args: [
+      user.email,
+      'Database Hygiene Rollback',
+      `Audit #${auditId}`,
+      JSON.stringify({
+        target_audit_id: auditId,
+        restored_mappings: restoredM,
+        restored_fixes: restoredF,
+        reverted_at: new Date().toISOString()
+      })
+    ]
+  });
+
+  await withDbRetry(() => db.batch(stmts, 'write'));
 
   return {
     success: true,
@@ -138,14 +133,14 @@ export default async function handler(req, res) {
       case 'get_dashboard_pivot': {
         requireRole(user, 'viewer', 'view dashboard pivot');
         const { start_date, end_date } = args;
-        const result = await db.execute({
+        const result = await withDbRetry(() => db.execute({
           sql: `SELECT payment_date, bank, COALESCE(SUM(item_price), 0) AS daily_total
                 FROM transactions
                 WHERE payment_date >= ? AND payment_date <= ?
                 GROUP BY payment_date, bank
                 ORDER BY payment_date, bank`,
           args: [start_date, end_date]
-        });
+        }));
         return sendJson(res, 200, { data: result.rows });
       }
 
@@ -161,14 +156,14 @@ export default async function handler(req, res) {
           return sendJson(res, 400, { error: `Invalid group_col for dashboard pivot: ${group_col}` });
         }
 
-        const result = await db.execute({
+        const result = await withDbRetry(() => db.execute({
           sql: `SELECT ${groupExpr} AS group_key, bank, COALESCE(SUM(item_price), 0) AS total_amount
                 FROM transactions
                 WHERE payment_date >= ? AND payment_date <= ?
                 GROUP BY 1, bank
                 ORDER BY 1, bank`,
           args: [start_date, end_date]
-        });
+        }));
         return sendJson(res, 200, { data: result.rows });
       }
 
@@ -210,7 +205,7 @@ export default async function handler(req, res) {
         }
 
         const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
-        const [kpiRes, pivotRes, catRes] = await db.batch([
+        const [kpiRes, pivotRes, catRes] = await withDbRetry(() => db.batch([
           {
             sql: `SELECT
                     COUNT(*) AS total_count,
@@ -235,7 +230,7 @@ export default async function handler(req, res) {
                   ORDER BY 2 DESC`,
             args: whereArgs
           }
-        ], 'read');
+        ], 'read'));
 
         const kpiRow = kpiRes.rows[0] || {};
         return sendJson(res, 200, {
@@ -266,9 +261,9 @@ export default async function handler(req, res) {
         if (!['mapping', 'item_name', 'second_mapping', 'bank', 'id_status'].includes(colName)) {
           return sendJson(res, 400, { error: `Invalid column name for distinct lookup: ${colName}` });
         }
-        const result = await db.execute({
+        const result = await withDbRetry(() => db.execute({
           sql: `SELECT DISTINCT "${colName}" AS val FROM transactions WHERE "${colName}" IS NOT NULL AND "${colName}" != '' ORDER BY 1`
-        });
+        }));
         return sendJson(res, 200, { data: result.rows });
       }
 
@@ -321,7 +316,7 @@ export default async function handler(req, res) {
           GROUP BY chunk_idx
           ORDER BY chunk_idx ASC
         `;
-        const boundsRes = await db.execute({ sql, args: qArgs });
+        const boundsRes = await withDbRetry(() => db.execute({ sql, args: qArgs }));
         return sendJson(res, 200, {
           data: boundsRes.rows.map(r => ({
             chunk_idx: Number(r.chunk_idx),
@@ -333,20 +328,20 @@ export default async function handler(req, res) {
 
       case 'get_unresolved_tx_count': {
         requireRole(user, 'viewer', 'count unresolved transactions');
-        const cntRes = await db.execute({
+        const cntRes = await withDbRetry(() => db.execute({
           sql: `SELECT COUNT(*) AS cnt FROM transactions
                 WHERE COALESCE(id_status, '') NOT IN ('Valid', 'Exempt')
                   AND NOT (${EXEMPT_MAPPING_SQL})`
-        });
+        }));
         return sendJson(res, 200, { data: Number(cntRes.rows[0]?.cnt || 0) });
       }
 
       case 'get_student_master_version': {
         requireRole(user, 'viewer', 'check student master version');
-        const result = await db.execute({
+        const result = await withDbRetry(() => db.execute({
           sql: `SELECT COUNT(*) AS row_count, COALESCE(MAX(student_id), '') AS max_student_id, MAX(updated_at) AS max_updated_at
                 FROM student_master`
-        });
+        }));
         return sendJson(res, 200, { data: result.rows[0] });
       }
 
@@ -359,11 +354,11 @@ export default async function handler(req, res) {
           'item_mappings', 'settlement_batches', 'import_batches', 'user_roles'
         ];
 
-        const batchResults = await db.batch([
+        const batchResults = await withDbRetry(() => db.batch([
           { sql: 'PRAGMA page_count', args: [] },
           { sql: 'PRAGMA page_size', args: [] },
           ...tableNames.map(t => ({ sql: `SELECT COUNT(*) AS cnt FROM "${t}"`, args: [] }))
-        ], 'read');
+        ], 'read'));
 
         const pageCount = Number(batchResults[0]?.rows[0]?.page_count || 0);
         const pageSize = Number(batchResults[1]?.rows[0]?.page_size || 4096);
@@ -397,70 +392,70 @@ export default async function handler(req, res) {
         const studentIds = updates.map(u => u?.student_id).filter(Boolean);
         const levelMap = await resolveStudentLevelsBatch(db, studentIds);
 
+        const stmts = [];
+        for (const item of updates) {
+          if (!item || item.id === undefined || item.id === null) continue;
+          const sid = item.student_id ? String(item.student_id).trim() : '';
+          const lvl = sid ? (levelMap.get(sid) ?? null) : null;
+          stmts.push({
+            sql: `UPDATE transactions
+                  SET student_id = ?, item_name = ?, mapping = ?, second_mapping = ?, id_status = ?, student_level = COALESCE(?, student_level)
+                  WHERE id = ?`,
+            args: [
+              item.student_id ?? null,
+              item.item_name ?? null,
+              item.mapping ?? null,
+              item.second_mapping ?? null,
+              item.id_status ?? null,
+              lvl,
+              Number(item.id)
+            ]
+          });
+        }
+
         let updatedCount = 0;
-        const tx = await db.transaction('write');
-        try {
-          for (const item of updates) {
-            if (!item || item.id === undefined || item.id === null) continue;
-            const sid = item.student_id ? String(item.student_id).trim() : '';
-            const lvl = sid ? (levelMap.get(sid) ?? null) : null;
-            const r = await tx.execute({
-              sql: `UPDATE transactions
-                    SET student_id = ?, item_name = ?, mapping = ?, second_mapping = ?, id_status = ?, student_level = COALESCE(?, student_level)
-                    WHERE id = ?`,
-              args: [
-                item.student_id ?? null,
-                item.item_name ?? null,
-                item.mapping ?? null,
-                item.second_mapping ?? null,
-                item.id_status ?? null,
-                lvl,
-                Number(item.id)
-              ]
-            });
+        const BATCH_SIZE = 200;
+        for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
+          const chunk = stmts.slice(i, i + BATCH_SIZE);
+          const results = await withDbRetry(() => db.batch(chunk, 'write'));
+          for (const r of results) {
             updatedCount += r.rowsAffected || 0;
           }
-          await tx.commit();
-        } catch (err) {
-          await tx.rollback();
-          throw err;
         }
         return sendJson(res, 200, { data: updatedCount });
       }
 
       case 'sync_auth_users': {
         requireRole(user, 'admin', 'sync users');
-        const authRes = await db.execute({
+        const authRes = await withDbRetry(() => db.execute({
           sql: "SELECT email FROM app_users WHERE email IS NOT NULL AND TRIM(email) != ''"
+        }));
+
+        const stmts = [];
+        for (const u of authRes.rows) {
+          const email = String(u.email).trim().toLowerCase();
+          const role = email === PRIMARY_ADMIN_EMAIL ? 'admin' : 'viewer';
+          const isActive = (email === PRIMARY_ADMIN_EMAIL || email.endsWith('@nu.edu.eg')) ? 1 : 0;
+          stmts.push({
+            sql: `INSERT INTO user_roles (email, role, is_active, updated_by, updated_at)
+                  VALUES (?, ?, ?, 'auth.users sync', datetime('now'))
+                  ON CONFLICT(email) DO NOTHING`,
+            args: [email, role, isActive]
+          });
+        }
+        stmts.push({
+          sql: `UPDATE user_roles SET role = 'admin', is_active = 1, updated_at = datetime('now')
+                WHERE LOWER(TRIM(email)) = ?`,
+          args: [PRIMARY_ADMIN_EMAIL]
         });
 
+        const batchResults = await withDbRetry(() => db.batch(stmts, 'write'));
         let inserted = 0;
-        const tx = await db.transaction('write');
-        try {
-          for (const u of authRes.rows) {
-            const email = String(u.email).trim().toLowerCase();
-            const role = email === PRIMARY_ADMIN_EMAIL ? 'admin' : 'viewer';
-            const isActive = (email === PRIMARY_ADMIN_EMAIL || email.endsWith('@nu.edu.eg')) ? 1 : 0;
-            const ins = await tx.execute({
-              sql: `INSERT INTO user_roles (email, role, is_active, updated_by, updated_at)
-                    VALUES (?, ?, ?, 'auth.users sync', datetime('now'))
-                    ON CONFLICT(email) DO NOTHING`,
-              args: [email, role, isActive]
-            });
-            inserted += ins.rowsAffected || 0;
-          }
-          await tx.execute({
-            sql: `UPDATE user_roles SET role = 'admin', is_active = 1, updated_at = datetime('now')
-                  WHERE LOWER(TRIM(email)) = ?`,
-            args: [PRIMARY_ADMIN_EMAIL]
-          });
-          await tx.commit();
-        } catch (err) {
-          await tx.rollback();
-          throw err;
+        for (let i = 0; i < authRes.rows.length; i++) {
+          inserted += batchResults[i]?.rowsAffected || 0;
         }
 
-        const totalRes = await db.execute({ sql: 'SELECT COUNT(*) AS cnt FROM user_roles' });
+        const totalRes = await withDbRetry(() => db.execute({ sql: 'SELECT COUNT(*) AS cnt FROM user_roles' }));
         const total = Number(totalRes.rows[0]?.cnt || 0);
         clearRoleCache();
         return sendJson(res, 200, { data: { inserted, total } });
@@ -481,7 +476,7 @@ export default async function handler(req, res) {
         }
 
         const roleForInsert = targetEmail === PRIMARY_ADMIN_EMAIL ? 'admin' : 'viewer';
-        await db.execute({
+        await withDbRetry(() => db.execute({
           sql: `INSERT INTO user_roles (email, role, is_active, updated_by, updated_at)
                 VALUES (?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(email) DO UPDATE SET
@@ -489,13 +484,13 @@ export default async function handler(req, res) {
                   updated_by = excluded.updated_by,
                   updated_at = datetime('now')`,
           args: [targetEmail, roleForInsert, active, user.email]
-        });
+        }));
         clearRoleCache(targetEmail);
 
-        const appRes = await db.execute({
+        const appRes = await withDbRetry(() => db.execute({
           sql: 'SELECT id FROM app_users WHERE LOWER(TRIM(email)) = ? LIMIT 1',
           args: [targetEmail]
-        });
+        }));
         return sendJson(res, 200, {
           data: {
             email: targetEmail,
@@ -517,13 +512,15 @@ export default async function handler(req, res) {
         if (targetEmail === user.email) {
           return sendJson(res, 400, { error: 'You cannot delete your own active Admin account' });
         }
-        await db.execute({ sql: 'DELETE FROM user_roles WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] });
-        const delAuth = await db.execute({ sql: 'DELETE FROM app_users WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] });
+        const [, delAuth] = await withDbRetry(() => db.batch([
+          { sql: 'DELETE FROM user_roles WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] },
+          { sql: 'DELETE FROM app_users WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] }
+        ], 'write'));
         clearRoleCache(targetEmail);
         return sendJson(res, 200, {
           data: {
             email: targetEmail,
-            deleted_auth_users: delAuth.rowsAffected || 0
+            deleted_auth_users: delAuth?.rowsAffected || 0
           }
         });
       }
@@ -537,36 +534,37 @@ export default async function handler(req, res) {
           return sendJson(res, 400, { error: 'Invalid period_month format. Expected YYYY-MM.' });
         }
 
-        await db.execute({
-          sql: `INSERT INTO closed_periods (period_month, is_closed, closed_by, closed_at, reopened_by, reopened_at, notes, updated_at)
-                VALUES (?, ?, CASE WHEN ? = 1 THEN ? ELSE NULL END, CASE WHEN ? = 1 THEN datetime('now') ELSE NULL END,
-                        CASE WHEN ? = 0 THEN ? ELSE NULL END, CASE WHEN ? = 0 THEN datetime('now') ELSE NULL END, ?, datetime('now'))
-                ON CONFLICT(period_month) DO UPDATE SET
-                  is_closed = excluded.is_closed,
-                  closed_by = CASE WHEN excluded.is_closed = 1 THEN ? ELSE closed_periods.closed_by END,
-                  closed_at = CASE WHEN excluded.is_closed = 1 THEN datetime('now') ELSE closed_periods.closed_at END,
-                  reopened_by = CASE WHEN excluded.is_closed = 0 THEN ? ELSE closed_periods.reopened_by END,
-                  reopened_at = CASE WHEN excluded.is_closed = 0 THEN datetime('now') ELSE closed_periods.reopened_at END,
-                  notes = COALESCE(?, closed_periods.notes),
-                  updated_at = datetime('now')`,
-          args: [
-            periodMonth, isClosed,
-            isClosed, user.email, isClosed,
-            isClosed, user.email, isClosed,
-            notes,
-            user.email, user.email, notes
-          ]
-        });
-
-        await db.execute({
-          sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
-          args: [
-            user.email,
-            isClosed ? 'Accounting Period Closed' : 'Accounting Period Unlocked',
-            periodMonth,
-            JSON.stringify({ period_month: periodMonth, is_closed: Boolean(isClosed), notes })
-          ]
-        });
+        await withDbRetry(() => db.batch([
+          {
+            sql: `INSERT INTO closed_periods (period_month, is_closed, closed_by, closed_at, reopened_by, reopened_at, notes, updated_at)
+                  VALUES (?, ?, CASE WHEN ? = 1 THEN ? ELSE NULL END, CASE WHEN ? = 1 THEN datetime('now') ELSE NULL END,
+                          CASE WHEN ? = 0 THEN ? ELSE NULL END, CASE WHEN ? = 0 THEN datetime('now') ELSE NULL END, ?, datetime('now'))
+                  ON CONFLICT(period_month) DO UPDATE SET
+                    is_closed = excluded.is_closed,
+                    closed_by = CASE WHEN excluded.is_closed = 1 THEN ? ELSE closed_periods.closed_by END,
+                    closed_at = CASE WHEN excluded.is_closed = 1 THEN datetime('now') ELSE closed_periods.closed_at END,
+                    reopened_by = CASE WHEN excluded.is_closed = 0 THEN ? ELSE closed_periods.reopened_by END,
+                    reopened_at = CASE WHEN excluded.is_closed = 0 THEN datetime('now') ELSE closed_periods.reopened_at END,
+                    notes = COALESCE(?, closed_periods.notes),
+                    updated_at = datetime('now')`,
+            args: [
+              periodMonth, isClosed,
+              isClosed, user.email, isClosed,
+              isClosed, user.email, isClosed,
+              notes,
+              user.email, user.email, notes
+            ]
+          },
+          {
+            sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
+            args: [
+              user.email,
+              isClosed ? 'Accounting Period Closed' : 'Accounting Period Unlocked',
+              periodMonth,
+              JSON.stringify({ period_month: periodMonth, is_closed: Boolean(isClosed), notes })
+            ]
+          }
+        ], 'write'));
 
         return sendJson(res, 200, {
           data: { period_month: periodMonth, is_closed: Boolean(isClosed), notes }
@@ -585,13 +583,13 @@ export default async function handler(req, res) {
           return sendJson(res, 400, { error: 'Safety guard: cutoff date must be at least 90 days in the past' });
         }
 
-        const eligRes = await db.execute({
+        const eligRes = await withDbRetry(() => db.execute({
           sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(item_price), 0) AS amt
                 FROM transactions
                 WHERE payment_date < ? AND COALESCE(is_settled, 0) = 1
                   AND TRIM(COALESCE(erp_batch_number, '')) != ''`,
           args: [beforeDate]
-        });
+        }));
         const eligibleCount = Number(eligRes.rows[0]?.cnt || 0);
         const eligibleAmount = Number(eligRes.rows[0]?.amt || 0);
 
@@ -606,10 +604,8 @@ export default async function handler(req, res) {
           });
         }
 
-        const tx = await db.transaction('write');
-        let archivedCount = 0;
-        try {
-          const ins = await tx.execute({
+        const [insRes] = await withDbRetry(() => db.batch([
+          {
             sql: `INSERT OR IGNORE INTO transactions_archive (
                     id, reference_number, payment_date, student_id, original_student_id,
                     raw_student_id, customer_mobile, total_amount, net_amount, fawry_fees,
@@ -629,30 +625,24 @@ export default async function handler(req, res) {
                   WHERE payment_date < ? AND COALESCE(is_settled, 0) = 1
                     AND TRIM(COALESCE(erp_batch_number, '')) != ''`,
             args: [user.email, beforeDate]
-          });
-          archivedCount = ins.rowsAffected || 0;
-
-          await tx.execute({
+          },
+          {
             sql: `DELETE FROM transactions
                   WHERE payment_date < ? AND COALESCE(is_settled, 0) = 1
                     AND TRIM(COALESCE(erp_batch_number, '')) != ''`,
             args: [beforeDate]
-          });
-
-          await tx.execute({
+          },
+          {
             sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
             args: [
               user.email,
               'Cold-Storage Archive Completed',
-              `Before ${beforeDate} (${archivedCount} rows)`,
-              JSON.stringify({ before_date: beforeDate, archived_count: archivedCount, archived_amount_egp: eligibleAmount })
+              `Before ${beforeDate} (${eligibleCount} rows)`,
+              JSON.stringify({ before_date: beforeDate, archived_count: eligibleCount, archived_amount_egp: eligibleAmount })
             ]
-          });
-          await tx.commit();
-        } catch (err) {
-          await tx.rollback();
-          throw err;
-        }
+          }
+        ], 'write'));
+        const archivedCount = insRes?.rowsAffected || 0;
 
         return sendJson(res, 200, {
           data: {
@@ -667,7 +657,7 @@ export default async function handler(req, res) {
       case 'detect_double_payments': {
         requireRole(user, 'viewer', 'detect double payments');
         const daysWindow = Math.max(0, Number(args.p_days_window ?? 3));
-        const rowsRes = await db.execute({
+        const rowsRes = await withDbRetry(() => db.execute({
           sql: `SELECT
                   t.id, t.student_id, t.item_name, t.mapping, t.item_price,
                   t.payment_date, t.reference_number, t.bank, COALESCE(t.is_settled, 0) AS is_settled,
@@ -681,7 +671,7 @@ export default async function handler(req, res) {
                   AND t.payment_date IS NOT NULL
                   AND LOWER(TRIM(COALESCE(t.mapping, ''))) = 'tuition'
                 ORDER BY t.payment_date DESC, t.id DESC`
-        });
+        }));
 
         const groups = new Map();
         for (const r of rowsRes.rows) {
@@ -740,21 +730,22 @@ export default async function handler(req, res) {
         requireRole(user, 'admin', 'run database hygiene audit');
         const clean = Boolean(args.p_clean);
 
-        const [totRes, setRes, unmRes, invRes, idupRes, mapsRes, fixesRes] = await Promise.all([
-          db.execute({ sql: 'SELECT COUNT(*) AS cnt FROM transactions' }),
-          db.execute({ sql: 'SELECT COUNT(*) AS cnt FROM transactions WHERE is_settled = 1' }),
-          db.execute({ sql: "SELECT COUNT(*) AS cnt FROM transactions WHERE mapping IS NULL OR mapping = '' OR mapping = 'Unmapped'" }),
-          db.execute({ sql: "SELECT COUNT(*) AS cnt FROM transactions WHERE id_status IS NOT NULL AND id_status != 'Valid'" }),
-          db.execute({
+        const [totRes, setRes, unmRes, invRes, idupRes, mapsRes, fixesRes] = await withDbRetry(() => db.batch([
+          { sql: 'SELECT COUNT(*) AS cnt FROM transactions', args: [] },
+          { sql: 'SELECT COUNT(*) AS cnt FROM transactions WHERE is_settled = 1', args: [] },
+          { sql: "SELECT COUNT(*) AS cnt FROM transactions WHERE mapping IS NULL OR mapping = '' OR mapping = 'Unmapped'", args: [] },
+          { sql: "SELECT COUNT(*) AS cnt FROM transactions WHERE id_status IS NOT NULL AND id_status != 'Valid'", args: [] },
+          {
             sql: `SELECT COALESCE(SUM(c - 1), 0) AS cnt FROM (
                     SELECT COUNT(*) AS c FROM transactions
                     GROUP BY reference_number, item_name, item_price, payment_date
                     HAVING COUNT(*) > 1
-                  )`
-          }),
-          db.execute({ sql: 'SELECT id, item_name, adjusted_item_name, mapping, second_mapping FROM item_mappings ORDER BY id ASC' }),
-          db.execute({ sql: 'SELECT id, reference_number, correct_id, item_name, mapping, second_mapping FROM manual_fixes ORDER BY id ASC' })
-        ]);
+                  )`,
+            args: []
+          },
+          { sql: 'SELECT id, item_name, adjusted_item_name, mapping, second_mapping FROM item_mappings ORDER BY id ASC', args: [] },
+          { sql: 'SELECT id, reference_number, correct_id, item_name, mapping, second_mapping FROM manual_fixes ORDER BY id ASC', args: [] }
+        ], 'read'));
 
         const totalTx = Number(totRes.rows[0]?.cnt || 0);
         const settledTx = Number(setRes.rows[0]?.cnt || 0);
@@ -816,23 +807,22 @@ export default async function handler(req, res) {
         let cleanedFixes = 0;
 
         if (clean && (dupMappingIds.length > 0 || dupFixIds.length > 0)) {
-          const tx = await db.transaction('write');
-          try {
-            if (dupMappingIds.length > 0) {
-              const ph = dupMappingIds.map(() => '?').join(', ');
-              const delM = await tx.execute({ sql: `DELETE FROM item_mappings WHERE id IN (${ph})`, args: dupMappingIds });
-              cleanedMappings = delM.rowsAffected || 0;
-            }
-            if (dupFixIds.length > 0) {
-              const ph = dupFixIds.map(() => '?').join(', ');
-              const delF = await tx.execute({ sql: `DELETE FROM manual_fixes WHERE id IN (${ph})`, args: dupFixIds });
-              cleanedFixes = delF.rowsAffected || 0;
-            }
-            await tx.commit();
-          } catch (err) {
-            await tx.rollback();
-            throw err;
+          const delStmts = [];
+          let mapIdx = -1;
+          let fixIdx = -1;
+          if (dupMappingIds.length > 0) {
+            const ph = dupMappingIds.map(() => '?').join(', ');
+            mapIdx = delStmts.length;
+            delStmts.push({ sql: `DELETE FROM item_mappings WHERE id IN (${ph})`, args: dupMappingIds });
           }
+          if (dupFixIds.length > 0) {
+            const ph = dupFixIds.map(() => '?').join(', ');
+            fixIdx = delStmts.length;
+            delStmts.push({ sql: `DELETE FROM manual_fixes WHERE id IN (${ph})`, args: dupFixIds });
+          }
+          const delRes = await withDbRetry(() => db.batch(delStmts, 'write'));
+          if (mapIdx >= 0) cleanedMappings = delRes[mapIdx]?.rowsAffected || 0;
+          if (fixIdx >= 0) cleanedFixes = delRes[fixIdx]?.rowsAffected || 0;
         }
 
         const healthScore = totalTx === 0
@@ -859,7 +849,7 @@ export default async function handler(req, res) {
           }
         };
 
-        const insAudit = await db.execute({
+        const insAudit = await withDbRetry(() => db.execute({
           sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?) RETURNING id, created_at',
           args: [
             user.email,
@@ -867,7 +857,7 @@ export default async function handler(req, res) {
             `TX:${totalTx}|INVALID:${invalidIdTx}`,
             JSON.stringify(auditDetails)
           ]
-        });
+        }));
 
         return sendJson(res, 200, {
           data: {
@@ -898,10 +888,10 @@ export default async function handler(req, res) {
       case 'revert_audit_log_entry': {
         requireRole(user, 'admin', 'revert audit log entry');
         const auditId = Number(args.p_audit_id);
-        const logRes = await db.execute({
+        const logRes = await withDbRetry(() => db.execute({
           sql: 'SELECT id, user_email, action, details FROM audit_logs WHERE id = ? LIMIT 1',
           args: [auditId]
-        });
+        }));
         if (!logRes.rows.length) {
           return sendJson(res, 404, { error: `Audit log entry #${auditId} not found` });
         }
@@ -919,10 +909,10 @@ export default async function handler(req, res) {
 
         const authorEmail = String(auditRow.user_email || '').trim().toLowerCase();
         if (authorEmail && authorEmail !== 'system@nu.edu.eg' && authorEmail !== PRIMARY_ADMIN_EMAIL) {
-          const authorRes = await db.execute({
+          const authorRes = await withDbRetry(() => db.execute({
             sql: 'SELECT role FROM user_roles WHERE LOWER(TRIM(email)) = ? LIMIT 1',
             args: [authorEmail]
-          });
+          }));
           const authorRole = authorRes.rows[0]?.role || 'viewer';
           if (roleLevel(authorRole) < roleLevel('accountant')) {
             return sendJson(res, 403, { error: `Security block: cannot execute revert_data authored by non-accountant user (${auditRow.user_email})` });
@@ -942,125 +932,125 @@ export default async function handler(req, res) {
         const tbl = String(revertData.table_name || '');
         const op = String(revertData.operation || '');
         let restored = 0;
+        const stmts = [];
+        const batchClearIndices = [];
 
-        const tx = await db.transaction('write');
-        try {
-          if (tbl === 'item_mappings') {
-            if (op === 'delete' || op === 'update') {
-              for (const r of (revertData.previous_rows || [])) {
-                await tx.execute({ sql: 'DELETE FROM item_mappings WHERE item_name = ?', args: [r.item_name] });
-                await tx.execute({
-                  sql: 'INSERT INTO item_mappings (item_name, adjusted_item_name, mapping, second_mapping) VALUES (?, ?, ?, ?)',
-                  args: [r.item_name ?? null, r.adjusted_item_name ?? null, r.mapping ?? null, r.second_mapping ?? null]
-                });
-                restored++;
-              }
-            } else if (op === 'insert') {
-              for (const key of (revertData.inserted_keys || [])) {
-                await tx.execute({ sql: 'DELETE FROM item_mappings WHERE item_name = ?', args: [key] });
-                restored++;
-              }
-            }
-          } else if (tbl === 'manual_fixes') {
-            if (op === 'delete' || op === 'update') {
-              for (const r of (revertData.previous_rows || [])) {
-                await tx.execute({ sql: 'DELETE FROM manual_fixes WHERE reference_number = ?', args: [r.reference_number] });
-                await tx.execute({
-                  sql: 'INSERT INTO manual_fixes (reference_number, correct_id, item_name, mapping, second_mapping) VALUES (?, ?, ?, ?, ?)',
-                  args: [r.reference_number ?? null, r.correct_id ?? null, r.item_name ?? null, r.mapping ?? null, r.second_mapping ?? null]
-                });
-                restored++;
-              }
-            } else if (op === 'insert') {
-              for (const key of (revertData.inserted_keys || [])) {
-                await tx.execute({ sql: 'DELETE FROM manual_fixes WHERE reference_number = ?', args: [key] });
-                restored++;
-              }
-            }
-          } else if (tbl === 'transactions_erp') {
-            for (const prev of (revertData.previous_rows || [])) {
-              const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
-              const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
-              if (prev.id !== undefined && prev.id !== null) {
-                await tx.execute({
-                  sql: 'UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE id = ?',
-                  args: [batchVal, voucherVal, Number(prev.id)]
-                });
-              } else if (prev.reference_number) {
-                await tx.execute({
-                  sql: 'UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?',
-                  args: [batchVal, voucherVal, prev.reference_number]
-                });
-              }
+        if (tbl === 'item_mappings') {
+          if (op === 'delete' || op === 'update') {
+            for (const r of (revertData.previous_rows || [])) {
+              stmts.push({ sql: 'DELETE FROM item_mappings WHERE item_name = ?', args: [r.item_name] });
+              stmts.push({
+                sql: 'INSERT INTO item_mappings (item_name, adjusted_item_name, mapping, second_mapping) VALUES (?, ?, ?, ?)',
+                args: [r.item_name ?? null, r.adjusted_item_name ?? null, r.mapping ?? null, r.second_mapping ?? null]
+              });
               restored++;
             }
-            const batchNum = String(revertData.batch_number || '').trim();
-            if (batchNum) {
-              const c1 = await tx.execute({
-                sql: 'UPDATE transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
-                args: [batchNum]
-              });
-              const c2 = await tx.execute({
-                sql: 'UPDATE foreign_transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
-                args: [batchNum]
-              });
-              restored += (c1.rowsAffected || 0) + (c2.rowsAffected || 0);
+          } else if (op === 'insert') {
+            for (const key of (revertData.inserted_keys || [])) {
+              stmts.push({ sql: 'DELETE FROM item_mappings WHERE item_name = ?', args: [key] });
+              restored++;
             }
-          } else if (tbl === 'foreign_transactions_erp') {
-            for (const prev of (revertData.previous_rows || [])) {
-              const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
-              const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
-              await tx.execute({
-                sql: 'UPDATE foreign_transactions SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?',
+          }
+        } else if (tbl === 'manual_fixes') {
+          if (op === 'delete' || op === 'update') {
+            for (const r of (revertData.previous_rows || [])) {
+              stmts.push({ sql: 'DELETE FROM manual_fixes WHERE reference_number = ?', args: [r.reference_number] });
+              stmts.push({
+                sql: 'INSERT INTO manual_fixes (reference_number, correct_id, item_name, mapping, second_mapping) VALUES (?, ?, ?, ?, ?)',
+                args: [r.reference_number ?? null, r.correct_id ?? null, r.item_name ?? null, r.mapping ?? null, r.second_mapping ?? null]
+              });
+              restored++;
+            }
+          } else if (op === 'insert') {
+            for (const key of (revertData.inserted_keys || [])) {
+              stmts.push({ sql: 'DELETE FROM manual_fixes WHERE reference_number = ?', args: [key] });
+              restored++;
+            }
+          }
+        } else if (tbl === 'transactions_erp') {
+          for (const prev of (revertData.previous_rows || [])) {
+            const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
+            const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
+            if (prev.id !== undefined && prev.id !== null) {
+              stmts.push({
+                sql: 'UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE id = ?',
+                args: [batchVal, voucherVal, Number(prev.id)]
+              });
+            } else if (prev.reference_number) {
+              stmts.push({
+                sql: 'UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?',
                 args: [batchVal, voucherVal, prev.reference_number]
               });
-              restored++;
             }
-            const batchNum = String(revertData.batch_number || '').trim();
-            if (batchNum) {
-              const c2 = await tx.execute({
-                sql: 'UPDATE foreign_transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
-                args: [batchNum]
-              });
-              restored += c2.rowsAffected || 0;
-            }
-          } else {
-            await tx.rollback();
-            return sendJson(res, 200, {
-              data: {
-                success: false,
-                message: `Unsupported revert table: ${tbl}`
-              }
+            restored++;
+          }
+          const batchNum = String(revertData.batch_number || '').trim();
+          if (batchNum) {
+            batchClearIndices.push(stmts.length);
+            stmts.push({
+              sql: 'UPDATE transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
+              args: [batchNum]
+            });
+            batchClearIndices.push(stmts.length);
+            stmts.push({
+              sql: 'UPDATE foreign_transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
+              args: [batchNum]
             });
           }
-
-          const updatedDetails = { ...details, is_reverted: true };
-          await tx.execute({
-            sql: 'UPDATE audit_logs SET details = ? WHERE id = ?',
-            args: [JSON.stringify(updatedDetails), auditId]
+        } else if (tbl === 'foreign_transactions_erp') {
+          for (const prev of (revertData.previous_rows || [])) {
+            const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
+            const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
+            stmts.push({
+              sql: 'UPDATE foreign_transactions SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?',
+              args: [batchVal, voucherVal, prev.reference_number]
+            });
+            restored++;
+          }
+          const batchNum = String(revertData.batch_number || '').trim();
+          if (batchNum) {
+            batchClearIndices.push(stmts.length);
+            stmts.push({
+              sql: 'UPDATE foreign_transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
+              args: [batchNum]
+            });
+          }
+        } else {
+          return sendJson(res, 200, {
+            data: {
+              success: false,
+              message: `Unsupported revert table: ${tbl}`
+            }
           });
-
-          await tx.execute({
-            sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
-            args: [
-              user.email,
-              'Audit Action Reverted',
-              `Audit #${auditId}`,
-              JSON.stringify({
-                reverted_audit_id: auditId,
-                reverted_action: auditRow.action,
-                table_name: tbl,
-                operation: op,
-                restored_count: restored,
-                reverted_at: new Date().toISOString()
-              })
-            ]
-          });
-          await tx.commit();
-        } catch (err) {
-          await tx.rollback();
-          throw err;
         }
+
+        const updatedDetails = { ...details, is_reverted: true };
+        stmts.push({
+          sql: 'UPDATE audit_logs SET details = ? WHERE id = ?',
+          args: [JSON.stringify(updatedDetails), auditId]
+        });
+
+        const batchResults = await withDbRetry(() => db.batch(stmts, 'write'));
+        for (const idx of batchClearIndices) {
+          restored += batchResults[idx]?.rowsAffected || 0;
+        }
+
+        await withDbRetry(() => db.execute({
+          sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
+          args: [
+            user.email,
+            'Audit Action Reverted',
+            `Audit #${auditId}`,
+            JSON.stringify({
+              reverted_audit_id: auditId,
+              reverted_action: auditRow.action,
+              table_name: tbl,
+              operation: op,
+              restored_count: restored,
+              reverted_at: new Date().toISOString()
+            })
+          ]
+        }));
 
         return sendJson(res, 200, {
           data: {

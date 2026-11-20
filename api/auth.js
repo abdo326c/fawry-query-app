@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb, readJsonBody, sendJson } from './_lib/db.js';
+import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
 import { clearRoleCache, createJwt, getAuthUser, hashPassword, verifyPassword } from './_lib/auth.js';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
@@ -40,10 +40,10 @@ export default async function handler(req, res) {
         return sendJson(res, 400, { error: 'Email and password are required.' });
       }
 
-      const userRes = await db.execute({
+      const userRes = await withDbRetry(() => db.execute({
         sql: 'SELECT id, email, password_hash FROM app_users WHERE LOWER(TRIM(email)) = ? LIMIT 1',
         args: [email]
-      });
+      }));
 
       if (!userRes.rows.length || !verifyPassword(password, userRes.rows[0].password_hash)) {
         return sendJson(res, 401, { error: 'Invalid login credentials.' });
@@ -57,10 +57,10 @@ export default async function handler(req, res) {
         role = 'admin';
         isActive = true;
       } else {
-        const roleRes = await db.execute({
+        const roleRes = await withDbRetry(() => db.execute({
           sql: 'SELECT role, is_active FROM user_roles WHERE LOWER(TRIM(email)) = ? LIMIT 1',
           args: [email]
-        });
+        }));
         if (roleRes.rows.length) {
           isActive = roleRes.rows[0].is_active !== 0 && roleRes.rows[0].is_active !== false;
           role = isActive ? String(roleRes.rows[0].role || 'viewer') : 'deactivated';
@@ -74,10 +74,10 @@ export default async function handler(req, res) {
         return sendJson(res, 403, { error: 'Your account does not have an assigned role yet. Contact an administrator.' });
       }
 
-      await db.execute({
+      await withDbRetry(() => db.execute({
         sql: "UPDATE app_users SET last_sign_in_at = datetime('now') WHERE id = ?",
         args: [dbUser.id]
-      });
+      })).catch(() => {});
 
       const token = createJwt({ sub: dbUser.id, email });
       return sendJson(res, 200, {
@@ -99,18 +99,18 @@ export default async function handler(req, res) {
         return sendJson(res, 400, { error: 'New password must be at least 8 characters.' });
       }
 
-      const userRes = await db.execute({
+      const userRes = await withDbRetry(() => db.execute({
         sql: 'SELECT id, password_hash FROM app_users WHERE LOWER(TRIM(email)) = ? LIMIT 1',
         args: [user.email]
-      });
+      }));
       if (!userRes.rows.length || !verifyPassword(currentPassword, userRes.rows[0].password_hash)) {
         return sendJson(res, 401, { error: 'Current password is incorrect.' });
       }
 
-      await db.execute({
+      await withDbRetry(() => db.execute({
         sql: 'UPDATE app_users SET password_hash = ? WHERE id = ?',
         args: [hashPassword(newPassword), userRes.rows[0].id]
-      });
+      }));
       return sendJson(res, 200, { ok: true });
     }
 
@@ -134,18 +134,20 @@ export default async function handler(req, res) {
 
       const id = crypto.randomUUID();
       const hash = hashPassword(password);
-      await db.execute({
-        sql: `INSERT INTO app_users (id, email, password_hash)
-              VALUES (?, ?, ?)
-              ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash`,
-        args: [id, targetEmail, hash]
-      });
-      await db.execute({
-        sql: `INSERT INTO user_roles (email, role, is_active, updated_by, updated_at)
-              VALUES (?, ?, 1, ?, datetime('now'))
-              ON CONFLICT(email) DO UPDATE SET role = excluded.role, is_active = 1, updated_by = excluded.updated_by, updated_at = datetime('now')`,
-        args: [targetEmail, role, actor.email]
-      });
+      await withDbRetry(() => db.batch([
+        {
+          sql: `INSERT INTO app_users (id, email, password_hash)
+                VALUES (?, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash`,
+          args: [id, targetEmail, hash]
+        },
+        {
+          sql: `INSERT INTO user_roles (email, role, is_active, updated_by, updated_at)
+                VALUES (?, ?, 1, ?, datetime('now'))
+                ON CONFLICT(email) DO UPDATE SET role = excluded.role, is_active = 1, updated_by = excluded.updated_by, updated_at = datetime('now')`,
+          args: [targetEmail, role, actor.email]
+        }
+      ], 'write'));
       clearRoleCache(targetEmail);
       return sendJson(res, 200, { ok: true, email: targetEmail, role });
     }
@@ -160,15 +162,16 @@ export default async function handler(req, res) {
       if (!targetEmail || newPassword.length < 8) {
         return sendJson(res, 400, { error: 'Valid email and password (8+ chars) are required.' });
       }
-      const resUpd = await db.execute({
+      const hash = hashPassword(newPassword);
+      const resUpd = await withDbRetry(() => db.execute({
         sql: 'UPDATE app_users SET password_hash = ? WHERE LOWER(TRIM(email)) = ?',
-        args: [hashPassword(newPassword), targetEmail]
-      });
+        args: [hash, targetEmail]
+      }));
       if (resUpd.rowsAffected === 0) {
-        await db.execute({
+        await withDbRetry(() => db.execute({
           sql: 'INSERT INTO app_users (id, email, password_hash) VALUES (?, ?, ?)',
-          args: [crypto.randomUUID(), targetEmail, hashPassword(newPassword)]
-        });
+          args: [crypto.randomUUID(), targetEmail, hash]
+        }));
       }
       return sendJson(res, 200, { ok: true });
     }

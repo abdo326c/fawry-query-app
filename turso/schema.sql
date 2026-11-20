@@ -85,6 +85,9 @@ CREATE INDEX IF NOT EXISTS idx_transactions_is_settled ON transactions(is_settle
 CREATE INDEX IF NOT EXISTS idx_transactions_date_bank ON transactions(payment_date, bank);
 CREATE INDEX IF NOT EXISTS idx_transactions_id_status ON transactions(id_status);
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_id ON transactions(batch_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_nonvalid_id_status ON transactions(id_status, mapping, second_mapping) WHERE COALESCE(id_status, '') NOT IN ('Valid', 'Exempt');
+CREATE INDEX IF NOT EXISTS idx_transactions_dashboard_cover ON transactions(payment_date, bank, item_price, mapping, second_mapping, id_status, is_settled, erp_batch_number);
+CREATE INDEX IF NOT EXISTS idx_transactions_tuition_dups ON transactions(student_id, item_name, item_price, payment_date) WHERE id_status = 'Valid' AND LOWER(TRIM(COALESCE(mapping, ''))) = 'tuition';
 
 -- 4. Transactions Archive Table
 CREATE TABLE IF NOT EXISTS transactions_archive (

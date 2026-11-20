@@ -28,28 +28,58 @@ function setStoredToken(token) {
   }
 }
 
+const RETRY_DELAYS_MS = [200, 600, 1400];
+const TRANSIENT_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+const TRANSIENT_MSG_RE = /locked|busy|timeout|econnreset|fetch failed/i;
+
 async function apiFetch(path, payload) {
   const token = getStoredToken();
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${getApiBase()}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload || {})
-  });
+  const url = `${getApiBase()}${path}`;
+  const body = JSON.stringify(payload || {});
+  const maxAttempts = 1 + RETRY_DELAYS_MS.length;
 
-  let json = {};
-  try {
-    json = await res.json();
-  } catch {
-    json = { error: `HTTP ${res.status}` };
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', headers, body });
+    } catch (networkErr) {
+      if (attempt < RETRY_DELAYS_MS.length) {
+        const jitter = Math.floor(Math.random() * 80);
+        await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt] + jitter));
+        continue;
+      }
+      return { data: null, count: null, error: { message: networkErr?.message || 'Network request failed', status: 0 } };
+    }
+
+    let json = {};
+    try {
+      json = await res.json();
+    } catch {
+      json = { error: `HTTP ${res.status}` };
+    }
+
+    if (res.ok) {
+      return { data: json.data ?? null, count: json.count ?? null, error: null, _raw: json };
+    }
+
+    const errMsg = json.error || `HTTP ${res.status}`;
+    const shouldRetry = attempt < RETRY_DELAYS_MS.length && (
+      TRANSIENT_HTTP_STATUSES.has(res.status) ||
+      (res.status === 500 && TRANSIENT_MSG_RE.test(errMsg))
+    );
+    if (shouldRetry) {
+      const jitter = Math.floor(Math.random() * 80);
+      await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt] + jitter));
+      continue;
+    }
+
+    return { data: null, count: null, error: { message: errMsg, status: res.status } };
   }
 
-  if (!res.ok) {
-    return { data: null, count: null, error: { message: json.error || `HTTP ${res.status}`, status: res.status } };
-  }
-  return { data: json.data ?? null, count: json.count ?? null, error: null, _raw: json };
+  return { data: null, count: null, error: { message: 'Request failed after retries', status: 500 } };
 }
 
 class TursoQueryBuilder {
