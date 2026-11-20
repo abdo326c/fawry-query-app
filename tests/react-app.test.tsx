@@ -601,5 +601,41 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     expect(txDateFrom?.getAttribute('autocomplete')).toBe('off');
     expect(txDateTo?.getAttribute('autocomplete')).toBe('off');
     expect(txDateFrom?.getAttribute('data-lpignore')).toBe('true');
+
+    // Verify Students Details KPI counters update even when allStudentsData was preloaded prior to loadStudents()
+    const totalStatEl = document.getElementById('students-stat-total');
+    const collegesStatEl = document.getElementById('students-stat-colleges');
+    const mobileStatEl = document.getElementById('students-stat-mobile');
+    const natIdStatEl = document.getElementById('students-stat-nat-id');
+    const mergedStatEl = document.getElementById('students-stat-merged');
+    if (totalStatEl) totalStatEl.textContent = '0';
+    (app as { allStudentsData?: unknown[] }).allStudentsData = [
+      {
+        student_id: '101001',
+        full_name: 'Karim Ahmed El Gammal',
+        email: 'K.Ahmed0001@nu.edu.eg',
+        mobile: '01126342598',
+        national_id: '29901011234567',
+        college: 'Engineering and Applied Sciences',
+        program: '(PG) Graduate / Master / Exec Master of Business Administration',
+        source: 'ApplicantReport, StudentDetails'
+      },
+      {
+        student_id: '101005',
+        full_name: 'Ayman Amin Abdel Hamid Amin',
+        email: 'A.Amin0005@nu.edu.eg',
+        mobile: '01002669133',
+        national_id: '',
+        college: 'Business Administration',
+        program: '(PG) Graduate / Master / Exec Master of Business Administration',
+        source: 'StudentDetails'
+      }
+    ];
+    await (app.loadStudents as (opts?: { skipAutoProfile?: boolean }) => Promise<void>)({ skipAutoProfile: true });
+    expect(totalStatEl?.textContent).toBe('2');
+    expect(collegesStatEl?.textContent).toBe('2');
+    expect(mobileStatEl?.textContent).toBe('2 (100%)');
+    expect(natIdStatEl?.textContent).toBe('1 (50%)');
+    expect(mergedStatEl?.textContent).toBe('1');
   });
 });

@@ -159,6 +159,7 @@ class App {
                 this.allMappings = [];
                 this.allManualFixes = [];
                 this.allStudents = [];
+                this.allStudentsData = null;
                 this._tabLoadedAt = {};
                 this._dirtyTabs = new Set();
                 this._txCountCache = null;

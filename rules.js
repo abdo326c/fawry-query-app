@@ -360,7 +360,7 @@ export async function fetchAll(table, selectCols = '*', queryFn = null, orderByC
             activeLimit = limitUsed;
             if (!page || page.length === 0) break;
             for (let i = 0; i < page.length; i++) allData.push(page[i]);
-            if (typeof onProgress === 'function') onProgress(allData.length);
+            if (typeof onProgress === 'function') onProgress(allData.length, allData);
             if (page.length < limitUsed) break;
             const nextCursor = page[page.length - 1]?.[orderByCol];
             if (nextCursor === undefined || nextCursor === null || nextCursor === cursor) break;

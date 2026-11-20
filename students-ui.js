@@ -105,13 +105,20 @@ class StudentsUiMixin {
     async ensureFullStudentMaster({ forceReload = false, onProgress = null } = {}) {
         if (!forceReload && Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0) {
             this.syncStudentMasterMapFromCache();
+            this.updateStudentsStatsAndDropdowns();
             return this.allStudentsData;
         }
         if (typeof onProgress === 'function') {
             if (!this._studentMasterProgressListeners) this._studentMasterProgressListeners = new Set();
             this._studentMasterProgressListeners.add(onProgress);
             if (Array.isArray(this._partialStudentsPreview) && this._partialStudentsPreview.length > 0) {
-                try { onProgress(this._partialStudentsLoadedCount || this._partialStudentsPreview.length, this._partialStudentsPreview); } catch (_e) {}
+                try {
+                    onProgress(
+                        this._partialStudentsLoadedCount || this._partialStudentsPreview.length,
+                        this._partialStudentsPreview,
+                        this._partialStudentsExpectedTotal || null
+                    );
+                } catch (_e) {}
             }
         }
         if (!forceReload && this._fullStudentMasterPromise) {
@@ -127,11 +134,13 @@ class StudentsUiMixin {
                     !forceReload ? readIndexedDbCache('student_master_v1') : Promise.resolve(null),
                     this.fetchStudentMasterVersion()
                 ]);
+                this._partialStudentsExpectedTotal = typeof liveVer?.row_count === 'number' ? liveVer.row_count : null;
 
                 if (!forceReload && this.isStudentMasterCacheValid(cached, liveVer)) {
                     this.allStudentsData = cached.rows.map(s => this.indexStudentRecord({ ...s }));
                     this.allStudents = this.allStudentsData;
                     this.rebuildStudentMasterMap(this.allStudentsData);
+                    this.updateStudentsStatsAndDropdowns();
                     return this.allStudentsData;
                 }
 
@@ -148,7 +157,13 @@ class StudentsUiMixin {
                             this._partialStudentsLoadedCount = loaded;
                             if (this._studentMasterProgressListeners) {
                                 for (const fn of this._studentMasterProgressListeners) {
-                                    try { fn(loaded, this._partialStudentsPreview || partialRows); } catch (_e) {}
+                                    try {
+                                        fn(
+                                            loaded,
+                                            this._partialStudentsPreview || partialRows,
+                                            this._partialStudentsExpectedTotal
+                                        );
+                                    } catch (_e) {}
                                 }
                             }
                         }
@@ -164,13 +179,13 @@ class StudentsUiMixin {
                     this.allStudentsData = data.map(s => this.indexStudentRecord({ ...s }));
                     this.allStudents = this.allStudentsData;
                     this.rebuildStudentMasterMap(this.allStudentsData);
-                } else if (!this.allStudentsData) {
-                    this.allStudentsData = [];
+                    this.updateStudentsStatsAndDropdowns();
                 }
                 return this.allStudentsData || [];
             } finally {
                 this._partialStudentsPreview = null;
                 this._partialStudentsLoadedCount = 0;
+                this._partialStudentsExpectedTotal = null;
                 if (this._studentMasterProgressListeners) this._studentMasterProgressListeners.clear();
                 this._fullStudentMasterPromise = null;
             }
@@ -1372,7 +1387,7 @@ class StudentsUiMixin {
     async loadStudents({ forceReload = false, skipAutoProfile = false } = {}) {
         const tbody = document.getElementById('students-table-body');
         try {
-            if (!this.allStudentsData || forceReload) {
+            if (!Array.isArray(this.allStudentsData) || this.allStudentsData.length === 0 || forceReload) {
                 const termRawInit = (document.getElementById('student-search-input')?.value || '').trim();
                 const collegeInit = document.getElementById('student-filter-college')?.value || '';
                 const sourceInit = document.getElementById('student-filter-source')?.value || '';
@@ -1385,10 +1400,13 @@ class StudentsUiMixin {
                 }
                 await this.ensureFullStudentMaster({
                     forceReload,
-                    onProgress: (loaded, previewRows) => {
-                        const totalEl = document.getElementById('students-stat-total');
-                        if (totalEl && !this.allStudentsData) {
-                            totalEl.textContent = `${loaded.toLocaleString()}...`;
+                    onProgress: (loaded, previewRows, expectedTotal) => {
+                        if (!Array.isArray(this.allStudentsData) || this.allStudentsData.length === 0) {
+                            this.updateStudentsStatsAndDropdowns({
+                                previewList: previewRows,
+                                overrideTotal: expectedTotal || loaded,
+                                isPartial: !expectedTotal
+                            });
                         }
                         if (canRenderPreview && !previewRendered && Array.isArray(previewRows) && previewRows.length > 0) {
                             previewRendered = true;
@@ -1397,7 +1415,6 @@ class StudentsUiMixin {
                         }
                     }
                 });
-                this.updateStudentsStatsAndDropdowns();
             }
             this.markTabLoaded('student-master');
 
@@ -1414,7 +1431,11 @@ class StudentsUiMixin {
                 else clearBtn.classList.add('hidden');
             }
 
-            this.filteredStudentsData = (this.allStudentsData || []).filter(s => {
+            const masterList = (Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0)
+                ? this.allStudentsData
+                : (Array.isArray(this.allStudents) && this.allStudents.length > 0 ? this.allStudents : []);
+
+            this.filteredStudentsData = masterList.filter(s => {
                 if (collegeFilter && (s.college || '') !== collegeFilter) return false;
                 if (sourceFilterLower && !(s._sourceLower ?? String(s.source || '').toLowerCase()).includes(sourceFilterLower)) return false;
                 if (term) {
@@ -1425,6 +1446,9 @@ class StudentsUiMixin {
                 return true;
             });
 
+            this.updateStudentsStatsAndDropdowns({
+                hasActiveFilter: Boolean(termRaw || collegeFilter || sourceFilter)
+            });
             this.renderStudentsPage();
 
             if (!skipAutoProfile && term && this.filteredStudentsData.length === 1) {
@@ -1435,15 +1459,36 @@ class StudentsUiMixin {
         }
     }
 
-    updateStudentsStatsAndDropdowns() {
-        const list = this.allStudentsData || [];
-        const total = list.length;
+    updateStudentsStatsAndDropdowns({ previewList = null, overrideTotal = null, isPartial = false, hasActiveFilter = false } = {}) {
+        const masterList = (Array.isArray(this.allStudentsData) && this.allStudentsData.length > 0)
+            ? this.allStudentsData
+            : (Array.isArray(this.allStudents) && this.allStudents.length > 0
+                ? this.allStudents
+                : (Array.isArray(previewList) && previewList.length > 0
+                    ? previewList
+                    : (Array.isArray(this.filteredStudentsData) ? this.filteredStudentsData : [])));
+
+        const statsList = (hasActiveFilter && Array.isArray(this.filteredStudentsData))
+            ? this.filteredStudentsData
+            : masterList;
+
+        const total = (typeof overrideTotal === 'number' && overrideTotal > 0 && !hasActiveFilter)
+            ? overrideTotal
+            : statsList.length;
+        const sampleCount = statsList.length;
+
+        const allCollegesSet = new Set();
+        masterList.forEach(s => {
+            if (s?.college && String(s.college).trim()) allCollegesSet.add(String(s.college).trim());
+        });
+
         const collegesSet = new Set();
         let withMobile = 0;
         let withNatId = 0;
         let mergedCount = 0;
 
-        list.forEach(s => {
+        statsList.forEach(s => {
+            if (!s) return;
             if (s.college && String(s.college).trim()) collegesSet.add(String(s.college).trim());
             if (s.mobile && String(s.mobile).trim()) withMobile++;
             if (s.national_id && String(s.national_id).trim()) withNatId++;
@@ -1454,23 +1499,27 @@ class StudentsUiMixin {
             const el = document.getElementById(id);
             if (el) el.textContent = val;
         };
-        setStat('students-stat-total', total.toLocaleString());
+        const totalLabel = hasActiveFilter && masterList.length > 0 && statsList.length !== masterList.length
+            ? `${statsList.length.toLocaleString()} / ${masterList.length.toLocaleString()}`
+            : `${total.toLocaleString()}${isPartial ? '...' : ''}`;
+
+        setStat('students-stat-total', totalLabel);
         setStat('students-stat-colleges', collegesSet.size.toLocaleString());
-        setStat('students-stat-mobile', total > 0 ? `${withMobile.toLocaleString()} (${Math.round((withMobile / total) * 100)}%)` : '0');
-        setStat('students-stat-nat-id', total > 0 ? `${withNatId.toLocaleString()} (${Math.round((withNatId / total) * 100)}%)` : '0');
+        setStat('students-stat-mobile', sampleCount > 0 ? `${withMobile.toLocaleString()} (${Math.round((withMobile / sampleCount) * 100)}%)` : '0');
+        setStat('students-stat-nat-id', sampleCount > 0 ? `${withNatId.toLocaleString()} (${Math.round((withNatId / sampleCount) * 100)}%)` : '0');
         setStat('students-stat-merged', mergedCount.toLocaleString());
 
         const collegeSelect = document.getElementById('student-filter-college');
         const currentVal = collegeSelect ? collegeSelect.value : '';
-        const sortedColleges = Array.from(collegesSet).sort((a, b) => a.localeCompare(b));
-        if (collegeSelect) {
+        const sortedColleges = Array.from(allCollegesSet).sort((a, b) => a.localeCompare(b));
+        if (collegeSelect && sortedColleges.length > 0) {
             collegeSelect.innerHTML = `<option value="">All Colleges (${sortedColleges.length})</option>` +
                 sortedColleges.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
             collegeSelect.value = currentVal;
         }
 
         const datalist = document.getElementById('datalist-student-colleges');
-        if (datalist) {
+        if (datalist && sortedColleges.length > 0) {
             datalist.innerHTML = sortedColleges.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
         }
     }
@@ -1482,6 +1531,12 @@ class StudentsUiMixin {
 
         const data = this.filteredStudentsData || [];
         const total = data.length;
+        if (total > 0) {
+            const totalStatEl = document.getElementById('students-stat-total');
+            if (totalStatEl && (totalStatEl.textContent === '0' || !totalStatEl.textContent)) {
+                this.updateStudentsStatsAndDropdowns();
+            }
+        }
         const pageSize = this.studentsPageSize || 100;
         const totalPages = Math.max(1, Math.ceil(total / pageSize));
         if (this.studentsCurrentPage > totalPages) this.studentsCurrentPage = totalPages;
