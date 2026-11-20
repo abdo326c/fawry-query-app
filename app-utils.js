@@ -253,5 +253,67 @@ export async function withDropdownTaskProgress(btnOrId, busyLabel, initialToastM
     }
 }
 
+/**
+ * Safely reads saved filter presets from localStorage.
+ */
+export function loadSavedFilterPresets(storageKey) {
+    if (!storageKey) return [];
+    try {
+        if (typeof localStorage === 'undefined') return [];
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter(p => p && typeof p.id === 'string' && typeof p.name === 'string' && p.state && typeof p.state === 'object');
+    } catch (_e) {
+        return [];
+    }
+}
+
+/**
+ * Safely persists saved filter presets to localStorage.
+ */
+export function saveFilterPresetList(storageKey, presets) {
+    if (!storageKey) return false;
+    try {
+        if (typeof localStorage === 'undefined') return false;
+        localStorage.setItem(storageKey, JSON.stringify(Array.isArray(presets) ? presets : []));
+        return true;
+    } catch (_e) {
+        return false;
+    }
+}
+
+/**
+ * Inserts or updates a saved filter preset (case-insensitive by name), capped at 20 presets.
+ */
+export function upsertFilterPreset(presets, { name, state }) {
+    const cleanName = String(name || '').trim();
+    if (!cleanName || !state || typeof state !== 'object') {
+        return Array.isArray(presets) ? [...presets] : [];
+    }
+    const list = Array.isArray(presets) ? [...presets] : [];
+    const lower = cleanName.toLowerCase();
+    const existing = list.find(p => String(p.name || '').trim().toLowerCase() === lower);
+    const id = existing ? existing.id : `preset-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const nextEntry = {
+        id,
+        name: cleanName,
+        state: JSON.parse(JSON.stringify(state)),
+        updatedAt: new Date().toISOString()
+    };
+    const filtered = list.filter(p => String(p.name || '').trim().toLowerCase() !== lower);
+    filtered.unshift(nextEntry);
+    return filtered.slice(0, 20);
+}
+
+/**
+ * Removes a saved filter preset by ID and returns a new array.
+ */
+export function deleteFilterPreset(presets, id) {
+    if (!Array.isArray(presets) || !id) return Array.isArray(presets) ? [...presets] : [];
+    return presets.filter(p => p.id !== id);
+}
+
 window.Toast = Toast;
 window.withDropdownTaskProgress = withDropdownTaskProgress;

@@ -14,7 +14,15 @@ import {
     writeCompressedExcel
 } from './rules.js';
 import { DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING } from './foreign-transactions.js';
-import { renderIcons, formatMoney, Toast } from './app-utils.js';
+import {
+    renderIcons,
+    formatMoney,
+    loadSavedFilterPresets,
+    saveFilterPresetList,
+    upsertFilterPreset,
+    deleteFilterPreset,
+    Toast
+} from './app-utils.js';
 
 class ErpExportMixin {
     initErpExport() {
@@ -150,6 +158,149 @@ class ErpExportMixin {
         if (btnRecord) {
             btnRecord.addEventListener('click', () => this.recordErpReferences());
         }
+
+        this.initErpFilterPresets();
+    }
+
+    initErpFilterPresets() {
+        this._erpPresetStorageKey = 'spdb-erp-filter-presets-v1';
+        this.erpFilterPresets = loadSavedFilterPresets(this._erpPresetStorageKey);
+        this.activeErpPresetId = '';
+
+        const selectEl = document.getElementById('erp-saved-preset-select');
+        const nameInput = document.getElementById('erp-preset-name-input');
+        const btnSave = document.getElementById('btn-save-erp-preset');
+        const btnDelete = document.getElementById('btn-delete-erp-preset');
+        const pillsEl = document.getElementById('erp-saved-presets-pills');
+
+        selectEl?.addEventListener('change', () => {
+            const id = selectEl.value;
+            this.activeErpPresetId = id;
+            if (btnDelete) btnDelete.disabled = !id;
+            const preset = this.erpFilterPresets.find(p => p.id === id);
+            if (preset) this.applyErpFilterPreset(preset);
+        });
+
+        btnSave?.addEventListener('click', () => {
+            const rawName = String(nameInput?.value || '').trim();
+            const fallbackName = `ERP View ${(this.erpFilterPresets?.length || 0) + 1}`;
+            const name = rawName || fallbackName;
+            const state = this.captureErpFilterState();
+            this.erpFilterPresets = upsertFilterPreset(this.erpFilterPresets, { name, state });
+            saveFilterPresetList(this._erpPresetStorageKey, this.erpFilterPresets);
+            const saved = this.erpFilterPresets[0];
+            this.activeErpPresetId = saved ? saved.id : '';
+            if (nameInput) nameInput.value = '';
+            this.renderErpFilterPresets();
+            Toast.show(`Saved ERP view "${name}".`, 'success');
+        });
+
+        btnDelete?.addEventListener('click', () => {
+            const id = this.activeErpPresetId || selectEl?.value;
+            if (!id) return;
+            const target = this.erpFilterPresets.find(p => p.id === id);
+            this.erpFilterPresets = deleteFilterPreset(this.erpFilterPresets, id);
+            saveFilterPresetList(this._erpPresetStorageKey, this.erpFilterPresets);
+            this.activeErpPresetId = '';
+            this.renderErpFilterPresets();
+            Toast.show(`Deleted saved ERP view${target ? ` "${target.name}"` : ''}.`, 'info');
+        });
+
+        pillsEl?.addEventListener('click', (e) => {
+            const pill = e.target.closest('[data-erp-preset-id]');
+            if (!pill) return;
+            const id = pill.getAttribute('data-erp-preset-id');
+            const preset = this.erpFilterPresets.find(p => p.id === id);
+            if (!preset) return;
+            this.activeErpPresetId = preset.id;
+            this.applyErpFilterPreset(preset);
+        });
+
+        this.renderErpFilterPresets();
+    }
+
+    captureErpFilterState() {
+        const readSelectValues = (tsInstance, elId) => {
+            if (tsInstance && typeof tsInstance.getValue === 'function') {
+                const v = tsInstance.getValue();
+                return Array.isArray(v) ? v : (v ? [v] : []);
+            }
+            const el = document.getElementById(elId);
+            if (!el) return [];
+            return Array.from(el.selectedOptions || []).map(o => o.value).filter(Boolean);
+        };
+        return {
+            dateFrom: document.getElementById('erp-filter-date-from')?.value || '',
+            dateTo: document.getElementById('erp-filter-date-to')?.value || '',
+            bank: document.getElementById('erp-filter-bank')?.value || '',
+            batch: document.getElementById('erp-filter-batch')?.value || '',
+            search: document.getElementById('erp-search')?.value || '',
+            statusFilter: this.erpStatusFilter || 'all',
+            itemNames: readSelectValues(this.erpItemNameSelect, 'erp-filter-item-name'),
+            mappings: readSelectValues(this.erpMappingSelect, 'erp-filter-mapping')
+        };
+    }
+
+    renderErpFilterPresets() {
+        const selectEl = document.getElementById('erp-saved-preset-select');
+        const pillsEl = document.getElementById('erp-saved-presets-pills');
+        const btnDelete = document.getElementById('btn-delete-erp-preset');
+        const presets = Array.isArray(this.erpFilterPresets) ? this.erpFilterPresets : [];
+
+        if (selectEl) {
+            selectEl.innerHTML = '<option value="">Load saved view...</option>' +
+                presets.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('');
+            selectEl.value = presets.some(p => p.id === this.activeErpPresetId) ? this.activeErpPresetId : '';
+        }
+        if (btnDelete) {
+            btnDelete.disabled = !(this.activeErpPresetId && presets.some(p => p.id === this.activeErpPresetId));
+        }
+        if (pillsEl) {
+            pillsEl.innerHTML = presets.slice(0, 4).map(p => {
+                const isActive = p.id === this.activeErpPresetId;
+                return `<button type="button" class="btn ${isActive ? 'btn-primary' : 'btn-outline'} btn-sm" data-erp-preset-id="${escapeHTML(p.id)}" style="padding: 0.14rem 0.5rem; font-size: 0.72rem;">${escapeHTML(p.name)}</button>`;
+            }).join('');
+        }
+    }
+
+    async applyErpFilterPreset(preset) {
+        if (!preset || !preset.state) return;
+        const st = preset.state;
+        const setInput = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = val || '';
+            if (el._flatpickr) el._flatpickr.setDate(val || '', false);
+        };
+        setInput('erp-filter-date-from', st.dateFrom || '');
+        setInput('erp-filter-date-to', st.dateTo || '');
+        const bankEl = document.getElementById('erp-filter-bank');
+        if (bankEl) bankEl.value = st.bank || '';
+
+        const searchEl = document.getElementById('erp-search');
+        if (searchEl) searchEl.value = st.search || '';
+        this.erpSearchQuery = String(st.search || '').trim().toLowerCase();
+
+        this.erpStatusFilter = st.statusFilter || 'all';
+        document.querySelectorAll('[data-erp-filter]').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-erp-filter') === this.erpStatusFilter);
+        });
+
+        this.renderErpFilterPresets();
+        await this.loadErpExport({ refresh: true });
+
+        const batchEl = document.getElementById('erp-filter-batch');
+        if (batchEl && st.batch) batchEl.value = st.batch;
+
+        const applyMulti = (tsInstance, vals) => {
+            if (tsInstance && typeof tsInstance.setValue === 'function') {
+                tsInstance.setValue(Array.isArray(vals) ? vals : [], true);
+            }
+        };
+        applyMulti(this.erpItemNameSelect, st.itemNames);
+        applyMulti(this.erpMappingSelect, st.mappings);
+
+        await this.loadErpExport({ refresh: false });
     }
 
     /**

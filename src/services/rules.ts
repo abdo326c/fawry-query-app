@@ -35,7 +35,8 @@ import {
   toPeriodMonth as rawToPeriodMonth,
   isDateInClosedPeriods as rawIsDateInClosedPeriods,
   findClosedPeriodsInRows as rawFindClosedPeriodsInRows,
-  formatPeriodMonthLabel as rawFormatPeriodMonthLabel
+  formatPeriodMonthLabel as rawFormatPeriodMonthLabel,
+  buildImportIssuesCsv as rawBuildImportIssuesCsv
 } from '../../rules.js';
 
 export const validateID: (id: string | number | null | undefined) => IdStatus = rawValidateID;
@@ -136,3 +137,17 @@ export const findClosedPeriodsInRows: <T extends Record<string, unknown>>(
 ) => { blockedRows: T[]; closedMonths: string[] };
 export const formatPeriodMonthLabel: (periodMonth: string | null | undefined) => string =
   rawFormatPeriodMonthLabel;
+export interface ImportIssueRecord {
+  category?: string;
+  file_name?: string;
+  reference_number?: string;
+  payment_date?: string | null;
+  student_id?: string | null;
+  item_name?: string | null;
+  item_price?: number | string | null;
+  bank?: string | null;
+  status?: string | null;
+  reason?: string | null;
+}
+export const buildImportIssuesCsv: (issues: ImportIssueRecord[]) => string =
+  rawBuildImportIssuesCsv as unknown as (issues: ImportIssueRecord[]) => string;

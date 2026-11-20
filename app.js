@@ -1,8 +1,10 @@
 import { supabase } from './supabase.js';
 import { FawryProcessor } from './csv-processor.js';
 import {
+    validateID,
     getEffectiveIdStatus,
     isNonInvalidTransaction,
+    isLockedTransaction,
     fetchAll,
     fetchByIn,
     recomputeTransactions,
@@ -13,11 +15,13 @@ import {
     sanitizeExcelValue,
     sanitizeExcelRows,
     toDateOnly,
+    toPeriodMonth,
     isDateInClosedPeriods,
     dateToExcelSerial,
     isSameDaySettlementBank,
     getStudentProgramLevel,
     formatStudentLevelTag,
+    buildImportIssuesCsv,
     writeCompressedExcel
 } from './rules.js';
 
@@ -30,6 +34,10 @@ import {
     formatIdStatusMeta,
     formatMoney,
     sanitizeForFilter,
+    loadSavedFilterPresets,
+    saveFilterPresetList,
+    upsertFilterPreset,
+    deleteFilterPreset,
     Toast
 } from './app-utils.js';
 import { applyDashboardMixin } from './dashboard.js';
@@ -64,6 +72,8 @@ class App {
         this._authUsersSynced = false;
         this.closedPeriods = [];
         this.closedPeriodSet = new Set();
+        this.selectedTransactionsMap = new Map();
+        this.lastImportIssues = [];
         
         this.isImporting = false;
         this.initTheme();
@@ -76,6 +86,7 @@ class App {
         this.initModals();
         this.initBulkUploads();
         this.initFilters();
+        this.initTransactionBulkAssign();
         this.initPageJumpHelpers();
         this.initPagination();
         this.initExport();
@@ -359,6 +370,8 @@ class App {
             'btn-dedup-fixes',
             'btn-save-user-role'
         ].forEach(id => setElVisible(id, isAdmin));
+
+        this.updateTxBulkSelectionUI?.();
     }
 
     async setupUser(user) {
@@ -782,6 +795,25 @@ class App {
                 e.target.value = ''; // Reset file input so same file can be imported again
             }
         });
+
+        document.getElementById('btn-download-import-errors')?.addEventListener('click', () => {
+            const issues = this.lastImportIssues || [];
+            const csv = buildImportIssuesCsv(issues);
+            if (!csv) {
+                Toast.show('No import issues to export.', 'info');
+                return;
+            }
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fawry_import_issues_${toDateOnly(new Date()) || 'report'}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            Toast.show(`Downloaded CSV issue report (${issues.length} row(s)).`, 'success');
+        });
     }
 
     async handleFiles(files) {
@@ -790,6 +822,9 @@ class App {
             return;
         }
         this.isImporting = true;
+        this.lastImportIssues = [];
+        const btnErrDownload = document.getElementById('btn-download-import-errors');
+        btnErrDownload?.classList.add('hidden');
         
         try {
             document.getElementById('import-progress').classList.remove('hidden');
@@ -797,6 +832,7 @@ class App {
             
             const processor = new FawryProcessor(this.currentUser?.email || 'System');
             const success = await processor.processFiles(files);
+            this.lastImportIssues = Array.isArray(processor.importIssues) ? processor.importIssues : [];
             
             if (processor.skippedTransactions && processor.skippedTransactions.length > 0) {
                 const summary = {};
@@ -832,6 +868,14 @@ class App {
             const actionBar = document.getElementById('import-action-bar');
             if (actionBar) {
                 actionBar.style.display = 'flex';
+                if (btnErrDownload) {
+                    if (this.lastImportIssues.length > 0) {
+                        btnErrDownload.innerHTML = `<i data-lucide="file-warning" style="width: 16px; height: 16px; margin-right: 6px;"></i> Download Issue Report (${this.lastImportIssues.length})`;
+                        btnErrDownload.classList.remove('hidden');
+                    } else {
+                        btnErrDownload.classList.add('hidden');
+                    }
+                }
                 if (window.lucide) lucide.createIcons({ root: actionBar });
             }
 
@@ -1172,6 +1216,148 @@ class App {
         });
 
         this.setupHeaderFilters();
+        this.initTransactionFilterPresets();
+    }
+
+    initTransactionFilterPresets() {
+        this._txPresetStorageKey = 'spdb-tx-filter-presets-v1';
+        this.txFilterPresets = loadSavedFilterPresets(this._txPresetStorageKey);
+        this.activeTxPresetId = '';
+
+        const selectEl = document.getElementById('tx-saved-preset-select');
+        const nameInput = document.getElementById('tx-preset-name-input');
+        const btnSave = document.getElementById('btn-save-tx-preset');
+        const btnDelete = document.getElementById('btn-delete-tx-preset');
+        const pillsEl = document.getElementById('tx-saved-presets-pills');
+
+        selectEl?.addEventListener('change', () => {
+            const id = selectEl.value;
+            this.activeTxPresetId = id;
+            if (btnDelete) btnDelete.disabled = !id;
+            const preset = this.txFilterPresets.find(p => p.id === id);
+            if (preset) this.applyTransactionFilterPreset(preset);
+        });
+
+        btnSave?.addEventListener('click', () => {
+            const rawName = String(nameInput?.value || '').trim();
+            const fallbackName = `View ${new Date().toLocaleDateString()} ${(this.txFilterPresets?.length || 0) + 1}`;
+            const name = rawName || fallbackName;
+            const state = this.captureTransactionFilterState();
+            this.txFilterPresets = upsertFilterPreset(this.txFilterPresets, { name, state });
+            saveFilterPresetList(this._txPresetStorageKey, this.txFilterPresets);
+            const saved = this.txFilterPresets[0];
+            this.activeTxPresetId = saved ? saved.id : '';
+            if (nameInput) nameInput.value = '';
+            this.renderTransactionFilterPresets();
+            Toast.show(`Saved Transactions view "${name}".`, 'success');
+        });
+
+        btnDelete?.addEventListener('click', () => {
+            const id = this.activeTxPresetId || selectEl?.value;
+            if (!id) return;
+            const target = this.txFilterPresets.find(p => p.id === id);
+            this.txFilterPresets = deleteFilterPreset(this.txFilterPresets, id);
+            saveFilterPresetList(this._txPresetStorageKey, this.txFilterPresets);
+            this.activeTxPresetId = '';
+            this.renderTransactionFilterPresets();
+            Toast.show(`Deleted saved view${target ? ` "${target.name}"` : ''}.`, 'info');
+        });
+
+        pillsEl?.addEventListener('click', (e) => {
+            const pill = e.target.closest('[data-tx-preset-id]');
+            if (!pill) return;
+            const id = pill.getAttribute('data-tx-preset-id');
+            const preset = this.txFilterPresets.find(p => p.id === id);
+            if (!preset) return;
+            this.activeTxPresetId = preset.id;
+            this.applyTransactionFilterPreset(preset);
+        });
+
+        this.renderTransactionFilterPresets();
+    }
+
+    captureTransactionFilterState() {
+        return {
+            dateFrom: document.getElementById('filter-date-from')?.value || '',
+            dateTo: document.getElementById('filter-date-to')?.value || '',
+            search: document.getElementById('search-input')?.value || '',
+            quickFilter: this.txQuickFilter || 'all',
+            sortCol: this.txSortCol || 'payment_date',
+            sortAsc: Boolean(this.txSortAsc),
+            headerFilters: JSON.parse(JSON.stringify(this.headerFilters?.transactions || {}))
+        };
+    }
+
+    renderTransactionFilterPresets() {
+        const selectEl = document.getElementById('tx-saved-preset-select');
+        const pillsEl = document.getElementById('tx-saved-presets-pills');
+        const btnDelete = document.getElementById('btn-delete-tx-preset');
+        const presets = Array.isArray(this.txFilterPresets) ? this.txFilterPresets : [];
+
+        if (selectEl) {
+            selectEl.innerHTML = '<option value="">Load saved view...</option>' +
+                presets.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('');
+            selectEl.value = presets.some(p => p.id === this.activeTxPresetId) ? this.activeTxPresetId : '';
+        }
+        if (btnDelete) {
+            btnDelete.disabled = !(this.activeTxPresetId && presets.some(p => p.id === this.activeTxPresetId));
+        }
+        if (pillsEl) {
+            pillsEl.innerHTML = presets.slice(0, 4).map(p => {
+                const isActive = p.id === this.activeTxPresetId;
+                return `<button type="button" class="btn ${isActive ? 'btn-primary' : 'btn-outline'} btn-sm" data-tx-preset-id="${escapeHTML(p.id)}" style="padding: 0.14rem 0.5rem; font-size: 0.72rem;">${escapeHTML(p.name)}</button>`;
+            }).join('');
+        }
+    }
+
+    applyTransactionFilterPreset(preset) {
+        if (!preset || !preset.state) return;
+        const st = preset.state;
+        const setDate = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = val || '';
+            if (el._flatpickr) el._flatpickr.setDate(val || '', false);
+        };
+        setDate('filter-date-from', st.dateFrom || '');
+        setDate('filter-date-to', st.dateTo || '');
+        const searchEl = document.getElementById('search-input');
+        if (searchEl) searchEl.value = st.search || '';
+
+        this.txQuickFilter = st.quickFilter || 'all';
+        document.querySelectorAll('[data-tx-quick-filter]').forEach(btn => {
+            const isActive = btn.getAttribute('data-tx-quick-filter') === this.txQuickFilter;
+            btn.classList.toggle('btn-primary', isActive);
+            btn.classList.toggle('btn-outline', !isActive);
+        });
+
+        this.txSortCol = st.sortCol || 'payment_date';
+        this.txSortAsc = Boolean(st.sortAsc);
+        document.querySelectorAll('.th-sort-trigger').forEach(t => {
+            const ind = t.querySelector('.sort-indicator');
+            if (!ind) return;
+            if (t.getAttribute('data-sort-col') === this.txSortCol) {
+                ind.textContent = this.txSortAsc ? '▲' : '▼';
+            } else {
+                ind.textContent = '';
+            }
+        });
+
+        this.headerFilters.transactions = st.headerFilters && typeof st.headerFilters === 'object'
+            ? JSON.parse(JSON.stringify(st.headerFilters))
+            : {};
+        document.querySelectorAll('[data-table="transactions"][data-column]').forEach(wrapper => {
+            const col = wrapper.getAttribute('data-column');
+            const icon = wrapper.querySelector('.header-filter-icon');
+            if (!icon) return;
+            const vals = this.headerFilters.transactions[col];
+            icon.classList.toggle('active', Array.isArray(vals) && vals.length > 0);
+        });
+
+        this.renderTransactionFilterPresets();
+        this.currentPage = 1;
+        this.renderFilterChips('transactions');
+        this.loadTransactions();
     }
 
     setupHeaderFilters() {
@@ -1680,7 +1866,7 @@ class App {
         this.renderFilterChips('transactions');
         const requestId = (this.txRequestId = (this.txRequestId || 0) + 1);
         const tbody = document.getElementById('transactions-body');
-        tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(10) + '</tr>').join('');
+        tbody.innerHTML = Array(5).fill('<tr class="skeleton-row">' + '<td><div class="skeleton-cell" style="width:80%"></div></td>'.repeat(11) + '</tr>').join('');
 
         const filterKey = this.getTransactionsFilterKey();
         const reuseCount = this.currentPage > 1 && this._txCountCache?.key === filterKey && typeof this._txCountCache.count === 'number';
@@ -1735,14 +1921,16 @@ class App {
         if (elCount) elCount.textContent = (totalCount || 0).toLocaleString();
 
         if (error) {
-            tbody.innerHTML = `<tr><td colspan="10" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="11" style="color: var(--danger);">${escapeHTML(error.message)}</td></tr>`;
             return;
         }
 
         if (!data || data.length === 0) {
             if (elPageAmt) elPageAmt.textContent = 'EGP 0.00';
             if (elHealth) elHealth.textContent = '0 Valid';
-            tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
+            this.currentPageTransactions = [];
+            tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><i data-lucide="inbox" style="width:48px;height:48px;opacity:0.5;"></i><h3>No transactions found</h3><p>Try adjusting your filters or go to Import CSV to add data.</p></div></td></tr>';
+            this.updateTxBulkSelectionUI();
             renderIcons(tbody);
             return;
         }
@@ -1783,8 +1971,12 @@ class App {
 
             const refVal = String(t.reference_number || '').trim();
             const sidVal = String(t.student_id || '').trim();
+            const rowSelected = this.selectedTransactionsMap?.has(String(t.id));
             return `
                 <tr data-tx-row-idx="${idx}" style="cursor: pointer;" title="Click to inspect transaction details">
+                    <td style="text-align: center;">
+                        <input type="checkbox" class="tx-row-checkbox" data-tx-id="${escapeHTML(t.id)}" data-tx-row-idx="${idx}" ${rowSelected ? 'checked' : ''} aria-label="Select transaction ${escapeHTML(t.reference_number)}">
+                    </td>
                     <td style="white-space: nowrap;"><strong>${escapeHTML(t.reference_number)}</strong>${refVal ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(refVal)}" data-copy-label="Reference" title="Copy Reference Number">${inlineIcon('copy', 12)}</button>` : ''}</td>
                     <td style="white-space: nowrap;">${escapeHTML(toDateOnly(t.payment_date))}</td>
                     <td style="white-space: normal; word-wrap: break-word; max-width: 165px; font-size: 0.85rem; line-height: 1.3;"><strong>${escapeHTML(t.student_id)}</strong>${sidVal ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(sidVal)}" data-copy-label="Student ID" title="Copy Student ID">${inlineIcon('copy', 12)}</button>` : ''}${stuLevelBadge}</td>
@@ -1835,9 +2027,263 @@ class App {
                     if (tx) this.openTransactionDetailsModal(tx);
                 }
             });
+            tbody.addEventListener('change', (e) => {
+                const cb = e.target.closest('.tx-row-checkbox');
+                if (!cb) return;
+                const idx = parseInt(cb.getAttribute('data-tx-row-idx'), 10);
+                const tx = (this.currentPageTransactions || [])[idx];
+                if (!tx || tx.id == null) return;
+                const key = String(tx.id);
+                if (cb.checked) this.selectedTransactionsMap.set(key, tx);
+                else this.selectedTransactionsMap.delete(key);
+                this.updateTxBulkSelectionUI();
+            });
         }
 
+        this.updateTxBulkSelectionUI();
         renderIcons(tbody);
+    }
+
+    initTransactionBulkAssign() {
+        const selectAllEl = document.getElementById('tx-select-all');
+        const btnClear = document.getElementById('btn-tx-clear-selection');
+        const btnSameMobile = document.getElementById('btn-tx-select-same-mobile');
+        const idInput = document.getElementById('tx-bulk-student-id');
+        const idStatusEl = document.getElementById('tx-bulk-id-status');
+        const btnApply = document.getElementById('btn-tx-bulk-assign-id');
+
+        selectAllEl?.addEventListener('change', () => {
+            const pageRows = this.currentPageTransactions || [];
+            pageRows.forEach(tx => {
+                if (!tx || tx.id == null) return;
+                const key = String(tx.id);
+                if (selectAllEl.checked) this.selectedTransactionsMap.set(key, tx);
+                else this.selectedTransactionsMap.delete(key);
+            });
+            document.querySelectorAll('#transactions-body .tx-row-checkbox').forEach(cb => {
+                cb.checked = selectAllEl.checked;
+            });
+            this.updateTxBulkSelectionUI();
+        });
+
+        btnClear?.addEventListener('click', () => {
+            this.selectedTransactionsMap.clear();
+            document.querySelectorAll('#transactions-body .tx-row-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+            this.updateTxBulkSelectionUI();
+        });
+
+        btnSameMobile?.addEventListener('click', () => {
+            const selectedMobiles = new Set(
+                Array.from(this.selectedTransactionsMap.values())
+                    .map(t => String(t?.customer_mobile || '').replace(/\D/g, '').slice(-10))
+                    .filter(Boolean)
+            );
+            if (selectedMobiles.size === 0) {
+                Toast.show('Selected row(s) do not have a customer mobile number.', 'info');
+                return;
+            }
+            const pageRows = this.currentPageTransactions || [];
+            let added = 0;
+            pageRows.forEach(tx => {
+                if (!tx || tx.id == null) return;
+                const mob = String(tx.customer_mobile || '').replace(/\D/g, '').slice(-10);
+                if (mob && selectedMobiles.has(mob)) {
+                    const key = String(tx.id);
+                    if (!this.selectedTransactionsMap.has(key)) {
+                        this.selectedTransactionsMap.set(key, tx);
+                        added++;
+                    }
+                }
+            });
+            document.querySelectorAll('#transactions-body .tx-row-checkbox').forEach(cb => {
+                const txId = cb.getAttribute('data-tx-id');
+                cb.checked = Boolean(txId && this.selectedTransactionsMap.has(txId));
+            });
+            this.updateTxBulkSelectionUI();
+            Toast.show(
+                added > 0
+                    ? `Added ${added} matching row(s) sharing the same mobile number.`
+                    : 'All visible rows sharing that mobile number are already selected.',
+                'info'
+            );
+        });
+
+        idInput?.addEventListener('input', () => {
+            const val = String(idInput.value || '').trim();
+            if (!idStatusEl) return;
+            if (!val) {
+                idStatusEl.textContent = '';
+                idStatusEl.style.color = 'var(--text-muted)';
+                return;
+            }
+            const status = validateID(val);
+            const student = this.studentMasterByIdMap?.get(val.toLowerCase()) || null;
+            idStatusEl.textContent = student?.full_name ? `${status} — ${student.full_name}` : status;
+            idStatusEl.style.color = status === 'Valid' ? 'var(--success)' : 'var(--warning, #f59e0b)';
+        });
+
+        btnApply?.addEventListener('click', () => this.applyBulkStudentIdToSelected());
+    }
+
+    updateTxBulkSelectionUI() {
+        const bar = document.getElementById('tx-bulk-assign-bar');
+        const countEl = document.getElementById('tx-bulk-selected-count');
+        const selectAllEl = document.getElementById('tx-select-all');
+        const idInput = document.getElementById('tx-bulk-student-id');
+        const btnApply = document.getElementById('btn-tx-bulk-assign-id');
+
+        const selectedCount = this.selectedTransactionsMap?.size || 0;
+        if (countEl) countEl.textContent = String(selectedCount);
+        if (bar) bar.classList.toggle('hidden', selectedCount === 0);
+
+        const canEdit = this.hasRole('accountant');
+        if (idInput) idInput.style.display = canEdit ? '' : 'none';
+        if (btnApply) btnApply.style.display = canEdit ? '' : 'none';
+
+        if (selectAllEl) {
+            const pageRows = (this.currentPageTransactions || []).filter(t => t && t.id != null);
+            const checkedOnPage = pageRows.filter(t => this.selectedTransactionsMap?.has(String(t.id))).length;
+            selectAllEl.checked = pageRows.length > 0 && checkedOnPage === pageRows.length;
+            selectAllEl.indeterminate = checkedOnPage > 0 && checkedOnPage < pageRows.length;
+        }
+    }
+
+    async applyBulkStudentIdToSelected() {
+        if (!this.requireRole('accountant', 'bulk-assign Student IDs')) return;
+        const idInput = document.getElementById('tx-bulk-student-id');
+        const btnApply = document.getElementById('btn-tx-bulk-assign-id');
+        const newId = String(idInput?.value || '').trim();
+        if (!newId) {
+            Toast.show('Enter a Student ID to assign.', 'warning');
+            idInput?.focus();
+            return;
+        }
+
+        const selectedRows = Array.from(this.selectedTransactionsMap?.values() || []);
+        if (selectedRows.length === 0) {
+            Toast.show('Select at least one transaction row first.', 'info');
+            return;
+        }
+
+        const closedRows = [];
+        const openRows = [];
+        for (const tx of selectedRows) {
+            if (isDateInClosedPeriods(tx?.payment_date, this.closedPeriodSet)) {
+                closedRows.push(tx);
+            } else {
+                openRows.push(tx);
+            }
+        }
+        if (openRows.length === 0) {
+            const months = [...new Set(closedRows.map(r => toPeriodMonth(r.payment_date)).filter(Boolean))].sort();
+            Toast.show(`Blocked: all selected row(s) belong to closed accounting period(s): ${months.join(', ')}.`, 'error');
+            return;
+        }
+
+        const idStatus = validateID(newId);
+        const uniqueRefs = [...new Set(openRows.map(t => String(t.reference_number || '').trim()).filter(Boolean))];
+        const lockedCount = openRows.filter(t => isLockedTransaction(t)).length;
+
+        let msg = `Assign Student ID "${newId}" (${idStatus}) to ${openRows.length} row(s) across ${uniqueRefs.length} reference number(s)?`;
+        if (idStatus !== 'Valid') {
+            msg += ` Warning: ID validation returned "${idStatus}".`;
+        }
+        if (closedRows.length > 0) {
+            msg += ` ${closedRows.length} selected row(s) in closed accounting period(s) will be skipped.`;
+        }
+        if (lockedCount > 0) {
+            msg += ` ${lockedCount} row(s) are settled or already posted to ERP (ERP batch will remain unchanged).`;
+        }
+
+        const ok = await window.customConfirm(msg, 'Apply Student ID', 'Cancel');
+        if (!ok) return;
+
+        const origHtml = btnApply ? btnApply.innerHTML : '';
+        if (btnApply) {
+            btnApply.disabled = true;
+            btnApply.innerHTML = '<i data-lucide="loader" class="spin"></i> Applying...';
+            renderIcons(btnApply);
+        }
+
+        try {
+            const existingFixes = await fetchByIn('manual_fixes', '*', 'reference_number', uniqueRefs, 'reference_number');
+            const prevMap = new Map(existingFixes.map(f => [String(f.reference_number || '').trim(), f]));
+
+            const fixesToUpsert = uniqueRefs.map(ref => {
+                const prev = prevMap.get(ref);
+                return {
+                    reference_number: ref,
+                    correct_id: newId,
+                    item_name: prev?.item_name || null,
+                    mapping: prev?.mapping || null,
+                    second_mapping: prev?.second_mapping || null
+                };
+            });
+
+            for (let i = 0; i < fixesToUpsert.length; i += 500) {
+                const chunk = fixesToUpsert.slice(i, i + 500);
+                const { error } = await supabase.from('manual_fixes').upsert(chunk, {
+                    onConflict: 'reference_number',
+                    ignoreDuplicates: false
+                });
+                if (error) throw error;
+            }
+
+            if (Array.isArray(this.allFixesData)) {
+                const updatedSet = new Set(uniqueRefs.map(r => r.toLowerCase()));
+                this.allFixesData = this.allFixesData.filter(f => !updatedSet.has(String(f.reference_number || '').trim().toLowerCase()));
+                this.allFixesData.push(...fixesToUpsert);
+                this.allFixesData.sort((a, b) => String(a.reference_number || '').localeCompare(String(b.reference_number || '')));
+                this.updateFixesStatsAndDropdowns?.(this.allFixesData);
+            }
+
+            const fixesMap = new Map(fixesToUpsert.map(f => [f.reference_number, f]));
+            const changes = await recomputeTransactions(openRows, {
+                includeLocked: true,
+                fixes: fixesMap,
+                mappings: this.allMappingsData || undefined
+            });
+            const updatedCount = changes.length > 0 ? await updateRuleFields(changes) : 0;
+
+            await this.logAudit(
+                'Bulk Student ID Assigned',
+                uniqueRefs.slice(0, 10).join(', ') + (uniqueRefs.length > 10 ? ` (+${uniqueRefs.length - 10} more)` : ''),
+                {
+                    assigned_student_id: newId,
+                    id_status: idStatus,
+                    reference_count: uniqueRefs.length,
+                    rows_selected: openRows.length,
+                    transactions_updated: updatedCount,
+                    closed_period_skipped: closedRows.length,
+                    revert_data: existingFixes.length > 0
+                        ? { table_name: 'manual_fixes', operation: 'update', previous_rows: existingFixes }
+                        : { table_name: 'manual_fixes', operation: 'insert', inserted_keys: uniqueRefs }
+                }
+            );
+
+            this.selectedTransactionsMap.clear();
+            if (idInput) idInput.value = '';
+            const idStatusEl = document.getElementById('tx-bulk-id-status');
+            if (idStatusEl) idStatusEl.textContent = '';
+
+            this.updateTxBulkSelectionUI();
+            this.invalidateDistinctCache();
+            this.invalidateTabs('dashboard', 'transactions', 'fixes', 'erp-export');
+            await this.loadTransactions();
+            this.updateSidebarBadges();
+
+            Toast.show(`Assigned Student ID ${newId} to ${updatedCount || openRows.length} transaction(s).`, 'success');
+        } catch (err) {
+            Toast.show('Bulk assign failed: ' + err.message, 'error');
+        } finally {
+            if (btnApply) {
+                btnApply.innerHTML = origHtml;
+                btnApply.disabled = false;
+                renderIcons(btnApply);
+            }
+        }
     }
 
     async openQuickMapForItem(rawItemName) {

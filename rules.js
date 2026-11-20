@@ -2438,3 +2438,36 @@ export function formatPeriodMonthLabel(periodMonth) {
     const monthName = PERIOD_MONTH_NAMES[Number(m[2]) - 1];
     return monthName ? `${monthName} ${m[1]}` : str;
 }
+
+/**
+ * Builds an RFC-4180 CSV string with formula-injection sanitization for import issue reports.
+ */
+export function buildImportIssuesCsv(issues) {
+    if (!Array.isArray(issues) || issues.length === 0) return '';
+    const headers = ['Category', 'File Name', 'Reference Number', 'Payment Date', 'Student ID', 'Item Name', 'Item Price', 'Bank', 'Status', 'Reason'];
+    const quoteCell = (raw) => {
+        const safe = raw === null || raw === undefined ? '' : String(sanitizeExcelValue(raw));
+        if (/[",\r\n]/.test(safe)) {
+            return `"${safe.replace(/"/g, '""')}"`;
+        }
+        return safe;
+    };
+    const lines = [headers.map(quoteCell).join(',')];
+    for (const item of issues) {
+        if (!item) continue;
+        const row = [
+            item.category || '',
+            item.file_name || '',
+            item.reference_number || '',
+            item.payment_date || '',
+            item.student_id || '',
+            item.item_name || '',
+            item.item_price ?? '',
+            item.bank || '',
+            item.status || '',
+            item.reason || ''
+        ];
+        lines.push(row.map(quoteCell).join(','));
+    }
+    return lines.join('\r\n');
+}

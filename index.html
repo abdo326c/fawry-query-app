@@ -555,6 +555,20 @@
                             <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unsettled">Unsettled</button>
                         </div>
                     </div>
+                    <div id="tx-saved-presets-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.5rem; margin-top: 0.5rem; border-top: 1px solid var(--border-color);">
+                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">Saved Views:</span>
+                            <select id="tx-saved-preset-select" class="input-text" style="max-width: 195px; padding: 0.22rem 0.5rem; font-size: 0.78rem;">
+                                <option value="">Load saved view...</option>
+                            </select>
+                            <div id="tx-saved-presets-pills" style="display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;"></div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                            <input type="text" id="tx-preset-name-input" class="input-text" placeholder="Save current view as..." style="max-width: 175px; padding: 0.22rem 0.5rem; font-size: 0.78rem;">
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-save-tx-preset" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;"><i data-lucide="bookmark-plus"></i> Save View</button>
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-delete-tx-preset" disabled title="Delete selected saved view" style="padding: 0.2rem 0.5rem; font-size: 0.75rem; color: var(--danger);"><i data-lucide="trash-2"></i></button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Attached Telemetry Strip -->
@@ -577,13 +591,29 @@
                         <span>Click any row to view full details, student info &amp; payment breakdown</span>
                     </div>
                 </div>
-                
+
+                <div id="tx-bulk-assign-bar" class="hidden" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.6rem; padding: 0.6rem 1.2rem; border-bottom: 1px solid var(--border-color); background: rgba(56, 189, 248, 0.06);">
+                    <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                        <span style="font-size: 0.82rem;"><strong id="tx-bulk-selected-count">0</strong> selected</span>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-tx-select-same-mobile" title="Select all visible rows sharing the same customer mobile number" style="padding: 0.25rem 0.6rem; font-size: 0.76rem;">Select Same Mobile</button>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <input type="text" id="tx-bulk-student-id" class="input-text" placeholder="Assign Student ID (e.g. 241001234)..." style="max-width: 210px; padding: 0.3rem 0.6rem; font-size: 0.82rem;">
+                        <span id="tx-bulk-id-status" style="font-size: 0.76rem; color: var(--text-muted);"></span>
+                        <button type="button" class="btn btn-primary btn-sm" id="btn-tx-bulk-assign-id" style="padding: 0.32rem 0.75rem; font-size: 0.8rem;"><i data-lucide="user-check"></i> Apply Student ID</button>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-tx-clear-selection" style="padding: 0.32rem 0.65rem; font-size: 0.8rem;">Clear</button>
+                    </div>
+                </div>
+
                 <div id="transactions-filter-chips" class="filter-chips" style="padding: 0.65rem 1.2rem 0; margin-bottom: 0;"></div>
 
                 <div class="table-container">
                     <table class="data-table" id="transactions-table">
                         <thead>
                             <tr>
+                                <th style="width: 34px; text-align: center;">
+                                    <input type="checkbox" id="tx-select-all" aria-label="Select all rows on page" title="Select all rows on this page">
+                                </th>
                                 <th>
                                     <div style="display: inline-flex; align-items: center; gap: 0.25rem;">
                                         <span class="th-sort-trigger" data-sort-col="reference_number" style="cursor: pointer; user-select: none;" title="Sort by Reference Number">Ref Number <span class="sort-indicator"></span></span>
@@ -982,7 +1012,8 @@
                         </div>
                         <p id="progress-text">0 / 0 rows processed</p>
                         <div id="import-log" class="log-console mt-4"></div>
-                        <div id="import-action-bar" style="margin-top: 1.5rem; display: none; justify-content: flex-end;">
+                        <div id="import-action-bar" style="margin-top: 1.5rem; display: none; justify-content: flex-end; gap: 0.65rem; flex-wrap: wrap;">
+                            <button type="button" class="btn btn-outline hidden" id="btn-download-import-errors"><i data-lucide="file-warning" style="width: 16px; height: 16px; margin-right: 6px;"></i> Download Issue Report (CSV)</button>
                             <button class="btn btn-primary" id="btn-import-done"><i data-lucide="check-circle" style="width: 16px; height: 16px; margin-right: 6px;"></i> Done / View Transactions</button>
                         </div>
                     </div>
@@ -1831,6 +1862,21 @@
                                 <button type="button" class="btn btn-outline btn-sm" data-erp-filter="recorded">Already in ERP</button>
                                 <button type="button" class="btn btn-outline btn-sm" data-erp-filter="invalid">Invalid IDs</button>
                                 <button type="button" class="btn btn-outline btn-sm" data-erp-filter="settled">Settled Only</button>
+                            </div>
+
+                            <div id="erp-saved-presets-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.55rem; margin-top: 0.55rem; border-top: 1px solid var(--border-color);">
+                                <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                                    <span style="font-size: 0.75rem; color: var(--text-muted);">Saved Views:</span>
+                                    <select id="erp-saved-preset-select" class="input-text" style="max-width: 195px; padding: 0.22rem 0.5rem; font-size: 0.78rem;">
+                                        <option value="">Load saved view...</option>
+                                    </select>
+                                    <div id="erp-saved-presets-pills" style="display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;"></div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                                    <input type="text" id="erp-preset-name-input" class="input-text" placeholder="Save current view as..." style="max-width: 175px; padding: 0.22rem 0.5rem; font-size: 0.78rem;">
+                                    <button type="button" class="btn btn-outline btn-sm" id="btn-save-erp-preset" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;"><i data-lucide="bookmark-plus"></i> Save View</button>
+                                    <button type="button" class="btn btn-outline btn-sm" id="btn-delete-erp-preset" disabled title="Delete selected saved view" style="padding: 0.2rem 0.5rem; font-size: 0.75rem; color: var(--danger);"><i data-lucide="trash-2"></i></button>
+                                </div>
                             </div>
                         </div>
 

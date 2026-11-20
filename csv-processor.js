@@ -1,6 +1,7 @@
 import { supabase } from './supabase.js';
 import {
     validateID as sharedValidateID,
+    isNonInvalidTransaction,
     applyBusinessRules,
     buildMappingLookup,
     diffTransaction,
@@ -9,6 +10,7 @@ import {
     fetchByIn,
     isLockedTransaction,
     findClosedPeriodsInRows,
+    toPeriodMonth,
     escapeHTML
 } from './rules.js';
 
@@ -18,6 +20,7 @@ export class FawryProcessor {
         this.mappings = [];
         this.fixes = [];
         this.skippedTransactions = [];
+        this.importIssues = [];
         this.tuiList = [
             "Eng EGP New ST 2025", "ITCS25 EGP New St 2025", "BBA25 EGP New St 2025", 
             "BioTech25 EGP New St 2025", "Egyptian IT&CS Fees CONT 2024", 
@@ -258,6 +261,7 @@ export class FawryProcessor {
         this.log(`Starting import for ${files.length} files...`);
         this.hasErrors = false;
         this.skippedTransactions = [];
+        this.importIssues = [];
         await this.loadConfig();
         if (this.hasErrors) {
             this.log(`Import stopped: rules could not be loaded, so imported data would be incomplete.`);
@@ -537,6 +541,18 @@ export class FawryProcessor {
                             status: pStatus,
                             file_name: item.file.name
                         });
+                        this.importIssues.push({
+                            category: 'Skipped (Non-Payable)',
+                            file_name: item.file.name,
+                            reference_number: refNumber,
+                            payment_date: paymentDate || '',
+                            student_id: studentId || '',
+                            item_name: itemName || '',
+                            item_price: itemPrice ?? '',
+                            bank: bank || '',
+                            status: pStatus || '',
+                            reason: `Non-payable status: ${pStatus || 'Unknown'}`
+                        });
                         continue;
                     }
 
@@ -629,6 +645,20 @@ export class FawryProcessor {
             t.mapping = r.mapping;
             t.second_mapping = r.secondMapping;
             t.id_status = r.idStatus;
+            if (!isNonInvalidTransaction(t)) {
+                this.importIssues.push({
+                    category: 'Invalid / Missing Student ID',
+                    file_name: fileName,
+                    reference_number: t.reference_number || '',
+                    payment_date: t.payment_date || '',
+                    student_id: t.student_id || '',
+                    item_name: t.item_name || '',
+                    item_price: t.item_price ?? '',
+                    bank: t.bank || '',
+                    status: t.id_status || 'Missing ID',
+                    reason: t.id_status || 'Missing ID'
+                });
+            }
         }
 
         // 3. Find which rows already exist, so a re-import does NOT take ownership of them.
@@ -660,6 +690,21 @@ export class FawryProcessor {
                 const { blockedRows, closedMonths } = findClosedPeriodsInRows(candidateRows, closedSet, 'payment_date');
                 if (blockedRows.length > 0) {
                     this.hasErrors = true;
+                    blockedRows.forEach(row => {
+                        const ym = toPeriodMonth(row.payment_date);
+                        this.importIssues.push({
+                            category: 'Blocked (Closed Period)',
+                            file_name: fileName,
+                            reference_number: row.reference_number || '',
+                            payment_date: row.payment_date || '',
+                            student_id: row.student_id || '',
+                            item_name: row.item_name || '',
+                            item_price: row.item_price ?? '',
+                            bank: row.bank || '',
+                            status: `Closed ${ym}`,
+                            reason: `Accounting period ${ym} is closed`
+                        });
+                    });
                     this.log(`Import blocked: ${blockedRows.length} transaction(s) fall inside closed accounting period(s): ${closedMonths.join(', ')}. Ask an Admin to unlock the period first.`);
                     return false;
                 }
@@ -729,6 +774,20 @@ export class FawryProcessor {
                         hasError = true;
                         this.hasErrors = true;
                         lastError = error.message;
+                        chunk.forEach(row => {
+                            this.importIssues.push({
+                                category: 'Database Error',
+                                file_name: fileName,
+                                reference_number: row.reference_number || '',
+                                payment_date: row.payment_date || '',
+                                student_id: row.student_id || '',
+                                item_name: row.item_name || '',
+                                item_price: row.item_price ?? '',
+                                bank: row.bank || '',
+                                status: row.id_status || '',
+                                reason: error.message
+                            });
+                        });
                         this.log(`Database error: ${error.message}`);
                     } else {
                         saved += chunk.length;

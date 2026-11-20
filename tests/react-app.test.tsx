@@ -174,7 +174,9 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'scheduleDailyFxNoonSync', 'syncDashboardFxRates', 'loadDashboard',
       // Transactions, Mappings & Fixes
       'initImport', 'handleFiles', 'reapplyRulesTo', 'initModals', 'initBulkUploads', 'initReapply',
-      'initFilters', 'setupHeaderFilters', 'initPagination', 'initExport', 'loadTransactions',
+      'initFilters', 'initTransactionFilterPresets', 'applyTransactionFilterPreset',
+      'initTransactionBulkAssign', 'applyBulkStudentIdToSelected',
+      'setupHeaderFilters', 'initPagination', 'initExport', 'loadTransactions',
       'openQuickMapForItem', 'openTransactionDetailsModal', 'loadMappings', 'renderMappingsPage',
       'deduplicateItemMappings', 'loadFixes', 'renderFixesPage', 'deduplicateManualFixes',
       // Auto-Matcher (auto-matcher.js)
@@ -185,7 +187,8 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'initStudentMaster', 'openStudentModal', 'loadStudents', 'renderStudentsPage',
       'loadStudentProfile', 'exportStudentStatement',
       // ERP Export (erp-export.js)
-      'initErpExport', 'updateErpDropdowns', 'formatErpCurrencySummary', 'fetchForeignRowsForErp',
+      'initErpExport', 'initErpFilterPresets', 'applyErpFilterPreset', 'updateErpDropdowns',
+      'formatErpCurrencySummary', 'fetchForeignRowsForErp',
       'loadErpExport', 'updateErpRecordButtonLabel', 'openManualFixFromErp', 'renderErpPreview',
       'erpAmount', 'erpAccount', 'erpDayShort', 'resolveErpExportDate', 'downloadErpExport',
       'openErpDateChoiceModal', 'generateErpExcel', 'recordErpReferences',
@@ -377,5 +380,84 @@ describe('React 19 + TypeScript Migration Architecture', () => {
         p_notes: 'Post-audit correction'
       });
     });
+
+    // Verify Feature #4: Saved Filter Presets (Transactions & ERP Export)
+    expect(document.getElementById('btn-download-import-errors')).not.toBeNull();
+    expect(document.querySelectorAll('.modal').length).toBe(18);
+
+    const txPresetName = document.getElementById('tx-preset-name-input') as HTMLInputElement | null;
+    const btnSaveTxPreset = document.getElementById('btn-save-tx-preset') as HTMLButtonElement | null;
+    const btnDelTxPreset = document.getElementById('btn-delete-tx-preset') as HTMLButtonElement | null;
+    const txPills = document.getElementById('tx-saved-presets-pills');
+    const txSelect = document.getElementById('tx-saved-preset-select') as HTMLSelectElement | null;
+
+    expect(txPresetName).not.toBeNull();
+    expect(btnSaveTxPreset).not.toBeNull();
+    expect(txSelect).not.toBeNull();
+
+    (app as { txQuickFilter?: string }).txQuickFilter = 'unsettled';
+    if (txPresetName) txPresetName.value = 'Overdue Unsettled';
+    btnSaveTxPreset?.click();
+    expect(btnDelTxPreset?.disabled).toBe(false);
+    expect(txPills?.textContent).toContain('Overdue Unsettled');
+
+    (app as { txQuickFilter?: string }).txQuickFilter = 'all';
+    const txPillBtn = txPills?.querySelector('[data-tx-preset-id]') as HTMLButtonElement | null;
+    txPillBtn?.click();
+    expect((app as { txQuickFilter?: string }).txQuickFilter).toBe('unsettled');
+
+    btnDelTxPreset?.click();
+    expect(txPills?.textContent).not.toContain('Overdue Unsettled');
+
+    const erpPresetName = document.getElementById('erp-preset-name-input') as HTMLInputElement | null;
+    const btnSaveErpPreset = document.getElementById('btn-save-erp-preset') as HTMLButtonElement | null;
+    const btnDelErpPreset = document.getElementById('btn-delete-erp-preset') as HTMLButtonElement | null;
+    const erpPills = document.getElementById('erp-saved-presets-pills');
+
+    if (erpPresetName) erpPresetName.value = 'Unposted Current Month';
+    btnSaveErpPreset?.click();
+    expect(btnDelErpPreset?.disabled).toBe(false);
+    expect(erpPills?.textContent).toContain('Unposted Current Month');
+    btnDelErpPreset?.click();
+    expect(erpPills?.textContent).not.toContain('Unposted Current Month');
+
+    // Verify Feature #5: Bulk Assign Student ID & Select Same Mobile on Transactions
+    const bulkBar = document.getElementById('tx-bulk-assign-bar');
+    const bulkCountEl = document.getElementById('tx-bulk-selected-count');
+    const btnSameMobile = document.getElementById('btn-tx-select-same-mobile') as HTMLButtonElement | null;
+    const bulkSidInput = document.getElementById('tx-bulk-student-id') as HTMLInputElement | null;
+    const bulkIdStatus = document.getElementById('tx-bulk-id-status');
+    const btnClearSel = document.getElementById('btn-tx-clear-selection') as HTMLButtonElement | null;
+
+    expect(bulkBar?.classList.contains('hidden')).toBe(true);
+    const sampleRows = [
+      { id: 101, reference_number: 'REF-1', payment_date: '2026-09-10', customer_mobile: '01012345678', student_id: '' },
+      { id: 102, reference_number: 'REF-2', payment_date: '2026-09-12', customer_mobile: '201012345678', student_id: '' }
+    ];
+    (app as { currentPageTransactions?: unknown[] }).currentPageTransactions = sampleRows;
+    const selMap = (app as { selectedTransactionsMap?: Map<string, unknown> }).selectedTransactionsMap;
+    selMap?.set('101', sampleRows[0]);
+    (app.updateTxBulkSelectionUI as () => void)();
+    expect(bulkBar?.classList.contains('hidden')).toBe(false);
+    expect(bulkCountEl?.textContent).toBe('1');
+
+    btnSameMobile?.click();
+    expect(bulkCountEl?.textContent).toBe('2');
+
+    if (bulkSidInput) {
+      bulkSidInput.value = '241001234';
+      fireEvent.input(bulkSidInput);
+    }
+    expect(bulkIdStatus?.textContent).toContain('Valid');
+
+    // Closed-period guard inside applyBulkStudentIdToSelected skips/blocks closed months
+    (app as { closedPeriodSet?: Set<string> }).closedPeriodSet = new Set(['2026-09']);
+    await (app.applyBulkStudentIdToSelected as () => Promise<void>)();
+    expect(selMap?.size).toBe(2); // blocked without clearing selection
+    (app as { closedPeriodSet?: Set<string> }).closedPeriodSet = new Set();
+
+    btnClearSel?.click();
+    expect(selMap?.size).toBe(0);
+    expect(bulkBar?.classList.contains('hidden')).toBe(true);
   });
 });
