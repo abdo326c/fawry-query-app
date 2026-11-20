@@ -1997,3 +1997,21 @@ tr:hover .inline-copy-btn,
 #view-users .data-table {
     min-width: 760px;
 }
+
+.hygiene-metric-card {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.85rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background-color 0.14s ease, transform 0.12s ease;
+}
+
+.hygiene-metric-card:hover,
+.hygiene-metric-card:focus-visible {
+    border-color: var(--primary-border);
+    background: var(--bg-card-hover);
+    transform: translateY(-1px);
+    outline: none;
+}

@@ -119,6 +119,39 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
                 console.log(`  ✓ Hygiene report uploaded to Google Drive: ${hierarchy.year} > ${hierarchy.month} > ${hierarchy.week}`);
                 console.log(`    File URL: ${uploadRes.webViewLink}`);
 
+                if (driveReportUrl && data?.audit_id) {
+                    try {
+                        const existingRes = await fetch(
+                            `${SUPABASE_URL}/rest/v1/audit_logs?id=eq.${encodeURIComponent(data.audit_id)}&select=details`,
+                            {
+                                headers: {
+                                    'apikey': SUPABASE_KEY,
+                                    'Authorization': `Bearer ${SUPABASE_KEY}`
+                                }
+                            }
+                        );
+                        const existingRows = existingRes.ok ? await existingRes.json() : [];
+                        const currentDetails = (Array.isArray(existingRows) && existingRows[0]?.details) || {};
+                        await fetch(`${SUPABASE_URL}/rest/v1/audit_logs?id=eq.${encodeURIComponent(data.audit_id)}`, {
+                            method: 'PATCH',
+                            headers: {
+                                'apikey': SUPABASE_KEY,
+                                'Authorization': `Bearer ${SUPABASE_KEY}`,
+                                'Content-Type': 'application/json',
+                                'Prefer': 'return=minimal'
+                            },
+                            body: JSON.stringify({
+                                details: {
+                                    ...currentDetails,
+                                    drive_folder_url: driveReportUrl
+                                }
+                            })
+                        });
+                    } catch (patchErr) {
+                        console.warn('⚠️  Could not attach Drive URL to audit_logs:', patchErr.message);
+                    }
+                }
+
                 // Purge temp file immediately
                 if (fs.existsSync(tempReportPath)) {
                     fs.unlinkSync(tempReportPath);

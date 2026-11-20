@@ -2932,7 +2932,7 @@
 
     <!-- Automated Hygiene & Deduplication Report Modal (Admin Only) -->
     <div id="modal-hygiene-report" class="modal hidden" style="z-index: 10030;">
-        <div class="modal-content glass-card" style="max-width: 680px; max-height: 90vh; display: flex; flex-direction: column; border: 1px solid rgba(56, 189, 248, 0.3); ">
+        <div class="modal-content glass-card" style="max-width: 720px; max-height: 90vh; display: flex; flex-direction: column; border: 1px solid rgba(56, 189, 248, 0.3);">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding: 1.25rem 1.5rem;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 38px; height: 38px; border-radius: 8px; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; color: var(--primary);">
@@ -2940,59 +2940,62 @@
                     </div>
                     <div>
                         <h2 style="font-size: 1.2rem; font-weight: 600; margin: 0;">Automated Deduplication &amp; Health Report</h2>
-                        <span id="hygiene-modal-subtitle" style="font-size: 0.8rem; color: var(--text-muted);">Background audit completed recently</span>
+                        <span id="hygiene-modal-subtitle" style="font-size: 0.8rem; color: var(--text-muted);">Live database inspection ready</span>
                     </div>
                 </div>
                 <button class="btn-close" id="btn-close-hygiene-modal" title="Close"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1.5rem;">
                 <!-- Health Score Hero Banner -->
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-radius: 10px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), var(--primary-soft)); border: 1px solid rgba(16, 185, 129, 0.3); margin-bottom: 1.25rem;">
+                <div id="hygiene-hero-banner" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; border-radius: 10px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), var(--primary-soft)); border: 1px solid rgba(16, 185, 129, 0.3); margin-bottom: 1.15rem;">
                     <div>
                         <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600;">Database Integrity Status</div>
-                        <div id="hygiene-health-status-text" style="font-size: 1.05rem; font-weight: 600; color: var(--success); margin-top: 2px;">Pristine Data Quality</div>
+                        <div id="hygiene-health-status-text" style="font-size: 1.02rem; font-weight: 600; color: var(--success); margin-top: 2px;">Ready for Live Scan</div>
                     </div>
-                    <div style="text-align: right;">
-                        <span id="hygiene-modal-score" style="font-size: 1.8rem; font-weight: 700; color: var(--success); font-family: monospace;">99.2%</span>
+                    <div style="text-align: right; flex-shrink: 0;">
+                        <span id="hygiene-modal-score" style="font-size: 1.8rem; font-weight: 700; color: var(--success); font-family: monospace;">--%</span>
                         <div style="font-size: 0.7rem; color: var(--text-muted);">Health Score</div>
                     </div>
                 </div>
 
-                <!-- Metrics Grid -->
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1.25rem;">
-                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                <!-- Interactive Metrics Grid -->
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <div class="hygiene-metric-card" data-hygiene-drill="transactions" role="button" tabindex="0" title="Open Fawry Transactions">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Total Transactions</div>
                         <div id="hygiene-modal-tx-count" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">-</div>
                     </div>
-                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div class="hygiene-metric-card" data-hygiene-drill="dup-mappings" role="button" tabindex="0" title="Inspect Item Mappings">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Duplicate Mappings</div>
                         <div id="hygiene-modal-dup-mappings" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div class="hygiene-metric-card" data-hygiene-drill="dup-fixes" role="button" tabindex="0" title="Inspect Manual Fixes">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Duplicate Fixes</div>
                         <div id="hygiene-modal-dup-fixes" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div class="hygiene-metric-card" data-hygiene-drill="identical-dups" role="button" tabindex="0" title="Open Duplicate Transactions Scanner">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Identical Duplicates</div>
                         <div id="hygiene-modal-identical-dups" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div class="hygiene-metric-card" data-hygiene-drill="unmapped" role="button" tabindex="0" title="Inspect Transactions Missing Mapping">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Missing Mappings</div>
                         <div id="hygiene-modal-unmapped" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
-                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; text-align: center;">
+                    <div class="hygiene-metric-card" data-hygiene-drill="invalid-ids" role="button" tabindex="0" title="Inspect Unmatched Student IDs">
                         <div style="font-size: 0.75rem; color: var(--text-muted);">Unmatched IDs</div>
-                        <div id="hygiene-modal-invalid-ids" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">595</div>
+                        <div id="hygiene-modal-invalid-ids" style="font-size: 1.2rem; font-weight: 600; margin-top: 4px; color: var(--text-primary);">0</div>
                     </div>
+                </div>
+                <div style="font-size: 0.73rem; color: var(--text-muted); text-align: right; margin-bottom: 1rem;">
+                    Click any card to inspect records
                 </div>
 
                 <!-- Explanation & Status Box -->
                 <div id="hygiene-modal-explanation-box" style="padding: 0.9rem 1.1rem; border-radius: 8px; background: var(--primary-soft); border: 1px solid rgba(56, 189, 248, 0.2); font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 1rem;">
-                    <div id="hygiene-modal-explanation-text">The automated deduplication scanner ran in the background. All rules and transactions are verified and in sync.</div>
+                    <div id="hygiene-modal-explanation-text">Click <strong>Run Live Scan</strong> to inspect the live database for duplicates, missing mappings, and unmatched Student IDs.</div>
                 </div>
 
-                <!-- Cloud Drive Link Row -->
-                <div id="hygiene-modal-drive-row" style="display: flex; align-items: center; justify-content: space-between; font-size: 0.82rem; padding: 0.6rem 0.8rem; background: var(--bg-subtle); border-radius: 6px; border: 1px solid var(--border-color);">
+                <!-- Cloud Drive Link Row (hidden unless a real Drive file URL exists) -->
+                <div id="hygiene-modal-drive-row" style="display: none; align-items: center; justify-content: space-between; font-size: 0.82rem; padding: 0.6rem 0.8rem; background: var(--bg-subtle); border-radius: 6px; border: 1px solid var(--border-color);">
                     <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted);">
                         <i data-lucide="cloud" style="width: 16px; height: 16px; color: var(--primary);"></i>
                         <span>Audit report saved to Google Drive:</span>
@@ -3003,14 +3006,20 @@
                     </a>
                 </div>
             </div>
-            <div class="modal-footer" style="padding: 1.25rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
-                <div>
-                    <button class="btn btn-outline" id="btn-hygiene-revert" style="display: none; border-color: rgba(239, 68, 68, 0.4); color: var(--danger);" title="Revert any changes made by this automated run">
+            <div class="modal-footer" style="padding: 1.15rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-outline" id="btn-hygiene-run-scan" title="Run a live inspection scan now without deleting records">
+                        <i data-lucide="refresh-cw"></i> Run Live Scan
+                    </button>
+                    <button type="button" class="btn btn-outline" id="btn-hygiene-run-clean" style="display: none; border-color: rgba(245, 158, 11, 0.45); color: var(--warning, #f59e0b);" title="Safely remove true duplicate mappings &amp; fixes with a rollback snapshot">
+                        <i data-lucide="sparkles"></i> Auto-Clean Duplicates
+                    </button>
+                    <button type="button" class="btn btn-outline" id="btn-hygiene-revert" style="display: none; border-color: rgba(239, 68, 68, 0.4); color: var(--danger);" title="Revert any changes made by this automated run">
                         <i data-lucide="undo-2"></i> Reverse Clean (Undo)
                     </button>
                 </div>
                 <div style="display: flex; gap: 0.75rem;">
-                    <button class="btn btn-primary" id="btn-hygiene-acknowledge" style="min-width: 160px;">
+                    <button type="button" class="btn btn-primary" id="btn-hygiene-acknowledge" style="min-width: 150px;">
                         <i data-lucide="check"></i> Everything is Okay
                     </button>
                 </div>

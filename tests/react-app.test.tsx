@@ -193,11 +193,11 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'erpAmount', 'erpAccount', 'erpDayShort', 'resolveErpExportDate', 'downloadErpExport',
       'openErpDateChoiceModal', 'generateErpExcel', 'recordErpReferences',
       // Admin, Audit, Double-Payments & Hygiene (admin-audit.js)
-      'initUsersAndRoles', 'loadDatabaseStorageStats', 'initAccountingPeriodLock', 'loadClosedPeriods', 'renderClosedPeriodsCard',
+      'initUsersAndRoles', 'initAdminSubtabs', 'switchAdminSubtab', 'loadDatabaseStorageStats', 'initAccountingPeriodLock', 'loadClosedPeriods', 'renderClosedPeriodsCard',
       'isDateInClosedPeriod', 'initColdStorageArchive', 'loadUsersAndRoles', 'renderUserRolesTable',
       'renderAuditLogsTable', 'revertAuditLogEntry', 'initDoublePaymentsDetector', 'loadDoublePayments',
       'renderDoublePaymentsTable', 'exportDoublePayments', 'initHygieneReportModal',
-      'checkAndShowHygieneReportModal',
+      'runLiveHygieneAudit', 'renderHygieneAuditModal', 'drillDownHygieneMetric', 'checkAndShowHygieneReportModal',
       // Foreign / BM Transactions
       'initForeignTransactions', 'loadForeignTransactions', 'applyForeignFilters',
       'renderForeignTransactionsTable', 'openForeignTransactionDetailsModal', 'openForeignFixModal',
@@ -540,5 +540,59 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     expect(document.getElementById('admin-kpi-audit-count')?.textContent).toBe('2 events');
     expect(document.getElementById('audit-logs-table-body')?.textContent).toContain('Accounting Period Closed');
     expect(document.getElementById('audit-logs-table-body')?.textContent).not.toContain('User Role Assigned');
+
+    // Verify Live Hygiene Report Scan, Dynamic Status & Explanation, Drive Row visibility, and Buttons
+    expect(document.querySelectorAll('.modal').length).toBe(18);
+    expect(document.getElementById('btn-hygiene-run-scan')).not.toBeNull();
+    expect(document.getElementById('btn-hygiene-run-clean')).not.toBeNull();
+    expect(document.getElementById('hygiene-hero-banner')).not.toBeNull();
+
+    rpcMock.mockClear();
+    rpcMock.mockResolvedValueOnce({
+      data: {
+        audit_id: 512,
+        health_score: 99.2,
+        total_transactions: 39665,
+        duplicate_mappings: 2,
+        duplicate_fixes: 0,
+        identical_tx_duplicates: 0,
+        conflicting_case_mappings: 0,
+        unmapped_items: 3,
+        invalid_ids: 592,
+        cleaned_mappings: 0,
+        cleaned_fixes: 0,
+        auto_cleaned: false
+      },
+      error: null
+    });
+
+    await (app.runLiveHygieneAudit as (opts?: { clean?: boolean }) => Promise<unknown>)({ clean: false });
+    expect(rpcMock).toHaveBeenCalledWith('run_database_hygiene_audit', { p_clean: false });
+    expect(document.getElementById('hygiene-modal-tx-count')?.textContent).toBe('39,665');
+    expect(document.getElementById('hygiene-modal-invalid-ids')?.textContent).toBe('592');
+    expect(document.getElementById('hygiene-health-status-text')?.textContent).toContain('Detected');
+    expect(document.getElementById('hygiene-modal-explanation-text')?.textContent).toContain('592');
+    expect((document.getElementById('btn-hygiene-run-clean') as HTMLElement | null)?.style.display).toBe('inline-flex');
+    expect((document.getElementById('hygiene-modal-drive-row') as HTMLElement | null)?.style.display).toBe('none');
+
+    // Valid Drive URL unhides drive row cleanly
+    (app.renderHygieneAuditModal as (rec: unknown) => void)({
+      id: 513,
+      created_at: new Date().toISOString(),
+      details: {
+        health_score: '100%',
+        total_transactions: 39665,
+        duplicate_mappings: 0,
+        duplicate_fixes: 0,
+        identical_tx_duplicates: 0,
+        conflicting_case_mappings: 0,
+        unmapped_items: 0,
+        invalid_ids: 0,
+        drive_folder_url: 'https://drive.google.com/file/d/abc123/view'
+      }
+    });
+    expect(document.getElementById('hygiene-health-status-text')?.textContent).toContain('100% Verified');
+    expect((document.getElementById('hygiene-modal-drive-row') as HTMLElement | null)?.style.display).toBe('flex');
+    expect((document.getElementById('hygiene-modal-drive-link') as HTMLAnchorElement | null)?.href).toBe('https://drive.google.com/file/d/abc123/view');
   });
 });

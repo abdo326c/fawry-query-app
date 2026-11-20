@@ -1228,17 +1228,68 @@ class AdminAuditMixin {
             });
         }
 
+        const btnRunScan = document.getElementById('btn-hygiene-run-scan');
+        if (btnRunScan) {
+            btnRunScan.addEventListener('click', async () => {
+                if (!this.requireRole('admin', 'run a live database hygiene scan')) return;
+                const origHtml = btnRunScan.innerHTML;
+                btnRunScan.disabled = true;
+                btnRunScan.innerHTML = '<i data-lucide="loader" class="spin"></i> Scanning...';
+                renderIcons(btnRunScan);
+                try {
+                    const rec = await this.runLiveHygieneAudit({ clean: false, showToastOnError: true });
+                    if (rec) {
+                        Toast.show('Live Database Hygiene Scan completed.', 'success');
+                    }
+                } finally {
+                    btnRunScan.innerHTML = origHtml;
+                    btnRunScan.disabled = false;
+                    renderIcons(btnRunScan);
+                }
+            });
+        }
+
+        const btnRunClean = document.getElementById('btn-hygiene-run-clean');
+        if (btnRunClean) {
+            btnRunClean.addEventListener('click', async () => {
+                if (!this.requireRole('admin', 'clean duplicate rules in the database')) return;
+                const ok = await window.customConfirm(
+                    'Safely merge and remove duplicate mapping rules and duplicate manual fixes? A full rollback snapshot will be captured in the Audit Log.',
+                    'Auto-Clean Duplicates',
+                    'Cancel'
+                );
+                if (!ok) return;
+
+                const origHtml = btnRunClean.innerHTML;
+                btnRunClean.disabled = true;
+                btnRunClean.innerHTML = '<i data-lucide="loader" class="spin"></i> Cleaning...';
+                renderIcons(btnRunClean);
+                try {
+                    await this.runLiveHygieneAudit({ clean: true, showToastOnError: true });
+                } finally {
+                    btnRunClean.innerHTML = origHtml;
+                    btnRunClean.disabled = false;
+                    renderIcons(btnRunClean);
+                }
+            });
+        }
+
         const btnRevert = document.getElementById('btn-hygiene-revert');
         if (btnRevert) {
             btnRevert.addEventListener('click', async () => {
                 if (!this.requireRole('admin', 'revert automated database hygiene changes')) return;
                 if (!this.currentHygieneAudit?.id) return;
 
-                const confirmed = confirm(`Are you sure you want to revert the deduplication clean from Audit #${this.currentHygieneAudit.id}? This will restore all previously removed mapping rules and manual fixes.`);
+                const confirmed = await window.customConfirm(
+                    `Are you sure you want to revert the deduplication clean from Audit #${this.currentHygieneAudit.id}? This will restore all previously removed mapping rules and manual fixes.`,
+                    'Reverse Clean (Undo)',
+                    'Cancel'
+                );
                 if (!confirmed) return;
 
                 btnRevert.disabled = true;
                 btnRevert.innerHTML = '<i data-lucide="loader" class="spin"></i> Reverting...';
+                renderIcons(btnRevert);
 
                 try {
                     const { data, error } = await supabase.rpc('rollback_database_hygiene_audit', {
@@ -1251,34 +1302,324 @@ class AdminAuditMixin {
                         localStorage.setItem('fawry_acknowledged_hygiene_id', String(this.currentHygieneAudit.id));
                     }
                     document.getElementById('modal-hygiene-report')?.classList.add('hidden');
-                    
-                    // Reload rules tables if user is looking at them
+
                     this.loadMappings?.();
                     this.loadFixes?.();
+                    if (document.getElementById('view-users')?.classList.contains('active')) {
+                        this.loadUsersAndRoles?.({ skipSync: true });
+                    }
                 } catch (err) {
                     Toast.show('Rollback failed: ' + err.message, 'error');
                 } finally {
                     btnRevert.disabled = false;
                     btnRevert.innerHTML = '<i data-lucide="undo-2"></i> Reverse Clean (Undo)';
-                    if (window.lucide) lucide.createIcons();
+                    renderIcons(btnRevert);
                 }
             });
         }
 
-        // Manual trigger from Users & Roles tab header
+        // Interactive drill-down cards
+        document.querySelectorAll('#modal-hygiene-report [data-hygiene-drill]').forEach(card => {
+            const go = () => {
+                const key = card.getAttribute('data-hygiene-drill');
+                if (key) this.drillDownHygieneMetric(key);
+            };
+            card.addEventListener('click', go);
+            card.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    go();
+                }
+            });
+        });
+
+        // Manual trigger from Users & Roles tab header: runs live scan on open
         const btnViewHygiene = document.getElementById('btn-view-hygiene-report');
         if (btnViewHygiene) {
-            btnViewHygiene.addEventListener('click', () => {
+            btnViewHygiene.addEventListener('click', async () => {
                 if (!this.requireRole('admin', 'view hygiene audit report')) return;
-                this.checkAndShowHygieneReportModal({ force: true });
+                const origHtml = btnViewHygiene.innerHTML;
+                btnViewHygiene.disabled = true;
+                btnViewHygiene.innerHTML = '<i data-lucide="loader" class="spin"></i> Scanning...';
+                renderIcons(btnViewHygiene);
+                try {
+                    await this.checkAndShowHygieneReportModal({ force: true, runLive: true });
+                } finally {
+                    btnViewHygiene.innerHTML = origHtml;
+                    btnViewHygiene.disabled = false;
+                    renderIcons(btnViewHygiene);
+                }
             });
         }
     }
 
-    async checkAndShowHygieneReportModal({ force = false } = {}) {
-        if (!this.hasRole('admin')) return;
+    drillDownHygieneMetric(drillKey) {
+        document.getElementById('modal-hygiene-report')?.classList.add('hidden');
+        if (drillKey === 'dup-mappings') {
+            document.querySelector('.nav-link[data-tab="mappings"]')?.click();
+            return;
+        }
+        if (drillKey === 'dup-fixes') {
+            document.querySelector('.nav-link[data-tab="fixes"]')?.click();
+            return;
+        }
+        document.querySelector('.nav-link[data-tab="transactions"]')?.click();
+        if (drillKey === 'identical-dups') {
+            document.getElementById('btn-detect-duplicates')?.click();
+            return;
+        }
+
+        const clearDateInput = (id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = '';
+            if (el._flatpickr) el._flatpickr.setDate('', false);
+        };
+        clearDateInput('filter-date-from');
+        clearDateInput('filter-date-to');
+        const searchEl = document.getElementById('search-input');
+        if (searchEl) searchEl.value = '';
+
+        this.headerFilters = this.headerFilters || {};
+        this.headerFilters.transactions = {};
+        document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => {
+            icon.classList.remove('active');
+        });
+
+        if (drillKey === 'unmapped') {
+            this.txQuickFilter = 'unmapped';
+        } else if (drillKey === 'invalid-ids') {
+            this.txQuickFilter = 'all';
+            this.headerFilters.transactions.id_status = ['Missing ID', 'Error'];
+            document.querySelector('.th-filter-wrapper[data-table="transactions"][data-column="id_status"] .header-filter-icon')?.classList.add('active');
+        } else {
+            this.txQuickFilter = 'all';
+        }
+
+        document.querySelectorAll('[data-tx-quick-filter]').forEach(btn => {
+            const isActive = btn.getAttribute('data-tx-quick-filter') === (this.txQuickFilter || 'all');
+            btn.classList.toggle('btn-primary', isActive);
+            btn.classList.toggle('btn-outline', !isActive);
+        });
+
+        this.currentPage = 1;
+        this.renderFilterChips?.('transactions');
+        this.loadTransactions?.();
+    }
+
+    async runLiveHygieneAudit({ clean = false, showToastOnError = false } = {}) {
+        if (!this.hasRole('admin')) return null;
+        if (typeof supabase.rpc !== 'function') return null;
 
         try {
+            const { data, error } = await supabase.rpc('run_database_hygiene_audit', {
+                p_clean: Boolean(clean)
+            });
+            if (error) throw error;
+            if (!data || typeof data !== 'object' || Array.isArray(data) || (data.total_transactions === undefined && data.health_score === undefined)) {
+                return null;
+            }
+
+            const rawScore = data.health_score;
+            const scoreStr = (rawScore === undefined || rawScore === null)
+                ? '100%'
+                : (String(rawScore).trim().endsWith('%') ? String(rawScore).trim() : `${Number(rawScore).toFixed(1)}%`);
+
+            const record = {
+                id: data.audit_id || Date.now(),
+                created_at: data.created_at || new Date().toISOString(),
+                details: {
+                    ...data,
+                    health_score: scoreStr,
+                    auto_cleaned: Boolean(data.auto_cleaned ?? clean),
+                    is_reverted: false
+                }
+            };
+
+            this.renderHygieneAuditModal(record);
+
+            if (clean) {
+                const cleanedM = Number(data.cleaned_mappings || 0);
+                const cleanedF = Number(data.cleaned_fixes || 0);
+                Toast.show(
+                    (cleanedM + cleanedF) > 0
+                        ? `Cleaned ${cleanedM} duplicate mapping(s) and ${cleanedF} duplicate fix(es) with a rollback snapshot.`
+                        : 'Live scan complete — no duplicate mappings or manual fixes needed cleaning.',
+                    'success'
+                );
+                this.loadMappings?.();
+                this.loadFixes?.();
+            }
+
+            this.invalidateTabs?.('users');
+            return record;
+        } catch (err) {
+            if (showToastOnError) {
+                Toast.show('Live hygiene scan failed: ' + err.message, 'error');
+            }
+            return null;
+        }
+    }
+
+    renderHygieneAuditModal(data) {
+        if (!data) return;
+        this.currentHygieneAudit = data;
+        const details = data.details || {};
+        const auditId = data.id || 'Live';
+        const isReverted = details.is_reverted === true;
+        const autoCleaned = details.auto_cleaned === true;
+
+        const totalTx = Number(details.total_transactions || 0);
+        const dupMappings = Number(details.duplicate_mappings || 0);
+        const dupFixes = Number(details.duplicate_fixes || 0);
+        const identicalDups = Number(details.identical_tx_duplicates || 0);
+        const conflictingCase = Number(details.conflicting_case_mappings || 0);
+        const unmapped = Number(details.unmapped_items || 0);
+        const invalidIds = Number(details.invalid_ids || 0);
+        const cleanedMappings = Number(details.cleaned_mappings || 0);
+        const cleanedFixes = Number(details.cleaned_fixes || 0);
+        const cleanedCount = cleanedMappings + cleanedFixes;
+
+        const dupTotal = dupMappings + dupFixes + identicalDups + conflictingCase;
+        const pendingTotal = unmapped + invalidIds;
+
+        // Populate Modal Fields
+        const scoreEl = document.getElementById('hygiene-modal-score');
+        if (scoreEl) scoreEl.textContent = details.health_score || '100%';
+
+        const txEl = document.getElementById('hygiene-modal-tx-count');
+        if (txEl) txEl.textContent = totalTx.toLocaleString();
+
+        const dupMEl = document.getElementById('hygiene-modal-dup-mappings');
+        if (dupMEl) dupMEl.textContent = dupMappings.toLocaleString();
+
+        const dupFEl = document.getElementById('hygiene-modal-dup-fixes');
+        if (dupFEl) dupFEl.textContent = dupFixes.toLocaleString();
+
+        const identEl = document.getElementById('hygiene-modal-identical-dups');
+        if (identEl) identEl.textContent = identicalDups.toLocaleString();
+
+        const unmapEl = document.getElementById('hygiene-modal-unmapped');
+        if (unmapEl) unmapEl.textContent = unmapped.toLocaleString();
+
+        const invIdEl = document.getElementById('hygiene-modal-invalid-ids');
+        if (invIdEl) invIdEl.textContent = invalidIds.toLocaleString();
+
+        // Subtitle & Timestamp
+        const subEl = document.getElementById('hygiene-modal-subtitle');
+        const runDate = new Date(data.created_at);
+        const timeStr = !isNaN(runDate) ? runDate.toLocaleString() : 'Just now';
+        if (subEl) {
+            subEl.textContent = `Audit #${auditId} • ${timeStr} • ${autoCleaned ? 'Auto-Clean Run' : 'Live Inspection Scan'}`;
+        }
+
+        // Hero Banner Status & Accent
+        const heroBanner = document.getElementById('hygiene-hero-banner');
+        const statusTextEl = document.getElementById('hygiene-health-status-text');
+        const hasIssues = dupTotal > 0 || pendingTotal > 0;
+        const accentColor = hasIssues ? 'var(--warning, #f59e0b)' : 'var(--success)';
+
+        if (statusTextEl) {
+            if (dupTotal === 0 && pendingTotal === 0) {
+                statusTextEl.textContent = 'Pristine Data Quality — 100% Verified';
+            } else if (dupTotal === 0) {
+                statusTextEl.textContent = `Rules Clean • ${pendingTotal.toLocaleString()} Ledger Item(s) Need Reconciliation`;
+            } else {
+                statusTextEl.textContent = `${dupTotal.toLocaleString()} Duplicate / Conflicting Record(s) Detected`;
+            }
+            statusTextEl.style.color = accentColor;
+        }
+        if (scoreEl) {
+            scoreEl.style.color = accentColor;
+        }
+        if (heroBanner) {
+            heroBanner.style.background = hasIssues
+                ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.14), var(--primary-soft))'
+                : 'linear-gradient(135deg, rgba(16, 185, 129, 0.12), var(--primary-soft))';
+            heroBanner.style.borderColor = hasIssues
+                ? 'rgba(245, 158, 11, 0.38)'
+                : 'rgba(16, 185, 129, 0.3)';
+        }
+
+        // Explanation box text
+        const expTextEl = document.getElementById('hygiene-modal-explanation-text');
+        if (expTextEl) {
+            if (isReverted) {
+                expTextEl.innerHTML = '<span style="color: var(--warning); font-weight: 600;">This audit run was previously REVERTED. Cleaned rules have been restored to the database.</span>';
+            } else if (cleanedCount > 0) {
+                const pendingNote = pendingTotal > 0
+                    ? `<br><span style="color: var(--warning, #f59e0b);">Remaining ledger items: ${unmapped.toLocaleString()} missing mapping(s), ${invalidIds.toLocaleString()} non-Valid ID status row(s). Click any card above to inspect.</span>`
+                    : '';
+                expTextEl.innerHTML = `<strong>Auto-Clean Action Taken:</strong> Merged ${cleanedMappings} duplicate mapping rule(s) and ${cleanedFixes} duplicate manual fix(es) with a full safety snapshot. If needed, click <strong>"Reverse Clean (Undo)"</strong> below.${pendingNote}`;
+            } else {
+                const dupParts = [];
+                if (dupMappings > 0) dupParts.push(`${dupMappings.toLocaleString()} duplicate mapping rule(s)`);
+                if (dupFixes > 0) dupParts.push(`${dupFixes.toLocaleString()} duplicate manual fix(es)`);
+                if (identicalDups > 0) dupParts.push(`${identicalDups.toLocaleString()} identical duplicate transaction(s)`);
+                if (conflictingCase > 0) dupParts.push(`${conflictingCase.toLocaleString()} conflicting case mapping(s)`);
+
+                const ruleLine = dupParts.length > 0
+                    ? `<strong>Duplicates Found (${totalTx.toLocaleString()} tx scanned):</strong> ${escapeHTML(dupParts.join(', '))}.`
+                    : `<strong>Rules &amp; Duplicates (${totalTx.toLocaleString()} tx scanned):</strong> Zero duplicate mapping rules, duplicate manual fixes, or identical duplicate transactions.`;
+
+                const reconLine = pendingTotal > 0
+                    ? `<br><strong>Pending Ledger Reconciliation:</strong> ${unmapped.toLocaleString()} missing mapping(s) and ${invalidIds.toLocaleString()} non-Valid ID status transaction(s). Click any card above to inspect.`
+                    : `<br><strong>Ledger Reconciliation:</strong> All mappings and Student IDs are verified.`;
+
+                expTextEl.innerHTML = `${ruleLine}${reconLine}`;
+            }
+        }
+
+        // Action Buttons Visibility
+        const btnRunClean = document.getElementById('btn-hygiene-run-clean');
+        if (btnRunClean) {
+            btnRunClean.style.display = (dupMappings + dupFixes) > 0 ? 'inline-flex' : 'none';
+        }
+
+        const btnRevert = document.getElementById('btn-hygiene-revert');
+        if (btnRevert) {
+            btnRevert.style.display = (cleanedCount > 0 && !isReverted) ? 'inline-flex' : 'none';
+        }
+
+        // Google Drive Link (shown ONLY when a real Google Drive / Docs URL was recorded)
+        const driveRow = document.getElementById('hygiene-modal-drive-row');
+        const driveLink = document.getElementById('hygiene-modal-drive-link');
+        if (driveRow && driveLink) {
+            let safeDriveUrl = '';
+            if (typeof details.drive_folder_url === 'string' && details.drive_folder_url.trim()) {
+                try {
+                    const parsedUrl = new URL(details.drive_folder_url.trim());
+                    if (parsedUrl.protocol === 'https:' && (parsedUrl.hostname === 'drive.google.com' || parsedUrl.hostname === 'docs.google.com')) {
+                        safeDriveUrl = parsedUrl.href;
+                    }
+                } catch (_e) {
+                    safeDriveUrl = '';
+                }
+            }
+            if (safeDriveUrl) {
+                driveLink.href = safeDriveUrl;
+                driveRow.style.display = 'flex';
+            } else {
+                driveLink.href = '#';
+                driveRow.style.display = 'none';
+            }
+        }
+    }
+
+    async checkAndShowHygieneReportModal({ force = false, runLive = false } = {}) {
+        if (!this.hasRole('admin')) return null;
+
+        try {
+            if (runLive) {
+                const liveRecord = await this.runLiveHygieneAudit({ clean: false, showToastOnError: false });
+                if (liveRecord) {
+                    const hygieneModal = document.getElementById('modal-hygiene-report');
+                    hygieneModal?.classList.remove('hidden');
+                    renderIcons(hygieneModal);
+                    return liveRecord;
+                }
+            }
+
             const { data, error } = await supabase
                 .from('audit_logs')
                 .select('*')
@@ -1287,97 +1628,32 @@ class AdminAuditMixin {
                 .limit(1)
                 .maybeSingle();
 
-            if (error || !data) return;
+            if (error || !data) {
+                if (force) {
+                    const hygieneModal = document.getElementById('modal-hygiene-report');
+                    hygieneModal?.classList.remove('hidden');
+                    renderIcons(hygieneModal);
+                }
+                return null;
+            }
 
             const auditId = data.id;
             const lastAckId = localStorage.getItem('fawry_acknowledged_hygiene_id');
 
             // If not forced and already acknowledged, don't show popup
             if (!force && lastAckId && Number(lastAckId) >= Number(auditId)) {
-                return;
+                return null;
             }
 
-            this.currentHygieneAudit = data;
-            const details = data.details || {};
-            const isReverted = details.is_reverted === true;
-            const autoCleaned = details.auto_cleaned === true;
-            const cleanedCount = (details.cleaned_mappings || 0) + (details.cleaned_fixes || 0);
+            this.renderHygieneAuditModal(data);
 
-            // Populate Modal Fields
-            const scoreEl = document.getElementById('hygiene-modal-score');
-            if (scoreEl) scoreEl.innerText = details.health_score || '99.2%';
-
-            const txEl = document.getElementById('hygiene-modal-tx-count');
-            if (txEl) txEl.innerText = (details.total_transactions || 0).toLocaleString();
-
-            const dupMEl = document.getElementById('hygiene-modal-dup-mappings');
-            if (dupMEl) dupMEl.innerText = details.duplicate_mappings || 0;
-
-            const dupFEl = document.getElementById('hygiene-modal-dup-fixes');
-            if (dupFEl) dupFEl.innerText = details.duplicate_fixes || 0;
-
-            const identEl = document.getElementById('hygiene-modal-identical-dups');
-            if (identEl) identEl.innerText = details.identical_tx_duplicates || 0;
-
-            const unmapEl = document.getElementById('hygiene-modal-unmapped');
-            if (unmapEl) unmapEl.innerText = details.unmapped_items || 0;
-
-            const invIdEl = document.getElementById('hygiene-modal-invalid-ids');
-            if (invIdEl) invIdEl.innerText = details.invalid_ids || 0;
-
-            // Subtitle & Timestamp
-            const subEl = document.getElementById('hygiene-modal-subtitle');
-            const runDate = new Date(data.created_at);
-            const timeStr = !isNaN(runDate) ? runDate.toLocaleString() : 'Recently';
-            if (subEl) {
-                subEl.innerText = `Audit #${auditId} • ${timeStr} • ${autoCleaned ? 'Auto-Clean Cloud Run' : 'Inspection Scan'}`;
-            }
-
-            // Explanation box text
-            const expTextEl = document.getElementById('hygiene-modal-explanation-text');
-            if (expTextEl) {
-                if (isReverted) {
-                    expTextEl.innerHTML = '<span style="color: var(--warning); font-weight: 600;">⚠️ This audit run was previously REVERTED. Cleaned rules have been restored to the database.</span>';
-                } else if (cleanedCount > 0) {
-                    expTextEl.innerHTML = `<strong>Auto-Clean Action Taken:</strong> Merged ${Number(details.cleaned_mappings || 0)} duplicate mapping rules and ${Number(details.cleaned_fixes || 0)} duplicate manual fixes. A complete safety snapshot was captured before removal. If needed, click <strong>"Reverse Clean (Undo)"</strong> below.`;
-                } else {
-                    const totalScanned = Number(details.total_transactions || 0).toLocaleString();
-                    expTextEl.innerHTML = `<strong>Data Quality Status:</strong> All ${escapeHTML(totalScanned)} raw transactions and mapping rules are fully verified. No duplicate rules or records required modification.`;
-                }
-            }
-
-            // Revert Button Visibility (only if cleaned rules exist and not yet reverted)
-            const btnRevert = document.getElementById('btn-hygiene-revert');
-            if (btnRevert) {
-                btnRevert.style.display = (cleanedCount > 0 && !isReverted) ? 'inline-flex' : 'none';
-            }
-
-            // Google Drive Link (validated to prevent javascript: or untrusted URI injection)
-            const driveRow = document.getElementById('hygiene-modal-drive-row');
-            const driveLink = document.getElementById('hygiene-modal-drive-link');
-            if (driveRow && driveLink) {
-                const defaultDriveUrl = 'https://drive.google.com/drive/folders/1QY9kzLuFKufFCLmUJNbRfs2PFcfFfz-M';
-                let safeDriveUrl = defaultDriveUrl;
-                if (typeof details.drive_folder_url === 'string') {
-                    try {
-                        const parsedUrl = new URL(details.drive_folder_url);
-                        if (parsedUrl.protocol === 'https:' && (parsedUrl.hostname === 'drive.google.com' || parsedUrl.hostname === 'docs.google.com')) {
-                            safeDriveUrl = parsedUrl.href;
-                        }
-                    } catch (_e) {
-                        // Fall back to default URL
-                    }
-                }
-                driveLink.href = safeDriveUrl;
-                driveRow.style.display = 'flex';
-            }
-
-            // Show Modal
             const hygieneModal = document.getElementById('modal-hygiene-report');
             hygieneModal?.classList.remove('hidden');
             renderIcons(hygieneModal);
+            return data;
         } catch (err) {
             console.warn('Failed to check hygiene audit report:', err);
+            return null;
         }
     }
 }
