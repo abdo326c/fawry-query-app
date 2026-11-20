@@ -49,8 +49,9 @@ self.addEventListener('fetch', event => {
   // Only cache GET requests
   if (event.request.method !== 'GET') return;
   const reqUrl = event.request.url;
-  // Never cache Supabase API or live FX API responses
+  // Never cache Turso/Vercel API, Supabase API, or live FX API responses
   if (
+    reqUrl.includes('/api/') ||
     reqUrl.includes('supabase.co') ||
     reqUrl.includes('open.er-api.com') ||
     reqUrl.includes('currency-api.pages.dev')
