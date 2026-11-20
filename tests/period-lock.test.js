@@ -76,9 +76,13 @@ describe('Accounting Period Lock (Month-End Close) Rules & Schema', () => {
       'CREATE TABLE IF NOT EXISTS public.closed_periods',
       'CREATE OR REPLACE FUNCTION public.is_period_closed(p_date DATE)',
       'CREATE OR REPLACE FUNCTION public.set_accounting_period_lock(',
-      'CREATE OR REPLACE FUNCTION public.trg_enforce_tx_period_lock()',
+      'CREATE OR REPLACE FUNCTION public.trg_enforce_transactions_period_lock()',
+      'CREATE OR REPLACE FUNCTION public.trg_enforce_foreign_tx_period_lock()',
       'CREATE TRIGGER trg_transactions_period_lock',
+      'EXECUTE FUNCTION public.trg_enforce_transactions_period_lock()',
       'CREATE TRIGGER trg_foreign_transactions_period_lock',
+      'EXECUTE FUNCTION public.trg_enforce_foreign_tx_period_lock()',
+      'DROP FUNCTION IF EXISTS public.trg_enforce_tx_period_lock();',
       'CREATE OR REPLACE FUNCTION public.trg_enforce_manual_fix_period_lock()',
       'CREATE TRIGGER trg_manual_fixes_period_lock',
       "PERFORM set_config('app.bypass_period_lock', 'on', true);",
@@ -90,6 +94,7 @@ describe('Accounting Period Lock (Month-End Close) Rules & Schema', () => {
       for (const token of requiredTokens) {
         expect(sql, `Missing SQL token: ${token}`).toContain(token);
       }
+      expect(sql).not.toContain('WHEN TG_TABLE_NAME');
     }
   });
 });

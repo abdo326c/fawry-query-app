@@ -2037,7 +2037,61 @@ $function$;
 REVOKE EXECUTE ON FUNCTION public.set_accounting_period_lock(TEXT, BOOLEAN, TEXT) FROM public, anon;
 GRANT  EXECUTE ON FUNCTION public.set_accounting_period_lock(TEXT, BOOLEAN, TEXT) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.trg_enforce_tx_period_lock()
+CREATE OR REPLACE FUNCTION public.trg_enforce_transactions_period_lock()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_ref TEXT;
+BEGIN
+  IF current_setting('app.bypass_period_lock', true) = 'on' THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    v_ref := COALESCE(NEW.reference_number, 'unknown');
+    IF public.is_period_closed(NEW.payment_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot insert transaction (ref: %) into a locked month without an audited Admin unlock.',
+        to_char(NEW.payment_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    v_ref := COALESCE(OLD.reference_number, 'unknown');
+    IF public.is_period_closed(OLD.payment_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot delete transaction (ref: %) from a locked month without an audited Admin unlock.',
+        to_char(OLD.payment_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    RETURN OLD;
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW IS NOT DISTINCT FROM OLD THEN
+      RETURN NEW;
+    END IF;
+    v_ref := COALESCE(NEW.reference_number, OLD.reference_number, 'unknown');
+
+    IF public.is_period_closed(OLD.payment_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot modify transaction or ERP batch (ref: %) inside a locked month without an audited Admin unlock.',
+        to_char(OLD.payment_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.payment_date IS DISTINCT FROM OLD.payment_date AND public.is_period_closed(NEW.payment_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot backdate transaction (ref: %) into a locked month without an audited Admin unlock.',
+        to_char(NEW.payment_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RETURN NULL;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.trg_enforce_foreign_tx_period_lock()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
@@ -2055,25 +2109,19 @@ BEGIN
   END IF;
 
   IF TG_OP = 'INSERT' THEN
-    v_new_date := CASE
-      WHEN TG_TABLE_NAME = 'foreign_transactions' THEN COALESCE(NEW.value_date, NEW.transaction_date)
-      ELSE NEW.payment_date
-    END;
+    v_new_date := COALESCE(NEW.value_date, NEW.transaction_date);
     v_ref := COALESCE(NEW.reference_number, 'unknown');
     IF public.is_period_closed(v_new_date) THEN
-      RAISE EXCEPTION 'Accounting period % is closed. Cannot insert transaction (ref: %) into a locked month without an audited Admin unlock.',
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot insert foreign deposit (ref: %) into a locked month without an audited Admin unlock.',
         to_char(v_new_date, 'YYYY-MM'), v_ref
         USING ERRCODE = 'P0001';
     END IF;
     RETURN NEW;
   ELSIF TG_OP = 'DELETE' THEN
-    v_old_date := CASE
-      WHEN TG_TABLE_NAME = 'foreign_transactions' THEN COALESCE(OLD.value_date, OLD.transaction_date)
-      ELSE OLD.payment_date
-    END;
+    v_old_date := COALESCE(OLD.value_date, OLD.transaction_date);
     v_ref := COALESCE(OLD.reference_number, 'unknown');
     IF public.is_period_closed(v_old_date) THEN
-      RAISE EXCEPTION 'Accounting period % is closed. Cannot delete transaction (ref: %) from a locked month without an audited Admin unlock.',
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot delete foreign deposit (ref: %) from a locked month without an audited Admin unlock.',
         to_char(v_old_date, 'YYYY-MM'), v_ref
         USING ERRCODE = 'P0001';
     END IF;
@@ -2082,22 +2130,17 @@ BEGIN
     IF NEW IS NOT DISTINCT FROM OLD THEN
       RETURN NEW;
     END IF;
-    IF TG_TABLE_NAME = 'foreign_transactions' THEN
-      v_old_date := COALESCE(OLD.value_date, OLD.transaction_date);
-      v_new_date := COALESCE(NEW.value_date, NEW.transaction_date);
-    ELSE
-      v_old_date := OLD.payment_date;
-      v_new_date := NEW.payment_date;
-    END IF;
+    v_old_date := COALESCE(OLD.value_date, OLD.transaction_date);
+    v_new_date := COALESCE(NEW.value_date, NEW.transaction_date);
     v_ref := COALESCE(NEW.reference_number, OLD.reference_number, 'unknown');
 
     IF public.is_period_closed(v_old_date) THEN
-      RAISE EXCEPTION 'Accounting period % is closed. Cannot modify transaction or ERP batch (ref: %) inside a locked month without an audited Admin unlock.',
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot modify foreign deposit or ERP batch (ref: %) inside a locked month without an audited Admin unlock.',
         to_char(v_old_date, 'YYYY-MM'), v_ref
         USING ERRCODE = 'P0001';
     END IF;
     IF v_new_date IS DISTINCT FROM v_old_date AND public.is_period_closed(v_new_date) THEN
-      RAISE EXCEPTION 'Accounting period % is closed. Cannot backdate transaction (ref: %) into a locked month without an audited Admin unlock.',
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot backdate foreign deposit (ref: %) into a locked month without an audited Admin unlock.',
         to_char(v_new_date, 'YYYY-MM'), v_ref
         USING ERRCODE = 'P0001';
     END IF;
@@ -2112,13 +2155,15 @@ DROP TRIGGER IF EXISTS trg_transactions_period_lock ON public.transactions;
 CREATE TRIGGER trg_transactions_period_lock
   BEFORE INSERT OR UPDATE OR DELETE ON public.transactions
   FOR EACH ROW
-  EXECUTE FUNCTION public.trg_enforce_tx_period_lock();
+  EXECUTE FUNCTION public.trg_enforce_transactions_period_lock();
 
 DROP TRIGGER IF EXISTS trg_foreign_transactions_period_lock ON public.foreign_transactions;
 CREATE TRIGGER trg_foreign_transactions_period_lock
   BEFORE INSERT OR UPDATE OR DELETE ON public.foreign_transactions
   FOR EACH ROW
-  EXECUTE FUNCTION public.trg_enforce_tx_period_lock();
+  EXECUTE FUNCTION public.trg_enforce_foreign_tx_period_lock();
+
+DROP FUNCTION IF EXISTS public.trg_enforce_tx_period_lock();
 
 CREATE OR REPLACE FUNCTION public.trg_enforce_manual_fix_period_lock()
 RETURNS TRIGGER
