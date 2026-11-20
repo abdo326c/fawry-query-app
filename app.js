@@ -571,10 +571,28 @@ class App {
     }
 
     initDatePickers() {
+        const applyNoAutocomplete = (el) => {
+            if (!el || typeof el.setAttribute !== 'function') return;
+            el.setAttribute('autocomplete', 'off');
+            el.setAttribute('autocorrect', 'off');
+            el.setAttribute('autocapitalize', 'off');
+            el.setAttribute('spellcheck', 'false');
+            el.setAttribute('data-lpignore', 'true');
+            el.setAttribute('data-form-type', 'other');
+            el.setAttribute('aria-autocomplete', 'none');
+        };
+
+        document.querySelectorAll('input[type="date"], input[type="month"], input[type="datetime-local"]').forEach(applyNoAutocomplete);
+
         if (window.flatpickr) {
             flatpickr('input[type="date"]', {
                 dateFormat: "Y-m-d",
-                allowInput: true
+                allowInput: false,
+                disableMobile: true,
+                onReady: (_selectedDates, _dateStr, instance) => {
+                    applyNoAutocomplete(instance?.input);
+                    applyNoAutocomplete(instance?.altInput);
+                }
             });
         }
     }

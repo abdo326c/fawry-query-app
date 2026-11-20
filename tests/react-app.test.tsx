@@ -594,5 +594,12 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     expect(document.getElementById('hygiene-health-status-text')?.textContent).toContain('100% Verified');
     expect((document.getElementById('hygiene-modal-drive-row') as HTMLElement | null)?.style.display).toBe('flex');
     expect((document.getElementById('hygiene-modal-drive-link') as HTMLAnchorElement | null)?.href).toBe('https://drive.google.com/file/d/abc123/view');
+
+    // Verify date inputs disable browser saved-dates autofill popup (autocomplete="off", allowInput: false)
+    const txDateFrom = document.getElementById('filter-date-from');
+    const txDateTo = document.getElementById('filter-date-to');
+    expect(txDateFrom?.getAttribute('autocomplete')).toBe('off');
+    expect(txDateTo?.getAttribute('autocomplete')).toBe('off');
+    expect(txDateFrom?.getAttribute('data-lpignore')).toBe('true');
   });
 });

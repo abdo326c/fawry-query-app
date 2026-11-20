@@ -397,9 +397,9 @@
                             </div>
                             <div class="filter-body">
                                 <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Date From</label>
-                                <input type="date" id="dashboard-date-from" class="input-text" style="width: 100%; margin-bottom: 0.6rem;">
+                                <input type="date" id="dashboard-date-from" class="input-text" autocomplete="off" style="width: 100%; margin-bottom: 0.6rem;">
                                 <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; display: block;">Date To</label>
-                                <input type="date" id="dashboard-date-to" class="input-text" style="width: 100%; margin-bottom: 0.65rem;">
+                                <input type="date" id="dashboard-date-to" class="input-text" autocomplete="off" style="width: 100%; margin-bottom: 0.65rem;">
                                 <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
                                     <button type="button" class="btn btn-outline btn-sm" data-dash-preset="today" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Today</button>
                                     <button type="button" class="btn btn-outline btn-sm" data-dash-preset="yesterday" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;">Yesterday</button>
@@ -528,9 +528,9 @@
                         </div>
                         <div class="ledger-date-capsule">
                             <i data-lucide="calendar" style="width: 13px; height: 13px; color: var(--text-muted); margin: 0 0.15rem;"></i>
-                            <input type="date" id="filter-date-from" class="input-text" aria-label="Date From" title="Date From">
+                            <input type="date" id="filter-date-from" class="input-text" autocomplete="off" aria-label="Date From" title="Date From">
                             <span style="color: var(--text-muted); font-size: 0.74rem;">&rarr;</span>
-                            <input type="date" id="filter-date-to" class="input-text" aria-label="Date To" title="Date To">
+                            <input type="date" id="filter-date-to" class="input-text" autocomplete="off" aria-label="Date To" title="Date To">
                             <span class="ledger-capsule-divider"></span>
                             <div class="ledger-date-presets">
                                 <button type="button" class="btn btn-ghost btn-sm" data-tx-date-preset="today">Today</button>
@@ -755,9 +755,9 @@
                         </div>
                         <div class="ledger-date-capsule">
                             <i data-lucide="calendar" style="width: 13px; height: 13px; color: var(--text-muted); margin: 0 0.15rem;"></i>
-                            <input type="date" id="foreign-date-from" class="input-text" aria-label="Date From" title="Date From">
+                            <input type="date" id="foreign-date-from" class="input-text" autocomplete="off" aria-label="Date From" title="Date From">
                             <span style="color: var(--text-muted); font-size: 0.74rem;">&rarr;</span>
-                            <input type="date" id="foreign-date-to" class="input-text" aria-label="Date To" title="Date To">
+                            <input type="date" id="foreign-date-to" class="input-text" autocomplete="off" aria-label="Date To" title="Date To">
                             <span class="ledger-capsule-divider"></span>
                             <div class="ledger-date-presets">
                                 <button type="button" class="btn btn-ghost btn-sm" data-foreign-date-preset="today">Today</button>
@@ -1530,11 +1530,11 @@
                         <div class="filters-bar glass-card" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; padding: 1rem; align-items: flex-end;">
                             <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                                 <label style="font-size: 0.75rem">Date From</label>
-                                <input type="date" id="automatcher-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                                <input type="date" id="automatcher-date-from" class="input-text" autocomplete="off" style="padding: 0.4rem; font-size: 0.85rem">
                             </div>
                             <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
                                 <label style="font-size: 0.75rem">Date To</label>
-                                <input type="date" id="automatcher-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                                <input type="date" id="automatcher-date-to" class="input-text" autocomplete="off" style="padding: 0.4rem; font-size: 0.85rem">
                             </div>
                             <div class="form-group" style="margin: 0; flex: 2; min-width: 220px;">
                                 <label style="font-size: 0.75rem">Instant Filter (Preserves Selection)</label>
@@ -1806,11 +1806,11 @@
                             <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end;">
                                 <div class="form-group" style="margin: 0; min-width: 120px; flex: 1;">
                                     <label>Date From</label>
-                                    <input type="date" id="erp-filter-date-from" class="input-text">
+                                    <input type="date" id="erp-filter-date-from" class="input-text" autocomplete="off">
                                 </div>
                                 <div class="form-group" style="margin: 0; min-width: 120px; flex: 1;">
                                     <label>Date To</label>
-                                    <input type="date" id="erp-filter-date-to" class="input-text">
+                                    <input type="date" id="erp-filter-date-to" class="input-text" autocomplete="off">
                                 </div>
                                 <div class="form-group" style="margin: 0; min-width: 115px; flex: 1;">
                                     <label>Bank</label>
@@ -2378,7 +2378,7 @@
                                 <div class="admin-action-well">
                                     <div class="form-group" style="width: 165px; flex-shrink: 0;">
                                         <label for="archive-cutoff-date">Archive Before Date</label>
-                                        <input type="date" id="archive-cutoff-date" class="input-text">
+                                        <input type="date" id="archive-cutoff-date" class="input-text" autocomplete="off">
                                     </div>
                                     <button type="button" class="btn btn-outline" id="btn-archive-dry-run" style="height: 35px; flex-shrink: 0;">
                                         <i data-lucide="search"></i> Preview Eligible Rows
