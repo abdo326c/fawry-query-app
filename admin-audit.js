@@ -15,6 +15,11 @@ class AdminAuditMixin {
     initUsersAndRoles() {
         this.allUserRoles = [];
         this.allAuditLogs = [];
+        this.activeAdminSubtab = 'access';
+        this.adminShowAllSections = false;
+        this.auditCategoryFilter = 'all';
+
+        this.initAdminSubtabs();
 
         const btnSaveRole = document.getElementById('btn-save-user-role');
         if (btnSaveRole) {
@@ -107,6 +112,93 @@ class AdminAuditMixin {
         });
     }
 
+    initAdminSubtabs() {
+        const subtabBtns = Array.from(document.querySelectorAll('[data-admin-subtab]'));
+        const jumpCards = Array.from(document.querySelectorAll('[data-admin-jump]'));
+        const btnShowAll = document.getElementById('btn-admin-show-all');
+        const auditCatBtns = Array.from(document.querySelectorAll('[data-audit-category]'));
+
+        const setShowAllUi = (showAll) => {
+            this.adminShowAllSections = Boolean(showAll);
+            if (!btnShowAll) return;
+            btnShowAll.classList.toggle('active', this.adminShowAllSections);
+            btnShowAll.innerHTML = this.adminShowAllSections
+                ? '<i data-lucide="layers"></i> Tabbed View'
+                : '<i data-lucide="layout-list"></i> Show All Sections';
+            renderIcons(btnShowAll);
+        };
+
+        subtabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = btn.getAttribute('data-admin-subtab') || 'access';
+                if (this.adminShowAllSections) setShowAllUi(false);
+                this.switchAdminSubtab(target);
+            });
+        });
+
+        jumpCards.forEach(card => {
+            const activate = () => {
+                const target = card.getAttribute('data-admin-jump') || 'access';
+                if (this.adminShowAllSections) setShowAllUi(false);
+                this.switchAdminSubtab(target);
+            };
+            card.addEventListener('click', activate);
+            card.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    activate();
+                }
+            });
+        });
+
+        if (btnShowAll) {
+            btnShowAll.addEventListener('click', () => {
+                const next = !this.adminShowAllSections;
+                setShowAllUi(next);
+                if (next) {
+                    ['access', 'governance', 'storage', 'audit'].forEach(id => {
+                        document.getElementById(`admin-panel-${id}`)?.classList.remove('hidden');
+                    });
+                } else {
+                    this.switchAdminSubtab(this.activeAdminSubtab || 'access');
+                }
+            });
+        }
+
+        auditCatBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const cat = btn.getAttribute('data-audit-category') || 'all';
+                this.auditCategoryFilter = cat;
+                auditCatBtns.forEach(b => b.classList.toggle('active', b === btn));
+                this.renderAuditLogsTable();
+            });
+        });
+
+        this.switchAdminSubtab(this.activeAdminSubtab || 'access');
+    }
+
+    switchAdminSubtab(subtabId = 'access') {
+        const validIds = ['access', 'governance', 'storage', 'audit'];
+        const target = validIds.includes(subtabId) ? subtabId : 'access';
+        this.activeAdminSubtab = target;
+
+        validIds.forEach(id => {
+            const panel = document.getElementById(`admin-panel-${id}`);
+            if (panel) panel.classList.toggle('hidden', id !== target);
+        });
+
+        document.querySelectorAll('[data-admin-subtab]').forEach(btn => {
+            const isMatch = btn.getAttribute('data-admin-subtab') === target;
+            btn.classList.toggle('active', isMatch);
+            btn.setAttribute('aria-selected', isMatch ? 'true' : 'false');
+        });
+
+        document.querySelectorAll('[data-admin-jump]').forEach(card => {
+            const isMatch = card.getAttribute('data-admin-jump') === target;
+            card.classList.toggle('active', isMatch);
+        });
+    }
+
     async loadDatabaseStorageStats({ silent = false } = {}) {
         const usedEl = document.getElementById('db-storage-used-label');
         const pctBadge = document.getElementById('db-storage-pct-badge');
@@ -129,6 +221,11 @@ class AdminAuditMixin {
             const estRemaining = Math.max(0, Math.floor(((limitMb - usedMb) * 1024) / 1.6));
 
             usedEl.textContent = `${usedMb.toFixed(1)} MB / ${limitMb} MB`;
+            const kpiStorageUsed = document.getElementById('admin-kpi-storage-used');
+            const kpiStorageSub = document.getElementById('admin-kpi-storage-sub');
+            if (kpiStorageUsed) kpiStorageUsed.textContent = `${usedMb.toFixed(1)} / ${limitMb} MB`;
+            if (kpiStorageSub) kpiStorageSub.textContent = `${pct.toFixed(1)}% used · ~${estRemaining.toLocaleString()} tx headroom`;
+
             if (pctBadge) {
                 pctBadge.textContent = `${pct.toFixed(1)}%`;
                 if (pct >= 85) {
@@ -152,9 +249,9 @@ class AdminAuditMixin {
             if (tablesEl) {
                 const tables = Array.isArray(data.tables) ? data.tables : [];
                 tablesEl.innerHTML = tables.map(t => (
-                    `<span class="badge" style="background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-color); font-size: 0.74rem; padding: 0.22rem 0.5rem;">` +
-                    `<strong>${escapeHTML(t.table_name)}</strong>: ${Number(t.total_mb || 0).toFixed(1)} MB ` +
-                    `<span style="color: var(--text-muted);">(${Number(t.est_rows || 0).toLocaleString()} rows)</span>` +
+                    `<span class="badge" style="background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-color); font-size: 0.74rem; padding: 0.28rem 0.55rem;">` +
+                    `<span><strong>${escapeHTML(t.table_name)}</strong></span>` +
+                    `<span style="color: var(--text-muted);">${Number(t.total_mb || 0).toFixed(1)} MB (${Number(t.est_rows || 0).toLocaleString()})</span>` +
                     `</span>`
                 )).join('');
             }
@@ -165,6 +262,10 @@ class AdminAuditMixin {
                 if (pctBadge) pctBadge.textContent = '--%';
                 if (headroomEl) headroomEl.textContent = '';
                 if (barEl) barEl.style.width = '0%';
+                const kpiStorageUsed = document.getElementById('admin-kpi-storage-used');
+                const kpiStorageSub = document.getElementById('admin-kpi-storage-sub');
+                if (kpiStorageUsed) kpiStorageUsed.textContent = '-- / 500 MB';
+                if (kpiStorageSub) kpiStorageSub.textContent = 'Run migration 2.11.6';
                 tablesEl.innerHTML = `<span style="color: var(--text-muted);">Storage stats unavailable (${escapeHTML(err.message)}). Run migration <code>2.11.6_multiuser_performance_and_storage_meter.sql</code> in Supabase SQL Editor.</span>`;
             }
             return null;
@@ -363,8 +464,19 @@ class AdminAuditMixin {
 
     renderClosedPeriodsCard() {
         const tbody = document.getElementById('closed-periods-table-body');
-        if (!tbody) return;
         const rows = this.closedPeriods || [];
+        const closedRows = rows
+            .filter(r => r.is_closed !== false)
+            .sort((a, b) => String(b.period_month || '').localeCompare(String(a.period_month || '')));
+        const kpiLocked = document.getElementById('admin-kpi-locked-periods');
+        const kpiLatest = document.getElementById('admin-kpi-latest-period');
+        if (kpiLocked) kpiLocked.textContent = `${closedRows.length} Locked`;
+        if (kpiLatest) {
+            kpiLatest.textContent = closedRows.length > 0
+                ? `Latest: ${formatPeriodMonthLabel(closedRows[0].period_month)}`
+                : 'No closed periods yet';
+        }
+        if (!tbody) return;
         if (rows.length === 0) {
             tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1rem; color: var(--text-muted);">No accounting periods closed yet. Select a month above to enforce month-end close.</td></tr>';
             return;
@@ -389,7 +501,7 @@ class AdminAuditMixin {
                     <td>${badge}</td>
                     <td style="font-size: 0.78rem;"><div>${escapeHTML(actor)}</div><div class="text-muted">${escapeHTML(tsStr)}</div></td>
                     <td style="font-size: 0.8rem;">${escapeHTML(r.notes || '—')}</td>
-                    <td>${btnHtml}</td>
+                    <td style="text-align: right;">${btnHtml}</td>
                 </tr>
             `;
         }).join('');
@@ -570,10 +682,20 @@ class AdminAuditMixin {
 
     renderUserRolesTable() {
         const tbody = document.getElementById('user-roles-table-body');
-        if (!tbody) return;
         const rows = this.allUserRoles || [];
         const countLabel = document.getElementById('user-roles-count-label');
         if (countLabel) countLabel.textContent = `${rows.length} user${rows.length === 1 ? '' : 's'}`;
+        const breakdownEl = document.getElementById('admin-kpi-roles-breakdown');
+        if (breakdownEl) {
+            const counts = { admin: 0, accountant: 0, operator: 0, viewer: 0 };
+            for (const r of rows) {
+                const rl = String(r.role || 'viewer').toLowerCase();
+                if (Object.prototype.hasOwnProperty.call(counts, rl)) counts[rl] += 1;
+                else counts.viewer += 1;
+            }
+            breakdownEl.textContent = `${counts.admin} Admin · ${counts.accountant} Accountant · ${counts.operator} Operator · ${counts.viewer} Viewer`;
+        }
+        if (!tbody) return;
         if (rows.length === 0) {
             tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1.5rem; color: var(--text-muted);">No users found.</td></tr>';
             return;
@@ -735,11 +857,20 @@ class AdminAuditMixin {
 
     renderAuditLogsTable() {
         const tbody = document.getElementById('audit-logs-table-body');
+        const allLogs = this.allAuditLogs || [];
+        const auditCountEl = document.getElementById('admin-kpi-audit-count');
+        if (auditCountEl) auditCountEl.textContent = `${allLogs.length} event${allLogs.length === 1 ? '' : 's'}`;
         if (!tbody) return;
+        const catFilter = this.auditCategoryFilter || 'all';
         const searchQ = (document.getElementById('audit-log-search')?.value || '').trim().toLowerCase();
-        const logs = (this.allAuditLogs || []).filter(log => {
+        const logs = allLogs.filter(log => {
+            const action = String(log.action || '');
+            if (catFilter === 'roles' && !/role|user|auth|hygiene/i.test(action)) return false;
+            if (catFilter === 'periods' && !/period/i.test(action)) return false;
+            if (catFilter === 'fixes' && !/fix|mapping|rule|automatch|duplicate|import/i.test(action)) return false;
+            if (catFilter === 'erp' && !/erp|archive|settle/i.test(action)) return false;
             if (!searchQ) return true;
-            const hay = `${log.user_email || ''} ${log.action || ''} ${log.affected_references || ''} ${JSON.stringify(log.details || {})}`.toLowerCase();
+            const hay = `${log.user_email || ''} ${action} ${log.affected_references || ''} ${JSON.stringify(log.details || {})}`.toLowerCase();
             return hay.includes(searchQ);
         });
 

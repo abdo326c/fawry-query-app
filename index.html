@@ -2126,7 +2126,8 @@
             <section id="view-users" class="view">
                 <div class="header">
                     <div>
-                        <h1>Users, Roles &amp; Audit Log</h1>
+                        <h1>Users, Roles &amp; Governance</h1>
+                        <p class="page-subtitle">Manage staff permissions, month-end accounting locks, database capacity, and system audit history</p>
                     </div>
                     <div class="header-actions">
                         <button class="btn btn-outline" id="btn-view-hygiene-report" title="View latest automated deduplication and hygiene health report">
@@ -2141,220 +2142,305 @@
                     </div>
                 </div>
 
-                <!-- Role Matrix Overview & Assign Role Form -->
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem;">
-                    <div class="glass-card" style="padding: 1.25rem;">
-                        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                            <i data-lucide="user-plus" style="width: 18px; height: 18px; color: var(--primary);"></i>
-                            Assign or Update User Role
-                        </h3>
-                        <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">
-                            Enter a user's email address to assign their permission tier. Users not listed default to <strong>Viewer</strong>.
-                        </p>
-                        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end;">
-                            <div class="form-group" style="margin: 0; flex: 2; min-width: 200px;">
-                                <label style="font-size: 0.75rem;">User Email</label>
-                                <input type="email" id="role-user-email" class="input-text" placeholder="e.g. colleague@nu.edu.eg" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;">
-                            </div>
-                            <div class="form-group" style="margin: 0; flex: 1; min-width: 145px;">
-                                <label style="font-size: 0.75rem;">Role Tier</label>
-                                <select id="role-user-select" class="input-text" style="padding: 0.45rem 0.65rem; font-size: 0.85rem;">
-                                    <option value="viewer">Viewer (Read &amp; Export)</option>
-                                    <option value="operator">Operator (Imports &amp; Links)</option>
-                                    <option value="accountant">Accountant (Fixes, Mappings &amp; ERP)</option>
-                                    <option value="admin">Admin (Full Access &amp; Deletes)</option>
-                                </select>
-                            </div>
-                            <button type="button" class="btn btn-primary" id="btn-save-user-role" style="padding: 0.48rem 1.1rem; font-size: 0.85rem;">
-                                <i data-lucide="shield-check" style="width: 15px; height: 15px;"></i> Save Role
-                            </button>
+                <!-- Top 4-Card Admin Overview Telemetry Strip -->
+                <div class="admin-overview-grid">
+                    <div class="stat-card admin-kpi-card active" data-admin-jump="access" role="button" tabindex="0" title="Open Users & Access Control">
+                        <div class="stat-card-header">
+                            <span class="kpi-label-row"><span class="kpi-dot is-primary"></span><span class="stat-label">Team &amp; Access</span></span>
+                            <i data-lucide="users" class="stat-icon"></i>
                         </div>
+                        <div class="stat-value" id="user-roles-count-label">0 users</div>
+                        <div class="stat-sub" id="admin-kpi-roles-breakdown">4-tier RBAC directory</div>
                     </div>
-
-                    <div class="glass-card" style="padding: 1.25rem;">
-                        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                            <i data-lucide="layers" style="width: 18px; height: 18px; color: var(--success);"></i>
-                            4-Tier Permission Summary
-                        </h3>
-                        <div class="role-tier-grid">
-                            <div class="role-tier-box role-tier-viewer">
-                                <strong>1. Viewer</strong>
-                                <div class="text-muted">View all pages, Copy for Email, &amp; Export Excel reports.</div>
-                            </div>
-                            <div class="role-tier-box role-tier-operator">
-                                <strong>2. Operator</strong>
-                                <div class="text-muted">Viewer + Import transactions/students, add/edit Payment Links.</div>
-                            </div>
-                            <div class="role-tier-box role-tier-accountant">
-                                <strong>3. Accountant</strong>
-                                <div class="text-muted">Operator + Fixes, Mappings, Auto-Matcher, Settle &amp; ERP Posting.</div>
-                            </div>
-                            <div class="role-tier-box role-tier-admin">
-                                <strong>4. Admin</strong>
-                                <div class="text-muted">Accountant + Revert imports, delete records &amp; manage roles.</div>
-                            </div>
+                    <div class="stat-card admin-kpi-card" data-admin-jump="governance" role="button" tabindex="0" title="Open Month-End Period Lock">
+                        <div class="stat-card-header">
+                            <span class="kpi-label-row"><span class="kpi-dot is-info"></span><span class="stat-label">Month-End Close</span></span>
+                            <i data-lucide="lock" class="stat-icon"></i>
                         </div>
+                        <div class="stat-value" id="admin-kpi-locked-periods">0 Locked</div>
+                        <div class="stat-sub" id="admin-kpi-latest-period">No closed periods yet</div>
+                    </div>
+                    <div class="stat-card admin-kpi-card" data-admin-jump="storage" role="button" tabindex="0" title="Open Storage & Cold Archiving">
+                        <div class="stat-card-header">
+                            <span class="kpi-label-row"><span class="kpi-dot is-success"></span><span class="stat-label">Database Capacity</span></span>
+                            <i data-lucide="hard-drive" class="stat-icon"></i>
+                        </div>
+                        <div class="stat-value" id="admin-kpi-storage-used">-- / 500 MB</div>
+                        <div class="stat-sub" id="admin-kpi-storage-sub">500 MB Free Tier cap</div>
+                    </div>
+                    <div class="stat-card admin-kpi-card" data-admin-jump="audit" role="button" tabindex="0" title="Open System Audit Log">
+                        <div class="stat-card-header">
+                            <span class="kpi-label-row"><span class="kpi-dot is-primary"></span><span class="stat-label">System Audit Trail</span></span>
+                            <i data-lucide="history" class="stat-icon"></i>
+                        </div>
+                        <div class="stat-value" id="admin-kpi-audit-count">0 events</div>
+                        <div class="stat-sub">Recent tracked mutations</div>
                     </div>
                 </div>
 
-                <!-- User Roles Directory Table -->
-                <div class="table-container glass-card" style="margin-bottom: 1.5rem;">
-                    <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-                        <h3 style="margin: 0; font-size: 1rem;">User Role Assignments</h3>
-                        <span id="user-roles-count-label" style="font-size: 0.8rem; color: var(--text-muted);">0 users</span>
-                    </div>
-                    <table class="data-table" style="min-width: 100%;">
-                        <thead>
-                            <tr>
-                                <th>User Email</th>
-                                <th>Current Role</th>
-                                <th>Status</th>
-                                <th>Updated By &amp; Date</th>
-                                <th style="text-align: right;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="user-roles-table-body">
-                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading user roles...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Live Database Storage & Capacity Meter (Admin Only) -->
-                <div class="glass-card" id="admin-db-storage-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.6rem;">
-                        <div>
-                            <h3 style="margin: 0 0 0.25rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                                <i data-lucide="hard-drive" style="width: 18px; height: 18px; color: var(--primary);"></i>
-                                Database Storage &amp; Capacity
-                            </h3>
-                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
-                                Live PostgreSQL disk consumption against Supabase Free Plan&rsquo;s 500 MB cap.
-                            </p>
-                        </div>
-                        <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-db-storage" style="height: 28px; padding: 0 0.75rem; font-size: 0.78rem;">
-                            <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i> Refresh
+                <!-- Segmented Sub-Navigation Bar -->
+                <div class="admin-subnav-bar" id="admin-subnav-bar">
+                    <div class="segmented-tabs admin-workspace-tabs" role="tablist" aria-label="Admin workspace sections">
+                        <button type="button" class="btn btn-sm active" data-admin-subtab="access" role="tab" aria-selected="true">
+                            <i data-lucide="users"></i> Users &amp; Access Control
+                        </button>
+                        <button type="button" class="btn btn-sm" data-admin-subtab="governance" role="tab" aria-selected="false">
+                            <i data-lucide="lock"></i> Month-End Period Lock
+                        </button>
+                        <button type="button" class="btn btn-sm" data-admin-subtab="storage" role="tab" aria-selected="false">
+                            <i data-lucide="hard-drive"></i> Storage &amp; Cold Archiving
+                        </button>
+                        <button type="button" class="btn btn-sm" data-admin-subtab="audit" role="tab" aria-selected="false">
+                            <i data-lucide="history"></i> System Audit Log
                         </button>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
-                        <strong id="db-storage-used-label" style="font-size: 1rem; color: var(--text-main);">-- MB / 500 MB</strong>
-                        <span id="db-storage-pct-badge" class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted);">--%</span>
-                        <span id="db-storage-headroom-label" style="font-size: 0.78rem; color: var(--text-muted);"></span>
-                    </div>
-                    <div class="progress-bar" style="margin: 0.55rem 0 0.75rem;">
-                        <div class="progress-fill" id="db-storage-progress-bar" style="width: 0%;"></div>
-                    </div>
-                    <div id="db-storage-tables-list" style="display: flex; flex-wrap: wrap; gap: 0.45rem; font-size: 0.78rem; color: var(--text-muted);"></div>
+                    <button type="button" class="btn btn-outline btn-sm" id="btn-admin-show-all" title="Toggle between tabbed view and showing all sections on one page">
+                        <i data-lucide="layout-list"></i> Show All Sections
+                    </button>
                 </div>
 
-                <!-- Accounting Period Lock / Month-End Close (Admin Only) -->
-                <div class="glass-card" id="admin-period-lock-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.9rem;">
-                        <div style="max-width: 560px;">
-                            <h3 style="margin: 0 0 0.4rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                                <i data-lucide="lock" style="width: 18px; height: 18px; color: var(--primary);"></i>
-                                Accounting Period Lock (Month-End Close)
-                            </h3>
-                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
-                                Locking a month enforces a PostgreSQL trigger that blocks backdated imports, manual fix edits, and ERP batch unlinking for transactions inside that period without an audited Admin unlock.
-                            </p>
+                <!-- Panel 1: Users & Access Control -->
+                <div id="admin-panel-access" class="admin-panel">
+                    <div class="admin-sheet">
+                        <div class="ledger-toolbar">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                                <div>
+                                    <h3 class="admin-card-title" style="margin: 0;">
+                                        <i data-lucide="user-plus" style="width: 17px; height: 17px; color: var(--primary);"></i>
+                                        Assign or Update User Role
+                                    </h3>
+                                    <p class="admin-card-desc" style="margin-top: 0.15rem;">
+                                        Users not listed default to <strong>Viewer (L1)</strong>. Primary Admin remains protected.
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="admin-action-well">
+                                <div class="form-group" style="flex: 1 1 240px; min-width: 200px;">
+                                    <label for="role-user-email">User Email</label>
+                                    <input type="email" id="role-user-email" class="input-text" placeholder="e.g. colleague@nu.edu.eg">
+                                </div>
+                                <div class="form-group" style="width: 250px; flex-shrink: 0; max-width: 100%;">
+                                    <label for="role-user-select">Role Tier</label>
+                                    <select id="role-user-select" class="input-text">
+                                        <option value="viewer">Viewer (Read &amp; Export)</option>
+                                        <option value="operator">Operator (Imports &amp; Links)</option>
+                                        <option value="accountant">Accountant (Fixes, Mappings &amp; ERP)</option>
+                                        <option value="admin">Admin (Full Access &amp; Deletes)</option>
+                                    </select>
+                                </div>
+                                <button type="button" class="btn btn-primary" id="btn-save-user-role" style="height: 35px; flex-shrink: 0;">
+                                    <i data-lucide="shield-check"></i> Save Role
+                                </button>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: flex-end;">
-                            <div class="form-group" style="margin: 0; min-width: 155px;">
-                                <label for="period-lock-month" style="font-size: 0.75rem;">Accounting Month</label>
-                                <input type="month" id="period-lock-month" class="input-text" style="padding: 0.42rem 0.65rem; font-size: 0.85rem;">
+
+                        <div class="role-tier-grid admin-role-strip">
+                            <div class="role-tier-box role-tier-viewer">
+                                <strong>1. Viewer (L1)</strong>
+                                <div class="text-muted">View pages, Copy for Email &amp; Export Excel reports.</div>
                             </div>
-                            <div class="form-group" style="margin: 0; min-width: 220px;">
-                                <label for="period-lock-notes" style="font-size: 0.75rem;">Close Note (Optional)</label>
-                                <input type="text" id="period-lock-notes" class="input-text" placeholder="e.g. Month-end reconciled" style="padding: 0.42rem 0.65rem; font-size: 0.85rem;">
+                            <div class="role-tier-box role-tier-operator">
+                                <strong>2. Operator (L2)</strong>
+                                <div class="text-muted">Viewer + Import transactions/students &amp; Payment Links.</div>
                             </div>
-                            <button type="button" class="btn btn-primary" id="btn-close-period" style="padding: 0.46rem 1rem; font-size: 0.84rem;">
+                            <div class="role-tier-box role-tier-accountant">
+                                <strong>3. Accountant (L3)</strong>
+                                <div class="text-muted">Operator + Fixes, Mappings, Auto-Matcher, Settle &amp; ERP.</div>
+                            </div>
+                            <div class="role-tier-box role-tier-admin">
+                                <strong>4. Admin (L4)</strong>
+                                <div class="text-muted">Accountant + Revert imports, deletes, locks &amp; roles.</div>
+                            </div>
+                        </div>
+
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>User Email</th>
+                                        <th>Current Role</th>
+                                        <th>Status</th>
+                                        <th>Updated By &amp; Date</th>
+                                        <th style="text-align: right;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="user-roles-table-body">
+                                    <tr><td colspan="5" class="text-center" style="color: var(--text-muted); padding: 1.5rem;">Loading user roles...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 2: Month-End Period Lock -->
+                <div id="admin-panel-governance" class="admin-panel hidden">
+                    <div class="glass-card" id="admin-period-lock-card" style="padding: 1.25rem 1.35rem;">
+                        <div class="admin-card-header">
+                            <div style="max-width: 680px;">
+                                <h3 class="admin-card-title">
+                                    <i data-lucide="lock" style="width: 17px; height: 17px; color: var(--primary);"></i>
+                                    Accounting Period Lock (Month-End Close)
+                                </h3>
+                                <p class="admin-card-desc">
+                                    Locking a month enforces a PostgreSQL trigger that blocks backdated imports, manual fix edits, and ERP batch unlinking for transactions inside that period without an audited Admin unlock.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="admin-action-well">
+                            <div class="form-group" style="width: 175px; flex-shrink: 0;">
+                                <label for="period-lock-month">Accounting Month</label>
+                                <input type="month" id="period-lock-month" class="input-text">
+                            </div>
+                            <div class="form-group" style="flex: 1 1 240px; min-width: 200px;">
+                                <label for="period-lock-notes">Close Note (Optional)</label>
+                                <input type="text" id="period-lock-notes" class="input-text" placeholder="e.g. Month-end reconciled">
+                            </div>
+                            <button type="button" class="btn btn-primary" id="btn-close-period" style="height: 35px; flex-shrink: 0;">
                                 <i data-lucide="lock"></i> Close Period
                             </button>
                         </div>
-                    </div>
-                    <div id="period-lock-status" style="margin-bottom: 0.65rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
-                    <div id="period-unlock-panel" class="hidden" style="margin-bottom: 0.9rem; padding: 0.85rem 1rem; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08);">
-                        <div style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--warning, #f59e0b);">
-                            Audited Unlock for <span id="period-unlock-target-label"></span>
-                        </div>
-                        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
-                            <input type="text" id="period-unlock-reason" class="input-text" placeholder="Mandatory audit reason for unlocking this closed month..." style="flex: 1; min-width: 240px; padding: 0.42rem 0.7rem; font-size: 0.84rem;">
-                            <button type="button" class="btn btn-primary" id="btn-confirm-period-unlock" style="padding: 0.44rem 0.95rem; font-size: 0.82rem;">Confirm Audited Unlock</button>
-                            <button type="button" class="btn btn-outline" id="btn-cancel-period-unlock" style="padding: 0.44rem 0.85rem; font-size: 0.82rem;">Cancel</button>
-                        </div>
-                    </div>
-                    <div style="overflow-x: auto;">
-                        <table class="data-table" style="width: 100%; font-size: 0.83rem;">
-                            <thead>
-                                <tr>
-                                    <th>Period</th>
-                                    <th>Status</th>
-                                    <th>Closed / Updated By</th>
-                                    <th>Notes / Unlock Reason</th>
-                                    <th style="width: 155px;">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="closed-periods-table-body">
-                                <tr>
-                                    <td colspan="5" class="text-center" style="padding: 1rem; color: var(--text-muted);">Loading accounting periods...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
 
-                <!-- Cold-Storage Transaction Archiving (Admin Only) -->
-                <div class="glass-card" id="admin-archive-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
-                        <div style="max-width: 560px;">
-                            <h3 style="margin: 0 0 0.4rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                                <i data-lucide="archive" style="width: 18px; height: 18px; color: var(--primary);"></i>
-                                Cold-Storage Transaction Archiving
-                            </h3>
-                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
-                                Safely moves <strong>settled &amp; ERP-posted</strong> transactions older than the cutoff date (minimum 90 days ago) from the active ledger into <code>transactions_archive</code> to keep queries fast.
-                            </p>
-                        </div>
-                        <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: flex-end;">
-                            <div class="form-group" style="margin: 0; min-width: 170px;">
-                                <label for="archive-cutoff-date" style="font-size: 0.75rem;">Archive Before Date</label>
-                                <input type="date" id="archive-cutoff-date" class="input-text" style="padding: 0.42rem 0.65rem; font-size: 0.85rem;">
+                        <div id="period-lock-status" style="margin: 0.75rem 0 0.35rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
+
+                        <div id="period-unlock-panel" class="hidden" style="margin: 0.65rem 0 0.9rem; padding: 0.85rem 1rem; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08);">
+                            <div style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--warning, #f59e0b);">
+                                Audited Unlock for <span id="period-unlock-target-label"></span>
                             </div>
-                            <button type="button" class="btn btn-outline" id="btn-archive-dry-run" style="padding: 0.46rem 0.95rem; font-size: 0.84rem;">
-                                <i data-lucide="search"></i> Preview Eligible Rows (Dry Run)
-                            </button>
-                            <button type="button" class="btn btn-primary" id="btn-archive-execute" disabled style="padding: 0.46rem 1rem; font-size: 0.84rem;">
-                                <i data-lucide="archive"></i> Archive to Cold Storage
-                            </button>
+                            <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
+                                <input type="text" id="period-unlock-reason" class="input-text" placeholder="Mandatory audit reason for unlocking this closed month..." style="flex: 1 1 240px; min-width: 220px;">
+                                <button type="button" class="btn btn-primary" id="btn-confirm-period-unlock" style="height: 35px; flex-shrink: 0;">Confirm Audited Unlock</button>
+                                <button type="button" class="btn btn-outline" id="btn-cancel-period-unlock" style="height: 35px; flex-shrink: 0;">Cancel</button>
+                            </div>
+                        </div>
+
+                        <div class="table-container" style="margin-top: 0.9rem;">
+                            <table class="data-table" style="font-size: 0.83rem;">
+                                <thead>
+                                    <tr>
+                                        <th>Period</th>
+                                        <th>Status</th>
+                                        <th>Closed / Updated By</th>
+                                        <th>Notes / Unlock Reason</th>
+                                        <th style="width: 155px; text-align: right;">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="closed-periods-table-body">
+                                    <tr>
+                                        <td colspan="5" class="text-center" style="padding: 1.25rem; color: var(--text-muted);">Loading accounting periods...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
-                    <div id="archive-status-result" style="margin-top: 0.85rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
                 </div>
 
-                <!-- System Audit Log Table -->
-                <div class="table-container glass-card">
-                    <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
-                        <div>
-                            <h3 style="margin: 0; font-size: 1rem;">Recent System Audit Log</h3>
-                            <p style="margin: 0.15rem 0 0 0; font-size: 0.78rem; color: var(--text-muted);">Tracks manual fixes, mapping updates, ERP postings, and role changes</p>
+                <!-- Panel 3: Storage & Cold Archiving -->
+                <div id="admin-panel-storage" class="admin-panel hidden">
+                    <div class="admin-storage-grid">
+                        <!-- Live Database Storage & Capacity Meter -->
+                        <div class="glass-card" id="admin-db-storage-card">
+                            <div>
+                                <div class="admin-card-header">
+                                    <div>
+                                        <h3 class="admin-card-title">
+                                            <i data-lucide="hard-drive" style="width: 17px; height: 17px; color: var(--primary);"></i>
+                                            Database Storage &amp; Capacity
+                                        </h3>
+                                        <p class="admin-card-desc">
+                                            Live PostgreSQL disk consumption against Supabase Free Plan&rsquo;s 500 MB cap.
+                                        </p>
+                                    </div>
+                                    <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-db-storage" style="flex-shrink: 0;">
+                                        <i data-lucide="refresh-cw"></i> Refresh
+                                    </button>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+                                    <strong id="db-storage-used-label" style="font-size: 1.05rem; color: var(--text-main);">-- MB / 500 MB</strong>
+                                    <span id="db-storage-pct-badge" class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted);">--%</span>
+                                    <span id="db-storage-headroom-label" style="font-size: 0.78rem; color: var(--text-muted);"></span>
+                                </div>
+                                <div class="progress-bar" style="margin: 0.65rem 0 0.75rem;">
+                                    <div class="progress-fill" id="db-storage-progress-bar" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            <div id="db-storage-tables-list" class="admin-storage-tables-grid"></div>
                         </div>
-                        <input type="text" id="audit-log-search" class="input-text" placeholder="Filter by user, action, or reference..." style="max-width: 300px; padding: 0.38rem 0.75rem; font-size: 0.82rem;">
+
+                        <!-- Cold-Storage Transaction Archiving -->
+                        <div class="glass-card" id="admin-archive-card">
+                            <div>
+                                <div class="admin-card-header">
+                                    <div>
+                                        <h3 class="admin-card-title">
+                                            <i data-lucide="archive" style="width: 17px; height: 17px; color: var(--primary);"></i>
+                                            Cold-Storage Transaction Archiving
+                                        </h3>
+                                        <p class="admin-card-desc">
+                                            Safely moves <strong>settled &amp; ERP-posted</strong> transactions older than the cutoff date (minimum 90 days ago) from the active ledger into <code>transactions_archive</code> to keep queries fast.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div class="admin-action-well">
+                                    <div class="form-group" style="width: 165px; flex-shrink: 0;">
+                                        <label for="archive-cutoff-date">Archive Before Date</label>
+                                        <input type="date" id="archive-cutoff-date" class="input-text">
+                                    </div>
+                                    <button type="button" class="btn btn-outline" id="btn-archive-dry-run" style="height: 35px; flex-shrink: 0;">
+                                        <i data-lucide="search"></i> Preview Eligible Rows
+                                    </button>
+                                    <button type="button" class="btn btn-primary" id="btn-archive-execute" disabled style="height: 35px; flex-shrink: 0;">
+                                        <i data-lucide="archive"></i> Archive to Cold Storage
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="archive-status-result" style="margin-top: 0.9rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
+                        </div>
                     </div>
-                    <table class="data-table" style="min-width: 100%;">
-                        <thead>
-                            <tr>
-                                <th>Timestamp</th>
-                                <th>User</th>
-                                <th>Action</th>
-                                <th>Target / Reference</th>
-                                <th>Details</th>
-                                <th style="text-align: right;">Undo</th>
-                            </tr>
-                        </thead>
-                        <tbody id="audit-logs-table-body">
-                            <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading audit logs...</td></tr>
-                        </tbody>
-                    </table>
+                </div>
+
+                <!-- Panel 4: System Audit Log -->
+                <div id="admin-panel-audit" class="admin-panel hidden">
+                    <div class="admin-sheet">
+                        <div class="ledger-toolbar">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+                                <div>
+                                    <h3 class="admin-card-title" style="margin: 0;">
+                                        <i data-lucide="history" style="width: 17px; height: 17px; color: var(--primary);"></i>
+                                        Recent System Audit Log
+                                    </h3>
+                                    <p class="admin-card-desc" style="margin-top: 0.15rem;">
+                                        Tracks manual fixes, mapping updates, period locks, ERP postings, and role changes
+                                    </p>
+                                </div>
+                                <input type="text" id="audit-log-search" class="input-text" placeholder="Filter by user, action, or reference..." style="width: 280px; max-width: 100%; height: 33px; font-size: 0.82rem;">
+                            </div>
+                            <div class="segmented-tabs" role="tablist" aria-label="Audit event categories">
+                                <button type="button" class="btn btn-sm active" data-audit-category="all">All Events</button>
+                                <button type="button" class="btn btn-sm" data-audit-category="roles">Roles &amp; Users</button>
+                                <button type="button" class="btn btn-sm" data-audit-category="periods">Period Locks</button>
+                                <button type="button" class="btn btn-sm" data-audit-category="fixes">Fixes &amp; Rules</button>
+                                <button type="button" class="btn btn-sm" data-audit-category="erp">ERP &amp; Archives</button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>User</th>
+                                        <th>Action</th>
+                                        <th>Target / Reference</th>
+                                        <th>Details</th>
+                                        <th style="text-align: right;">Undo</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="audit-logs-table-body">
+                                    <tr><td colspan="6" class="text-center" style="color: var(--text-muted); padding: 1.5rem;">Loading audit logs...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>

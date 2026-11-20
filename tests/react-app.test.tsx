@@ -495,5 +495,50 @@ describe('React 19 + TypeScript Migration Architecture', () => {
     } finally {
       tempBadge.remove();
     }
+
+    // Verify Admin Console Sub-Navigation, Show All toggle, Audit Category Pills & KPI cards
+    expect(document.querySelectorAll('.modal').length).toBe(18);
+    expect(document.getElementById('user-roles-count-label')).not.toBeNull();
+    expect(document.getElementById('admin-kpi-locked-periods')).not.toBeNull();
+    expect(document.getElementById('admin-kpi-storage-used')?.textContent).toContain('135.4 / 500 MB');
+    expect(document.getElementById('admin-kpi-audit-count')).not.toBeNull();
+
+    const accessPanel = document.getElementById('admin-panel-access');
+    const governancePanel = document.getElementById('admin-panel-governance');
+    const storagePanel = document.getElementById('admin-panel-storage');
+    const auditPanel = document.getElementById('admin-panel-audit');
+    expect(accessPanel?.classList.contains('hidden')).toBe(false);
+    expect(governancePanel?.classList.contains('hidden')).toBe(true);
+    expect(storagePanel?.classList.contains('hidden')).toBe(true);
+    expect(auditPanel?.classList.contains('hidden')).toBe(true);
+
+    (app.switchAdminSubtab as (tab: string) => void)('storage');
+    expect(accessPanel?.classList.contains('hidden')).toBe(true);
+    expect(storagePanel?.classList.contains('hidden')).toBe(false);
+
+    const auditTabBtn = document.querySelector('[data-admin-subtab="audit"]') as HTMLButtonElement | null;
+    auditTabBtn?.click();
+    expect(auditPanel?.classList.contains('hidden')).toBe(false);
+    expect(storagePanel?.classList.contains('hidden')).toBe(true);
+
+    const btnShowAll = document.getElementById('btn-admin-show-all') as HTMLButtonElement | null;
+    btnShowAll?.click();
+    expect(accessPanel?.classList.contains('hidden')).toBe(false);
+    expect(governancePanel?.classList.contains('hidden')).toBe(false);
+    expect(storagePanel?.classList.contains('hidden')).toBe(false);
+    expect(auditPanel?.classList.contains('hidden')).toBe(false);
+    btnShowAll?.click();
+    expect(accessPanel?.classList.contains('hidden')).toBe(true);
+    expect(auditPanel?.classList.contains('hidden')).toBe(false);
+
+    (app as { allAuditLogs?: unknown[] }).allAuditLogs = [
+      { id: 1, user_email: 'admin@nu.edu.eg', action: 'User Role Assigned', affected_references: 'u@nu.edu.eg', details: {} },
+      { id: 2, user_email: 'admin@nu.edu.eg', action: 'Accounting Period Closed', affected_references: '2026-09', details: {} }
+    ];
+    const periodsAuditBtn = document.querySelector('[data-audit-category="periods"]') as HTMLButtonElement | null;
+    periodsAuditBtn?.click();
+    expect(document.getElementById('admin-kpi-audit-count')?.textContent).toBe('2 events');
+    expect(document.getElementById('audit-logs-table-body')?.textContent).toContain('Accounting Period Closed');
+    expect(document.getElementById('audit-logs-table-body')?.textContent).not.toContain('User Role Assigned');
   });
 });

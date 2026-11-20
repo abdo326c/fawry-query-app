@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fawry-app-cache-v66';
+const CACHE_NAME = 'fawry-app-cache-v67';
 const urlsToCache = [
   './',
   './index.html',
