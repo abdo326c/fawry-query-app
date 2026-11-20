@@ -160,6 +160,8 @@ function notifyAuth(event, session) {
 }
 
 export const supabase = {
+  isTurso: true,
+
   from(table) {
     return new TursoQueryBuilder(table);
   },

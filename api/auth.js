@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { getDb, readJsonBody, sendJson } from './_lib/db.js';
-import { createJwt, getAuthUser, hashPassword, verifyPassword } from './_lib/auth.js';
+import { clearRoleCache, createJwt, getAuthUser, hashPassword, verifyPassword } from './_lib/auth.js';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
 
@@ -146,6 +146,7 @@ export default async function handler(req, res) {
               ON CONFLICT(email) DO UPDATE SET role = excluded.role, is_active = 1, updated_by = excluded.updated_by, updated_at = datetime('now')`,
         args: [targetEmail, role, actor.email]
       });
+      clearRoleCache(targetEmail);
       return sendJson(res, 200, { ok: true, email: targetEmail, role });
     }
 

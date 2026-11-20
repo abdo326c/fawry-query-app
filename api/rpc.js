@@ -1,9 +1,23 @@
 import { getDb, readJsonBody, sendJson } from './_lib/db.js';
-import { getAuthUser } from './_lib/auth.js';
+import { clearRoleCache, getAuthUser } from './_lib/auth.js';
 import { hasMinRole, resolveStudentLevelsBatch, roleLevel } from './_lib/rbac.js';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
-const EXEMPT_ITEM_RE = /\b(dip|diploma|workshops?)\b/i;
+
+const EXEMPT_MAPPING_SQL = `(
+  LOWER(TRIM(COALESCE(mapping, ''))) = 'dip'
+  OR LOWER(COALESCE(mapping, '')) LIKE 'dip %'
+  OR LOWER(COALESCE(mapping, '')) LIKE '% dip'
+  OR LOWER(COALESCE(mapping, '')) LIKE '% dip %'
+  OR LOWER(COALESCE(mapping, '')) LIKE '%diploma%'
+  OR LOWER(COALESCE(mapping, '')) LIKE '%workshop%'
+  OR LOWER(TRIM(COALESCE(second_mapping, ''))) = 'dip'
+  OR LOWER(COALESCE(second_mapping, '')) LIKE 'dip %'
+  OR LOWER(COALESCE(second_mapping, '')) LIKE '% dip'
+  OR LOWER(COALESCE(second_mapping, '')) LIKE '% dip %'
+  OR LOWER(COALESCE(second_mapping, '')) LIKE '%diploma%'
+  OR LOWER(COALESCE(second_mapping, '')) LIKE '%workshop%'
+)`;
 
 function requireRole(user, minRole, actionDesc) {
   if (!user) {
@@ -16,10 +30,6 @@ function requireRole(user, minRole, actionDesc) {
     err.status = 403;
     throw err;
   }
-}
-
-function isExemptMapping(row) {
-  return EXEMPT_ITEM_RE.test(row.mapping || '') || EXEMPT_ITEM_RE.test(row.second_mapping || '');
 }
 
 function parseDetailsJson(raw) {
@@ -170,82 +180,82 @@ export default async function handler(req, res) {
         const banks = Array.isArray(args.banks) && args.banks.length > 0 ? args.banks : null;
         const statusFilter = String(args.status_filter || 'all').trim().toLowerCase();
 
-        if (!['date', 'mapping', 'second_mapping', 'item_name'].includes(groupCol)) {
+        let groupExpr;
+        if (groupCol === 'date') groupExpr = 'payment_date';
+        else if (groupCol === 'mapping') groupExpr = "COALESCE(NULLIF(mapping, ''), 'Unmapped')";
+        else if (groupCol === 'second_mapping') groupExpr = "COALESCE(NULLIF(second_mapping, ''), 'Unmapped')";
+        else if (groupCol === 'item_name') groupExpr = "COALESCE(NULLIF(item_name, ''), 'Unknown Item')";
+        else {
           return sendJson(res, 400, { error: `Invalid group_col for dashboard summary: ${groupCol}` });
         }
 
-        let sql = `SELECT payment_date, bank, COALESCE(item_price, 0) AS item_price,
-                          mapping, second_mapping, item_name, id_status,
-                          COALESCE(is_settled, 0) AS is_settled, erp_batch_number
-                   FROM transactions
-                   WHERE payment_date >= ? AND payment_date <= ?`;
-        const sqlArgs = [startDate, endDate];
+        const whereClauses = ['payment_date >= ?', 'payment_date <= ?'];
+        const whereArgs = [startDate, endDate];
         if (banks) {
-          sql += ` AND bank IN (${banks.map(() => '?').join(', ')})`;
-          sqlArgs.push(...banks);
+          whereClauses.push(`bank IN (${banks.map(() => '?').join(', ')})`);
+          whereArgs.push(...banks);
+        }
+        if (statusFilter === 'valid') {
+          whereClauses.push(`(id_status IN ('Valid', 'Exempt') OR ${EXEMPT_MAPPING_SQL})`);
+        } else if (statusFilter === 'invalid') {
+          whereClauses.push(`(COALESCE(id_status, '') NOT IN ('Valid', 'Exempt') AND NOT (${EXEMPT_MAPPING_SQL}))`);
+        } else if (statusFilter === 'settled') {
+          whereClauses.push('COALESCE(is_settled, 0) = 1');
+        } else if (statusFilter === 'unsettled') {
+          whereClauses.push('COALESCE(is_settled, 0) = 0');
+        } else if (statusFilter === 'erp_recorded') {
+          whereClauses.push("TRIM(COALESCE(erp_batch_number, '')) != ''");
+        } else if (statusFilter === 'erp_unposted') {
+          whereClauses.push("TRIM(COALESCE(erp_batch_number, '')) = ''");
         }
 
-        const resRows = await db.execute({ sql, args: sqlArgs });
-        const filtered = resRows.rows.filter(t => {
-          const settled = Boolean(t.is_settled);
-          const hasErp = Boolean(String(t.erp_batch_number || '').trim());
-          if (statusFilter === 'all') return true;
-          if (statusFilter === 'valid') return t.id_status === 'Valid' || t.id_status === 'Exempt' || isExemptMapping(t);
-          if (statusFilter === 'invalid') return t.id_status !== 'Valid' && t.id_status !== 'Exempt' && !isExemptMapping(t);
-          if (statusFilter === 'settled') return settled;
-          if (statusFilter === 'unsettled') return !settled;
-          if (statusFilter === 'erp_recorded') return hasErp;
-          if (statusFilter === 'erp_unposted') return !hasErp;
-          return true;
-        });
+        const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+        const [kpiRes, pivotRes, catRes] = await db.batch([
+          {
+            sql: `SELECT
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN id_status = 'Valid' THEN 1 ELSE 0 END) AS valid_count,
+                    SUM(CASE WHEN COALESCE(is_settled, 0) = 1 THEN 1 ELSE 0 END) AS settled_count,
+                    SUM(CASE WHEN TRIM(COALESCE(erp_batch_number, '')) != '' THEN 1 ELSE 0 END) AS erp_count,
+                    SUM(CASE WHEN TRIM(COALESCE(mapping, '')) = '' THEN 1 ELSE 0 END) AS unmapped_count
+                  FROM transactions ${whereSql}`,
+            args: whereArgs
+          },
+          {
+            sql: `SELECT ${groupExpr} AS group_key, bank, COALESCE(SUM(item_price), 0) AS total_amount
+                  FROM transactions ${whereSql}
+                  GROUP BY 1, bank
+                  ORDER BY 1, bank`,
+            args: whereArgs
+          },
+          {
+            sql: `SELECT COALESCE(NULLIF(TRIM(mapping), ''), 'Unmapped') AS group_key, COALESCE(SUM(item_price), 0) AS total_amount
+                  FROM transactions ${whereSql}
+                  GROUP BY 1
+                  ORDER BY 2 DESC`,
+            args: whereArgs
+          }
+        ], 'read');
 
-        let validCount = 0;
-        let settledCount = 0;
-        let erpCount = 0;
-        let unmappedCount = 0;
-        const pivotMap = new Map();
-        const catMap = new Map();
-
-        for (const t of filtered) {
-          if (t.id_status === 'Valid') validCount++;
-          if (t.is_settled) settledCount++;
-          if (String(t.erp_batch_number || '').trim()) erpCount++;
-          if (!String(t.mapping || '').trim()) unmappedCount++;
-
-          const price = Number(t.item_price || 0);
-          let gKey = '';
-          if (groupCol === 'date') gKey = String(t.payment_date || '');
-          else if (groupCol === 'mapping') gKey = String(t.mapping || '').trim() || 'Unmapped';
-          else if (groupCol === 'second_mapping') gKey = String(t.second_mapping || '').trim() || 'Unmapped';
-          else gKey = String(t.item_name || '').trim() || 'Unknown Item';
-
-          const pKey = `${gKey}\0${t.bank || ''}`;
-          const prevP = pivotMap.get(pKey);
-          if (prevP) prevP.total_amount += price;
-          else pivotMap.set(pKey, { group_key: gKey, bank: t.bank, total_amount: price });
-
-          const cKey = String(t.mapping || '').trim() || 'Unmapped';
-          catMap.set(cKey, (catMap.get(cKey) || 0) + price);
-        }
-
-        const pivot = [...pivotMap.values()].sort((a, b) =>
-          a.group_key.localeCompare(b.group_key) || String(a.bank || '').localeCompare(String(b.bank || ''))
-        );
-        const categories = [...catMap.entries()]
-          .map(([group_key, total_amount]) => ({ group_key, total_amount }))
-          .sort((a, b) => b.total_amount - a.total_amount);
-
+        const kpiRow = kpiRes.rows[0] || {};
         return sendJson(res, 200, {
           data: {
             kpis: {
-              total_count: filtered.length,
-              valid_count: validCount,
-              settled_count: settledCount,
-              erp_count: erpCount,
-              unmapped_count: unmappedCount
+              total_count: Number(kpiRow.total_count || 0),
+              valid_count: Number(kpiRow.valid_count || 0),
+              settled_count: Number(kpiRow.settled_count || 0),
+              erp_count: Number(kpiRow.erp_count || 0),
+              unmapped_count: Number(kpiRow.unmapped_count || 0)
             },
-            pivot,
-            categories
+            pivot: pivotRes.rows.map(r => ({
+              group_key: String(r.group_key ?? ''),
+              bank: r.bank,
+              total_amount: Number(r.total_amount || 0)
+            })),
+            categories: catRes.rows.map(r => ({
+              group_key: String(r.group_key ?? 'Unmapped'),
+              total_amount: Number(r.total_amount || 0)
+            }))
           }
         });
       }
@@ -323,12 +333,12 @@ export default async function handler(req, res) {
 
       case 'get_unresolved_tx_count': {
         requireRole(user, 'viewer', 'count unresolved transactions');
-        const resRows = await db.execute({
-          sql: `SELECT mapping, second_mapping FROM transactions
-                WHERE COALESCE(id_status, '') NOT IN ('Valid', 'Exempt')`
+        const cntRes = await db.execute({
+          sql: `SELECT COUNT(*) AS cnt FROM transactions
+                WHERE COALESCE(id_status, '') NOT IN ('Valid', 'Exempt')
+                  AND NOT (${EXEMPT_MAPPING_SQL})`
         });
-        const count = resRows.rows.filter(r => !isExemptMapping(r)).length;
-        return sendJson(res, 200, { data: count });
+        return sendJson(res, 200, { data: Number(cntRes.rows[0]?.cnt || 0) });
       }
 
       case 'get_student_master_version': {
@@ -342,30 +352,30 @@ export default async function handler(req, res) {
 
       case 'get_database_storage_stats': {
         requireRole(user, 'admin', 'view database storage stats');
-        const pageCountRes = await db.execute({ sql: 'PRAGMA page_count' });
-        const pageSizeRes = await db.execute({ sql: 'PRAGMA page_size' });
-        const pageCount = Number(pageCountRes.rows[0]?.page_count || 0);
-        const pageSize = Number(pageSizeRes.rows[0]?.page_size || 4096);
-        const totalBytes = pageCount * pageSize;
         const limitMb = 5120; // Turso Free Tier: 5 GB
-
         const tableNames = [
           'transactions', 'transactions_archive', 'student_master', 'links',
           'audit_logs', 'foreign_transactions', 'payment_links', 'manual_fixes',
           'item_mappings', 'settlement_batches', 'import_batches', 'user_roles'
         ];
-        const tables = [];
-        for (const t of tableNames) {
-          const cntRes = await db.execute({ sql: `SELECT COUNT(*) AS cnt FROM "${t}"` });
-          const estRows = Number(cntRes.rows[0]?.cnt || 0);
-          tables.push({
-            table_name: t,
-            est_rows: estRows,
-            table_mb: 0,
-            indexes_mb: 0,
-            total_mb: 0
-          });
-        }
+
+        const batchResults = await db.batch([
+          { sql: 'PRAGMA page_count', args: [] },
+          { sql: 'PRAGMA page_size', args: [] },
+          ...tableNames.map(t => ({ sql: `SELECT COUNT(*) AS cnt FROM "${t}"`, args: [] }))
+        ], 'read');
+
+        const pageCount = Number(batchResults[0]?.rows[0]?.page_count || 0);
+        const pageSize = Number(batchResults[1]?.rows[0]?.page_size || 4096);
+        const totalBytes = pageCount * pageSize;
+
+        const tables = tableNames.map((t, idx) => ({
+          table_name: t,
+          est_rows: Number(batchResults[idx + 2]?.rows[0]?.cnt || 0),
+          table_mb: 0,
+          indexes_mb: 0,
+          total_mb: 0
+        }));
         tables.sort((a, b) => b.est_rows - a.est_rows);
 
         return sendJson(res, 200, {
@@ -452,6 +462,7 @@ export default async function handler(req, res) {
 
         const totalRes = await db.execute({ sql: 'SELECT COUNT(*) AS cnt FROM user_roles' });
         const total = Number(totalRes.rows[0]?.cnt || 0);
+        clearRoleCache();
         return sendJson(res, 200, { data: { inserted, total } });
       }
 
@@ -479,6 +490,7 @@ export default async function handler(req, res) {
                   updated_at = datetime('now')`,
           args: [targetEmail, roleForInsert, active, user.email]
         });
+        clearRoleCache(targetEmail);
 
         const appRes = await db.execute({
           sql: 'SELECT id FROM app_users WHERE LOWER(TRIM(email)) = ? LIMIT 1',
@@ -507,6 +519,7 @@ export default async function handler(req, res) {
         }
         await db.execute({ sql: 'DELETE FROM user_roles WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] });
         const delAuth = await db.execute({ sql: 'DELETE FROM app_users WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] });
+        clearRoleCache(targetEmail);
         return sendJson(res, 200, {
           data: {
             email: targetEmail,

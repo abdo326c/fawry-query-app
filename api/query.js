@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { getDb, readJsonBody, sendJson } from './_lib/db.js';
-import { getAuthUser } from './_lib/auth.js';
+import { clearRoleCache, getAuthUser } from './_lib/auth.js';
 import {
   assertPeriodsUnlocked,
   assertTableAccess,
@@ -324,17 +324,14 @@ export default async function handler(req, res) {
       const { whereSql, args } = buildWhereClause(table, body.filters, extraClauses);
       const allArgs = [...extraArgs, ...args];
       const orderSql = buildOrderClause(table, body.orders);
-
-      let totalCount = null;
-      if (body.count === 'exact') {
-        const countRes = await db.execute({
-          sql: `SELECT COUNT(*) AS cnt FROM ${quoteIdent(table)} ${whereSql}`,
-          args: allArgs
-        });
-        totalCount = Number(countRes.rows[0]?.cnt || 0);
-      }
+      const countSql = `SELECT COUNT(*) AS cnt FROM ${quoteIdent(table)} ${whereSql}`;
 
       if (body.head === true) {
+        let totalCount = null;
+        if (body.count === 'exact') {
+          const countRes = await db.execute({ sql: countSql, args: allArgs });
+          totalCount = Number(countRes.rows[0]?.cnt || 0);
+        }
         return sendJson(res, 200, { data: null, count: totalCount });
       }
 
@@ -348,8 +345,20 @@ export default async function handler(req, res) {
         limitSql = `LIMIT ${body.limit}`;
       }
 
-      const sql = `SELECT ${selectCols} FROM ${quoteIdent(table)} ${whereSql} ${orderSql} ${limitSql}`;
-      const result = await db.execute({ sql, args: allArgs });
+      const selectSql = `SELECT ${selectCols} FROM ${quoteIdent(table)} ${whereSql} ${orderSql} ${limitSql}`;
+      let totalCount = null;
+      let result;
+
+      if (body.count === 'exact') {
+        const [countRes, selectRes] = await db.batch([
+          { sql: countSql, args: allArgs },
+          { sql: selectSql, args: allArgs }
+        ], 'read');
+        totalCount = Number(countRes.rows[0]?.cnt || 0);
+        result = selectRes;
+      } else {
+        result = await db.execute({ sql: selectSql, args: allArgs });
+      }
       const rows = result.rows.map(r => normalizeRow(table, r));
 
       if (body.single) {
@@ -471,6 +480,10 @@ export default async function handler(req, res) {
         throw err;
       }
 
+      if (table === 'user_roles') {
+        clearRoleCache();
+      }
+
       if (body.single) {
         return sendJson(res, 200, { data: insertedRows[0] || null });
       }
@@ -514,6 +527,10 @@ export default async function handler(req, res) {
       const result = await db.execute({ sql, args: [...setArgs, ...whereArgs] });
       const rows = result.rows ? result.rows.map(r => normalizeRow(table, r)) : [];
 
+      if (table === 'user_roles') {
+        clearRoleCache();
+      }
+
       if (table === 'student_master' && updates.program !== undefined) {
         const affected = await db.execute({
           sql: `SELECT student_id, program FROM student_master ${whereSql}`,
@@ -550,6 +567,10 @@ export default async function handler(req, res) {
       const sql = `DELETE FROM ${quoteIdent(table)} ${whereSql} ${returningClause}`;
       const result = await db.execute({ sql, args: whereArgs });
       const rows = result.rows ? result.rows.map(r => normalizeRow(table, r)) : [];
+
+      if (table === 'user_roles') {
+        clearRoleCache();
+      }
 
       return sendJson(res, 200, { data: body.returning ? rows : null });
     }

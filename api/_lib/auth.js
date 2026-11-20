@@ -2,6 +2,20 @@ import crypto from 'node:crypto';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+const ROLE_CACHE_TTL_MS = 30_000;
+const roleCache = new Map();
+
+export function clearRoleCache(email = null) {
+  if (email) {
+    roleCache.delete(String(email).trim().toLowerCase());
+  } else {
+    roleCache.clear();
+  }
+}
+
+function shouldCacheRoles() {
+  return process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true';
+}
 
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET || process.env.TURSO_JWT_SECRET;
@@ -120,21 +134,41 @@ export async function getAuthUser(req, db) {
     };
   }
 
+  const useCache = shouldCacheRoles();
+  if (useCache) {
+    const cached = roleCache.get(email);
+    if (cached && cached.expiresAt > Date.now()) {
+      return {
+        id: payload.sub || email,
+        email,
+        role: cached.role,
+        isActive: cached.isActive
+      };
+    }
+  }
+
   const res = await db.execute({
     sql: 'SELECT role, is_active FROM user_roles WHERE LOWER(TRIM(email)) = ? LIMIT 1',
     args: [email]
   });
 
   if (!res.rows.length) {
+    if (useCache) {
+      roleCache.set(email, { role: 'none', isActive: false, expiresAt: Date.now() + ROLE_CACHE_TTL_MS });
+    }
     return { id: payload.sub || email, email, role: 'none', isActive: false };
   }
 
   const row = res.rows[0];
   const isActive = row.is_active !== 0 && row.is_active !== false;
+  const resolvedRole = isActive ? String(row.role || 'none') : 'deactivated';
+  if (useCache) {
+    roleCache.set(email, { role: resolvedRole, isActive, expiresAt: Date.now() + ROLE_CACHE_TTL_MS });
+  }
   return {
     id: payload.sub || email,
     email,
-    role: isActive ? String(row.role || 'none') : 'deactivated',
+    role: resolvedRole,
     isActive
   };
 }

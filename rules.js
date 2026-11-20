@@ -236,7 +236,7 @@ export function buildMappingLookup(mappings) {
  * @param {string} [orderByCol] a unique, stable column to page by
  * @param {{pageSize?:number, onProgress?:(loaded:number)=>void}} [opts]
  */
-export async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id', { pageSize = PAGE_SIZE, onProgress = null } = {}) {
+export async function fetchAll(table, selectCols = '*', queryFn = null, orderByCol = 'id', { pageSize = (supabase?.isTurso ? 4000 : PAGE_SIZE), onProgress = null } = {}) {
     const isTimeoutError = (err) => {
         const msg = String(err?.message || err?.details || err || '').toLowerCase();
         return err?.code === '57014' || msg.includes('statement timeout') || msg.includes('canceling statement');
