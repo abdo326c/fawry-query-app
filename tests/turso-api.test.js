@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createClient } from '@libsql/client';
 import { setDbClient } from '../api/_lib/db.js';
@@ -722,5 +723,73 @@ describe('Turso / Vercel API Backend (Auth, RBAC Query, RPCs)', () => {
       password: 'SelfPassword3!'
     });
     expect(finalSignIn.error).toBeNull();
+  });
+
+  test('verifies legacy Supabase bcrypt hashes and auto-upgrades active users to scrypt', async () => {
+    const legacyHash = bcrypt.hashSync('LegacySecret99!', 4);
+
+    await db.batch([
+      {
+        sql: 'INSERT INTO app_users (id, email, password_hash) VALUES (?, ?, ?)',
+        args: ['legacy-active-1', 'legacy-active@nu.edu.eg', legacyHash]
+      },
+      {
+        sql: 'INSERT INTO user_roles (email, role, is_active) VALUES (?, ?, ?)',
+        args: ['legacy-active@nu.edu.eg', 'accountant', 1]
+      },
+      {
+        sql: 'INSERT INTO app_users (id, email, password_hash) VALUES (?, ?, ?)',
+        args: ['legacy-inactive-1', 'legacy-inactive@nu.edu.eg', legacyHash]
+      },
+      {
+        sql: 'INSERT INTO user_roles (email, role, is_active) VALUES (?, ?, ?)',
+        args: ['legacy-inactive@nu.edu.eg', 'operator', 0]
+      }
+    ], 'write');
+
+    // Wrong password returns 401
+    const badLogin = await callApi(authHandler, {
+      action: 'login',
+      email: 'legacy-active@nu.edu.eg',
+      password: 'WrongPassword!'
+    });
+    expect(badLogin.status).toBe(401);
+
+    // Active user logs in with legacy password -> 200 and upgrades to scrypt
+    const goodLogin = await callApi(authHandler, {
+      action: 'login',
+      email: 'legacy-active@nu.edu.eg',
+      password: 'LegacySecret99!'
+    });
+    expect(goodLogin.status).toBe(200);
+    expect(goodLogin.body.session.user.role).toBe('accountant');
+
+    const upgradedRow = await db.execute({
+      sql: 'SELECT password_hash FROM app_users WHERE email = ?',
+      args: ['legacy-active@nu.edu.eg']
+    });
+    expect(String(upgradedRow.rows[0].password_hash).startsWith('scrypt:')).toBe(true);
+
+    // Active user can sign in again using the upgraded scrypt hash
+    const secondLogin = await callApi(authHandler, {
+      action: 'login',
+      email: 'legacy-active@nu.edu.eg',
+      password: 'LegacySecret99!'
+    });
+    expect(secondLogin.status).toBe(200);
+
+    // Deactivated user returns 403 and does NOT upgrade stored hash
+    const inactiveLogin = await callApi(authHandler, {
+      action: 'login',
+      email: 'legacy-inactive@nu.edu.eg',
+      password: 'LegacySecret99!'
+    });
+    expect(inactiveLogin.status).toBe(403);
+
+    const inactiveRow = await db.execute({
+      sql: 'SELECT password_hash FROM app_users WHERE email = ?',
+      args: ['legacy-inactive@nu.edu.eg']
+    });
+    expect(inactiveRow.rows[0].password_hash).toBe(legacyHash);
   });
 });

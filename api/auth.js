@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
-import { clearRoleCache, createJwt, getAuthUser, hashPassword, verifyPassword } from './_lib/auth.js';
+import { clearRoleCache, createJwt, getAuthUser, hashPassword, isLegacyBcryptHash, verifyPassword } from './_lib/auth.js';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
 
@@ -74,10 +74,17 @@ export default async function handler(req, res) {
         return sendJson(res, 403, { error: 'Your account does not have an assigned role yet. Contact an administrator.' });
       }
 
-      await withDbRetry(() => db.execute({
-        sql: "UPDATE app_users SET last_sign_in_at = datetime('now') WHERE id = ?",
-        args: [dbUser.id]
-      })).catch(() => {});
+      if (isLegacyBcryptHash(dbUser.password_hash)) {
+        await withDbRetry(() => db.execute({
+          sql: "UPDATE app_users SET password_hash = ?, last_sign_in_at = datetime('now') WHERE id = ?",
+          args: [hashPassword(password), dbUser.id]
+        })).catch(() => {});
+      } else {
+        await withDbRetry(() => db.execute({
+          sql: "UPDATE app_users SET last_sign_in_at = datetime('now') WHERE id = ?",
+          args: [dbUser.id]
+        })).catch(() => {});
+      }
 
       const token = createJwt({ sub: dbUser.id, email });
       return sendJson(res, 200, {

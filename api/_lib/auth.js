@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
@@ -50,10 +51,25 @@ export function hashPassword(password) {
 }
 
 /**
- * Verifies a plaintext password against a stored scrypt hash.
+ * Checks whether a stored password hash uses legacy Supabase bcrypt format ($2a$/$2b$/$2y$).
+ */
+export function isLegacyBcryptHash(storedHash) {
+  return typeof storedHash === 'string' && /^\$2[aby]\$\d{2}\$/.test(storedHash);
+}
+
+/**
+ * Verifies a plaintext password against a stored scrypt or legacy bcrypt hash.
  */
 export function verifyPassword(password, storedHash) {
   if (!storedHash || typeof storedHash !== 'string') return false;
+  if (isLegacyBcryptHash(storedHash)) {
+    const normalized = storedHash.startsWith('$2y$') ? `$2a$${storedHash.slice(4)}` : storedHash;
+    try {
+      return bcrypt.compareSync(String(password), normalized);
+    } catch {
+      return false;
+    }
+  }
   const parts = storedHash.split(':');
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
   const [, salt, expectedHex] = parts;
