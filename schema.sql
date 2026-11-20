@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSOLIDATED SCHEMA (v2.11.4 — includes migrations 2.1.0 through 2.11.4)
+-- CONSOLIDATED SCHEMA (v2.11.5 — includes migrations 2.1.0 through 2.11.5)
 --
 -- Idempotent baseline schema for the Student Payments Database (Supabase / PostgreSQL).
 -- For incremental upgrades on an existing database, you can also run the individual
@@ -84,10 +84,9 @@ END $$;
 
 -- Indexes for fast querying
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX IF NOT EXISTS idx_transactions_payment_date ON transactions(payment_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_date_id ON transactions(payment_date ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_transactions_reference ON transactions(reference_number);
-CREATE INDEX IF NOT EXISTS idx_transactions_student ON transactions(student_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_student_id ON transactions(student_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_item_name ON transactions(item_name);
 CREATE INDEX IF NOT EXISTS idx_transactions_mapping ON transactions(mapping);
 CREATE INDEX IF NOT EXISTS idx_transactions_second_mapping ON transactions(second_mapping);
@@ -100,11 +99,13 @@ CREATE INDEX IF NOT EXISTS idx_transactions_id_status ON transactions(id_status)
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_id ON transactions(batch_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_ref_trgm ON transactions USING gin (reference_number gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_transactions_student_trgm ON transactions USING gin (student_id gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_transactions_mobile_trgm ON transactions USING gin (customer_mobile gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_transactions_item_trgm ON transactions USING gin (item_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_transactions_check_col_trgm ON transactions USING gin (check_column gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_transactions_mapping_trgm ON transactions USING gin (mapping gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_transactions_second_mapping_trgm ON transactions USING gin (second_mapping gin_trgm_ops);
+DROP INDEX IF EXISTS public.idx_transactions_mobile_trgm;
+DROP INDEX IF EXISTS public.idx_transactions_mapping_trgm;
+DROP INDEX IF EXISTS public.idx_transactions_second_mapping_trgm;
+DROP INDEX IF EXISTS public.idx_transactions_student;
+DROP INDEX IF EXISTS public.idx_transactions_payment_date;
 
 -- 3. Links Table
 CREATE TABLE IF NOT EXISTS links (
@@ -161,19 +162,22 @@ CREATE TABLE IF NOT EXISTS student_master (
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE student_master ADD COLUMN IF NOT EXISTS personal_email TEXT;
-CREATE INDEX IF NOT EXISTS idx_student_master_national_id ON student_master(national_id);
-CREATE INDEX IF NOT EXISTS idx_student_master_email ON student_master(email);
-CREATE INDEX IF NOT EXISTS idx_student_master_email_lower ON public.student_master (LOWER(BTRIM(email)));
-CREATE INDEX IF NOT EXISTS idx_student_master_personal_email ON public.student_master(personal_email);
-CREATE INDEX IF NOT EXISTS idx_student_master_personal_email_lower ON public.student_master (LOWER(BTRIM(personal_email)));
-CREATE INDEX IF NOT EXISTS idx_student_master_mobile ON student_master(mobile);
-CREATE INDEX IF NOT EXISTS idx_student_master_college ON public.student_master(college);
+CREATE INDEX IF NOT EXISTS idx_student_master_national ON student_master(national_id);
 CREATE INDEX IF NOT EXISTS idx_student_master_name_trgm ON public.student_master USING gin (full_name gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_student_master_mobile_trgm ON public.student_master USING gin (mobile gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_student_master_gmobile_trgm ON public.student_master USING gin (guardian_mobile gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_student_master_email_trgm ON public.student_master USING gin (email gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_student_master_personal_email_trgm ON public.student_master USING gin (personal_email gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_student_master_natid_trgm ON public.student_master USING gin (national_id gin_trgm_ops);
+DROP INDEX IF EXISTS public.idx_student_master_email_trgm;
+DROP INDEX IF EXISTS public.idx_student_master_natid_trgm;
+DROP INDEX IF EXISTS public.idx_student_master_personal_email_trgm;
+DROP INDEX IF EXISTS public.idx_student_master_mobile_trgm;
+DROP INDEX IF EXISTS public.idx_student_master_gmobile_trgm;
+DROP INDEX IF EXISTS public.idx_student_master_email;
+DROP INDEX IF EXISTS public.idx_student_master_email_lower;
+DROP INDEX IF EXISTS public.idx_student_master_id;
+DROP INDEX IF EXISTS public.idx_student_master_nat_id;
+DROP INDEX IF EXISTS public.idx_student_master_national_id;
+DROP INDEX IF EXISTS public.idx_student_master_mobile;
+DROP INDEX IF EXISTS public.idx_student_master_personal_email;
+DROP INDEX IF EXISTS public.idx_student_master_personal_email_lower;
+DROP INDEX IF EXISTS public.idx_student_master_college;
 
 -- 7. Payment Links Catalog Table
 CREATE TABLE IF NOT EXISTS payment_links (
