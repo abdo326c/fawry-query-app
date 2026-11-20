@@ -8,6 +8,7 @@ import {
     fetchAll,
     fetchByIn,
     isLockedTransaction,
+    findClosedPeriodsInRows,
     escapeHTML
 } from './rules.js';
 
@@ -644,6 +645,27 @@ export class FawryProcessor {
         } catch (err) {
             this.log(`Error: Could not check existing transactions: ${err.message}`);
             return false;
+        }
+
+        // 3b. Pre-flight Accounting Period Lock check (fail before inserting batch or rows)
+        const candidateRows = transactions.filter(t => !lockedKeys.has(this.txKey(t)));
+        try {
+            const { data: closedData, error: closedErr } = await supabase
+                .from('closed_periods')
+                .select('period_month')
+                .eq('is_closed', true)
+                .limit(500);
+            if (!closedErr && Array.isArray(closedData) && closedData.length > 0) {
+                const closedSet = new Set(closedData.map(r => r.period_month).filter(Boolean));
+                const { blockedRows, closedMonths } = findClosedPeriodsInRows(candidateRows, closedSet, 'payment_date');
+                if (blockedRows.length > 0) {
+                    this.hasErrors = true;
+                    this.log(`Import blocked: ${blockedRows.length} transaction(s) fall inside closed accounting period(s): ${closedMonths.join(', ')}. Ask an Admin to unlock the period first.`);
+                    return false;
+                }
+            }
+        } catch (_periodErr) {
+            // If closed_periods table is not yet migrated, DB triggers will enforce if present
         }
 
         // 4. Register the import batch and save to database

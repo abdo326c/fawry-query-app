@@ -31,7 +31,11 @@ import {
   getStudentProgramLevel as rawGetStudentProgramLevel,
   formatStudentLevelTag as rawFormatStudentLevelTag,
   ensureProgramHasLevelPrefix as rawEnsureProgramHasLevelPrefix,
-  writeCompressedExcel as rawWriteCompressedExcel
+  writeCompressedExcel as rawWriteCompressedExcel,
+  toPeriodMonth as rawToPeriodMonth,
+  isDateInClosedPeriods as rawIsDateInClosedPeriods,
+  findClosedPeriodsInRows as rawFindClosedPeriodsInRows,
+  formatPeriodMonthLabel as rawFormatPeriodMonthLabel
 } from '../../rules.js';
 
 export const validateID: (id: string | number | null | undefined) => IdStatus = rawValidateID;
@@ -114,3 +118,21 @@ export const ensureProgramHasLevelPrefix: (program: string | null | undefined, e
   rawEnsureProgramHasLevelPrefix;
 export const writeCompressedExcel: (wb: unknown, filename: string, opts?: Record<string, unknown>) => unknown =
   rawWriteCompressedExcel;
+export const toPeriodMonth: (dateInput: unknown) => string = rawToPeriodMonth;
+export const isDateInClosedPeriods: (
+  dateInput: unknown,
+  closedPeriodSet: Set<string> | string[] | null | undefined
+) => boolean = rawIsDateInClosedPeriods;
+export const findClosedPeriodsInRows: <T extends Record<string, unknown>>(
+  rows: T[],
+  closedPeriodSet: Set<string> | string[] | null | undefined,
+  dateGetter?: string | ((row: T) => unknown)
+) => { blockedRows: T[]; closedMonths: string[] } = rawFindClosedPeriodsInRows as unknown as <
+  T extends Record<string, unknown>
+>(
+  rows: T[],
+  closedPeriodSet: Set<string> | string[] | null | undefined,
+  dateGetter?: string | ((row: T) => unknown)
+) => { blockedRows: T[]; closedMonths: string[] };
+export const formatPeriodMonthLabel: (periodMonth: string | null | undefined) => string =
+  rawFormatPeriodMonthLabel;

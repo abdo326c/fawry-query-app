@@ -190,8 +190,9 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       'erpAmount', 'erpAccount', 'erpDayShort', 'resolveErpExportDate', 'downloadErpExport',
       'openErpDateChoiceModal', 'generateErpExcel', 'recordErpReferences',
       // Admin, Audit, Double-Payments & Hygiene (admin-audit.js)
-      'initUsersAndRoles', 'initColdStorageArchive', 'loadUsersAndRoles', 'renderUserRolesTable', 'renderAuditLogsTable',
-      'revertAuditLogEntry', 'initDoublePaymentsDetector', 'loadDoublePayments',
+      'initUsersAndRoles', 'initAccountingPeriodLock', 'loadClosedPeriods', 'renderClosedPeriodsCard',
+      'isDateInClosedPeriod', 'initColdStorageArchive', 'loadUsersAndRoles', 'renderUserRolesTable',
+      'renderAuditLogsTable', 'revertAuditLogEntry', 'initDoublePaymentsDetector', 'loadDoublePayments',
       'renderDoublePaymentsTable', 'exportDoublePayments', 'initHygieneReportModal',
       'checkAndShowHygieneReportModal',
       // Foreign / BM Transactions
@@ -306,5 +307,75 @@ describe('React 19 + TypeScript Migration Architecture', () => {
       fireEvent.change(cutoffInput, { target: { value: '2025-01-01' } });
     }
     expect(btnExecute?.disabled).toBe(true);
+
+    // Verify Accounting Period Lock (#admin-period-lock-card) UI & 18-modal invariant
+    expect(document.querySelectorAll('.modal').length).toBe(18);
+    const periodCard = document.getElementById('admin-period-lock-card');
+    const periodMonthInput = document.getElementById('period-lock-month') as HTMLInputElement | null;
+    const periodNotesInput = document.getElementById('period-lock-notes') as HTMLInputElement | null;
+    const btnClosePeriod = document.getElementById('btn-close-period') as HTMLButtonElement | null;
+    const periodUnlockPanel = document.getElementById('period-unlock-panel');
+    const periodUnlockReason = document.getElementById('period-unlock-reason') as HTMLInputElement | null;
+    const btnConfirmUnlock = document.getElementById('btn-confirm-period-unlock') as HTMLButtonElement | null;
+    const periodsTbody = document.getElementById('closed-periods-table-body');
+
+    expect(periodCard).not.toBeNull();
+    expect(periodMonthInput).not.toBeNull();
+    expect(btnClosePeriod).not.toBeNull();
+    expect(periodUnlockPanel).not.toBeNull();
+    expect(periodsTbody).not.toBeNull();
+
+    if (periodMonthInput) periodMonthInput.value = '2026-09';
+    if (periodNotesInput) periodNotesInput.value = 'Quarter-end close';
+    rpcMock.mockClear();
+    rpcMock.mockResolvedValueOnce({ data: { period_month: '2026-09', is_closed: true }, error: null });
+
+    btnClosePeriod?.click();
+    await vi.waitFor(() => {
+      const confirmModal = document.getElementById('modal-custom-confirm');
+      expect(confirmModal?.classList.contains('hidden')).toBe(false);
+    });
+    document.getElementById('btn-custom-confirm-ok')?.click();
+
+    await vi.waitFor(() => {
+      expect(rpcMock).toHaveBeenCalledWith('set_accounting_period_lock', {
+        p_period_month: '2026-09',
+        p_is_closed: true,
+        p_notes: 'Quarter-end close'
+      });
+    });
+
+    // Test audited unlock flow: requires non-empty audit reason
+    (app as { closedPeriods?: unknown[] }).closedPeriods = [
+      {
+        period_month: '2026-09',
+        is_closed: true,
+        closed_by: 'admin@nu.edu.eg',
+        closed_at: '2026-10-01T10:00:00Z',
+        notes: 'Quarter-end close'
+      }
+    ];
+    (app.renderClosedPeriodsCard as () => void)();
+    const unlockBtn = periodsTbody?.querySelector('.btn-toggle-period-lock[data-action="unlock"]') as HTMLButtonElement | null;
+    expect(unlockBtn).not.toBeNull();
+    unlockBtn?.click();
+    expect(periodUnlockPanel?.classList.contains('hidden')).toBe(false);
+
+    rpcMock.mockClear();
+    if (periodUnlockReason) periodUnlockReason.value = '';
+    btnConfirmUnlock?.click();
+    expect(rpcMock).not.toHaveBeenCalled();
+
+    rpcMock.mockResolvedValueOnce({ data: { period_month: '2026-09', is_closed: false }, error: null });
+    if (periodUnlockReason) periodUnlockReason.value = 'Post-audit correction';
+    btnConfirmUnlock?.click();
+
+    await vi.waitFor(() => {
+      expect(rpcMock).toHaveBeenCalledWith('set_accounting_period_lock', {
+        p_period_month: '2026-09',
+        p_is_closed: false,
+        p_notes: 'Post-audit correction'
+      });
+    });
   });
 });

@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSOLIDATED SCHEMA (v2.11.1 — includes migrations 2.1.0 through 2.11.0)
+-- CONSOLIDATED SCHEMA (v2.11.4 — includes migrations 2.1.0 through 2.11.4)
 --
 -- Idempotent baseline schema for the Student Payments Database (Supabase / PostgreSQL).
 -- For incremental upgrades on an existing database, you can also run the individual
@@ -462,7 +462,12 @@ BEGIN
   IF auth.uid() IS NOT NULL THEN
     v_role := public.current_user_role();
 
-    IF NEW.action IN ('Database Hygiene Audit', 'Database Hygiene Rollback') AND v_role <> 'admin' THEN
+    IF NEW.action IN (
+      'Database Hygiene Audit',
+      'Database Hygiene Rollback',
+      'Accounting Period Closed',
+      'Accounting Period Unlocked'
+    ) AND v_role <> 'admin' THEN
       RAISE EXCEPTION 'Access denied: only admin or automation can log %', NEW.action;
     END IF;
 
@@ -1752,12 +1757,14 @@ BEGIN
   UPDATE public.transactions t
   SET student_level = v_level
   WHERE t.student_id = ANY(v_candidates)
-    AND t.student_level IS DISTINCT FROM v_level;
+    AND t.student_level IS DISTINCT FROM v_level
+    AND NOT public.is_period_closed(t.payment_date);
 
   UPDATE public.foreign_transactions ft
   SET student_level = v_level
   WHERE ft.student_id = ANY(v_candidates)
-    AND ft.student_level IS DISTINCT FROM v_level;
+    AND ft.student_level IS DISTINCT FROM v_level
+    AND NOT public.is_period_closed(COALESCE(ft.value_date, ft.transaction_date));
 
   RETURN NEW;
 END;
@@ -1855,6 +1862,8 @@ BEGIN
     v_email := 'system@nu.edu.eg';
   END;
 
+  PERFORM set_config('app.bypass_period_lock', 'on', true);
+
   WITH moved AS (
     DELETE FROM public.transactions
     WHERE payment_date < p_before_date
@@ -1894,3 +1903,293 @@ $function$;
 
 REVOKE EXECUTE ON FUNCTION public.archive_settled_transactions(DATE, BOOLEAN) FROM public, anon;
 GRANT  EXECUTE ON FUNCTION public.archive_settled_transactions(DATE, BOOLEAN) TO authenticated, service_role;
+
+-- 23. Accounting Period Lock (Month-End Close) (v2.11.4)
+CREATE TABLE IF NOT EXISTS public.closed_periods (
+  period_month TEXT PRIMARY KEY CHECK (period_month ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  is_closed    BOOLEAN NOT NULL DEFAULT TRUE,
+  closed_by    TEXT,
+  closed_at    TIMESTAMPTZ,
+  reopened_by  TEXT,
+  reopened_at  TIMESTAMPTZ,
+  notes        TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_closed_periods_is_closed
+  ON public.closed_periods (is_closed)
+  WHERE is_closed = TRUE;
+
+ALTER TABLE public.closed_periods ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rbac_select ON public.closed_periods;
+CREATE POLICY rbac_select ON public.closed_periods
+  FOR SELECT TO authenticated
+  USING ((SELECT public.has_min_role('viewer')));
+
+DROP POLICY IF EXISTS rbac_admin_write ON public.closed_periods;
+CREATE POLICY rbac_admin_write ON public.closed_periods
+  FOR ALL TO authenticated
+  USING ((SELECT public.has_min_role('admin')))
+  WITH CHECK ((SELECT public.has_min_role('admin')));
+
+CREATE OR REPLACE FUNCTION public.is_period_closed(p_date DATE)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT CASE
+    WHEN p_date IS NULL THEN FALSE
+    ELSE EXISTS (
+      SELECT 1
+      FROM public.closed_periods cp
+      WHERE cp.period_month = to_char(p_date, 'YYYY-MM')
+        AND cp.is_closed = TRUE
+    )
+  END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.is_period_closed(DATE) FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.is_period_closed(DATE) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.set_accounting_period_lock(
+  p_period_month TEXT,
+  p_is_closed BOOLEAN,
+  p_notes TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $function$
+DECLARE
+  v_month       TEXT := BTRIM(COALESCE(p_period_month, ''));
+  v_closed      BOOLEAN := COALESCE(p_is_closed, TRUE);
+  v_notes       TEXT := NULLIF(BTRIM(COALESCE(p_notes, '')), '');
+  v_caller      TEXT;
+  v_prev_closed BOOLEAN := NULL;
+  v_row         public.closed_periods%ROWTYPE;
+BEGIN
+  IF NOT public.has_min_role('admin') THEN
+    RAISE EXCEPTION 'Access denied: Admin role required to manage accounting period locks';
+  END IF;
+
+  IF v_month !~ '^\d{4}-(0[1-9]|1[0-2])$' THEN
+    RAISE EXCEPTION 'Invalid period_month "%" — expected YYYY-MM format', v_month;
+  END IF;
+
+  IF NOT v_closed AND v_notes IS NULL THEN
+    RAISE EXCEPTION 'An audit reason is required to unlock a closed accounting period (%)', v_month;
+  END IF;
+
+  BEGIN
+    v_caller := COALESCE(NULLIF(LOWER(TRIM(COALESCE(auth.jwt() ->> 'email', ''))), ''), 'admin@nu.edu.eg');
+  EXCEPTION WHEN OTHERS THEN
+    v_caller := 'admin@nu.edu.eg';
+  END;
+
+  SELECT cp.is_closed INTO v_prev_closed
+  FROM public.closed_periods cp
+  WHERE cp.period_month = v_month;
+
+  INSERT INTO public.closed_periods (
+    period_month, is_closed, closed_by, closed_at, reopened_by, reopened_at, notes, updated_at
+  )
+  VALUES (
+    v_month,
+    v_closed,
+    CASE WHEN v_closed THEN v_caller ELSE NULL END,
+    CASE WHEN v_closed THEN NOW() ELSE NULL END,
+    CASE WHEN NOT v_closed THEN v_caller ELSE NULL END,
+    CASE WHEN NOT v_closed THEN NOW() ELSE NULL END,
+    v_notes,
+    NOW()
+  )
+  ON CONFLICT (period_month) DO UPDATE SET
+    is_closed   = v_closed,
+    closed_by   = CASE WHEN v_closed THEN v_caller ELSE public.closed_periods.closed_by END,
+    closed_at   = CASE WHEN v_closed THEN NOW() ELSE public.closed_periods.closed_at END,
+    reopened_by = CASE WHEN NOT v_closed THEN v_caller ELSE public.closed_periods.reopened_by END,
+    reopened_at = CASE WHEN NOT v_closed THEN NOW() ELSE public.closed_periods.reopened_at END,
+    notes       = v_notes,
+    updated_at  = NOW()
+  RETURNING * INTO v_row;
+
+  INSERT INTO public.audit_logs (user_email, action, affected_references, details)
+  VALUES (
+    v_caller,
+    CASE WHEN v_closed THEN 'Accounting Period Closed' ELSE 'Accounting Period Unlocked' END,
+    v_month,
+    jsonb_build_object(
+      'period_month', v_month,
+      'is_closed', v_closed,
+      'previous_is_closed', v_prev_closed,
+      'notes', v_notes
+    )
+  );
+
+  RETURN to_jsonb(v_row);
+END;
+$function$;
+
+REVOKE EXECUTE ON FUNCTION public.set_accounting_period_lock(TEXT, BOOLEAN, TEXT) FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.set_accounting_period_lock(TEXT, BOOLEAN, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.trg_enforce_tx_period_lock()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_old_date DATE;
+  v_new_date DATE;
+  v_ref      TEXT;
+BEGIN
+  IF current_setting('app.bypass_period_lock', true) = 'on' THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    v_new_date := CASE
+      WHEN TG_TABLE_NAME = 'foreign_transactions' THEN COALESCE(NEW.value_date, NEW.transaction_date)
+      ELSE NEW.payment_date
+    END;
+    v_ref := COALESCE(NEW.reference_number, 'unknown');
+    IF public.is_period_closed(v_new_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot insert transaction (ref: %) into a locked month without an audited Admin unlock.',
+        to_char(v_new_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    v_old_date := CASE
+      WHEN TG_TABLE_NAME = 'foreign_transactions' THEN COALESCE(OLD.value_date, OLD.transaction_date)
+      ELSE OLD.payment_date
+    END;
+    v_ref := COALESCE(OLD.reference_number, 'unknown');
+    IF public.is_period_closed(v_old_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot delete transaction (ref: %) from a locked month without an audited Admin unlock.',
+        to_char(v_old_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    RETURN OLD;
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW IS NOT DISTINCT FROM OLD THEN
+      RETURN NEW;
+    END IF;
+    IF TG_TABLE_NAME = 'foreign_transactions' THEN
+      v_old_date := COALESCE(OLD.value_date, OLD.transaction_date);
+      v_new_date := COALESCE(NEW.value_date, NEW.transaction_date);
+    ELSE
+      v_old_date := OLD.payment_date;
+      v_new_date := NEW.payment_date;
+    END IF;
+    v_ref := COALESCE(NEW.reference_number, OLD.reference_number, 'unknown');
+
+    IF public.is_period_closed(v_old_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot modify transaction or ERP batch (ref: %) inside a locked month without an audited Admin unlock.',
+        to_char(v_old_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    IF v_new_date IS DISTINCT FROM v_old_date AND public.is_period_closed(v_new_date) THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot backdate transaction (ref: %) into a locked month without an audited Admin unlock.',
+        to_char(v_new_date, 'YYYY-MM'), v_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RETURN NULL;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS trg_transactions_period_lock ON public.transactions;
+CREATE TRIGGER trg_transactions_period_lock
+  BEFORE INSERT OR UPDATE OR DELETE ON public.transactions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trg_enforce_tx_period_lock();
+
+DROP TRIGGER IF EXISTS trg_foreign_transactions_period_lock ON public.foreign_transactions;
+CREATE TRIGGER trg_foreign_transactions_period_lock
+  BEFORE INSERT OR UPDATE OR DELETE ON public.foreign_transactions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trg_enforce_tx_period_lock();
+
+CREATE OR REPLACE FUNCTION public.trg_enforce_manual_fix_period_lock()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_ref_old      TEXT;
+  v_ref_new      TEXT;
+  v_refs         TEXT[];
+  v_blocked_ref  TEXT;
+  v_closed_month TEXT;
+BEGIN
+  IF current_setting('app.bypass_period_lock', true) = 'on' THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    v_ref_new := NULLIF(BTRIM(COALESCE(NEW.reference_number, '')), '');
+  ELSIF TG_OP = 'DELETE' THEN
+    v_ref_old := NULLIF(BTRIM(COALESCE(OLD.reference_number, '')), '');
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW IS NOT DISTINCT FROM OLD THEN
+      RETURN NEW;
+    END IF;
+    v_ref_old := NULLIF(BTRIM(COALESCE(OLD.reference_number, '')), '');
+    v_ref_new := NULLIF(BTRIM(COALESCE(NEW.reference_number, '')), '');
+  END IF;
+
+  v_refs := ARRAY(
+    SELECT DISTINCT r
+    FROM unnest(ARRAY[v_ref_old, v_ref_new]) AS r
+    WHERE r IS NOT NULL AND r <> ''
+  );
+
+  IF COALESCE(array_length(v_refs, 1), 0) > 0 THEN
+    SELECT t.reference_number, to_char(t.payment_date, 'YYYY-MM')
+    INTO v_blocked_ref, v_closed_month
+    FROM public.transactions t
+    WHERE t.reference_number = ANY(v_refs)
+      AND public.is_period_closed(t.payment_date)
+    LIMIT 1;
+
+    IF v_closed_month IS NULL THEN
+      SELECT ft.reference_number, to_char(COALESCE(ft.value_date, ft.transaction_date), 'YYYY-MM')
+      INTO v_blocked_ref, v_closed_month
+      FROM public.foreign_transactions ft
+      WHERE ft.reference_number = ANY(v_refs)
+        AND public.is_period_closed(COALESCE(ft.value_date, ft.transaction_date))
+      LIMIT 1;
+    END IF;
+
+    IF v_closed_month IS NOT NULL THEN
+      RAISE EXCEPTION 'Accounting period % is closed. Cannot modify manual fix for reference % because it belongs to a locked month without an audited Admin unlock.',
+        v_closed_month, v_blocked_ref
+        USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS trg_manual_fixes_period_lock ON public.manual_fixes;
+CREATE TRIGGER trg_manual_fixes_period_lock
+  BEFORE INSERT OR UPDATE OR DELETE ON public.manual_fixes
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trg_enforce_manual_fix_period_lock();

@@ -7,6 +7,8 @@ import {
     escapeHTML,
     sanitizeExcelRows,
     toDateOnly,
+    toPeriodMonth,
+    findClosedPeriodsInRows,
     getStudentProgramLevel,
     formatStudentLevelTag,
     writeCompressedExcel
@@ -178,6 +180,17 @@ class ForeignUiMixin {
             return { synced: 0, error: null };
         }
 
+        const { blockedRows, closedMonths } = findClosedPeriodsInRows(
+            dbRows,
+            this.closedPeriodSet,
+            r => r.value_date || r.transaction_date
+        );
+        if (blockedRows.length > 0) {
+            const msg = `Blocked: ${blockedRows.length} foreign deposit(s) fall inside closed accounting period(s): ${closedMonths.join(', ')}.`;
+            if (!silent) Toast.show(msg, 'error');
+            return { synced: 0, error: new Error(msg) };
+        }
+
         try {
             const tableClient = supabase.from('foreign_transactions');
             if (!tableClient || typeof tableClient.upsert !== 'function') {
@@ -216,6 +229,9 @@ class ForeignUiMixin {
         let updatedCount = 0;
         const updatedRowsForDb = [];
         this.foreignTransactions = this.foreignTransactions.map((row, idx) => {
+            if (this.isDateInClosedPeriod(row.value_date || row.transaction_date)) {
+                return row;
+            }
             const refKey = String(row.reference_number || '').trim().toLowerCase();
             const txRefKey = String(row.transaction_ref || '').trim().toLowerCase();
             const fix = fixByRef.get(refKey) || (txRefKey ? fixByRef.get(txRefKey) : null);
@@ -1223,6 +1239,57 @@ class ForeignUiMixin {
         const matchingRows = (this.foreignTransactions || []).filter(r => r.reference_number === ref);
         if (matchingRows.length === 0) return;
 
+        const closedRow = matchingRows.find(r => this.isDateInClosedPeriod(r.value_date || r.transaction_date));
+        if (closedRow) {
+            const closedMonth = toPeriodMonth(closedRow.value_date || closedRow.transaction_date);
+            Toast.show(`Accounting period ${closedMonth} is closed. Ask an Admin for an audited unlock before editing Ref ${ref}.`, 'error');
+            return;
+        }
+
+        // Sync with Manual Fixes (manual_fixes table first, respecting DB period-lock triggers)
+        const fixRecord = newId ? {
+            reference_number: ref,
+            correct_id: newId,
+            item_name: null,
+            mapping: DEFAULT_FOREIGN_MAPPING,
+            second_mapping: null
+        } : null;
+
+        if (fixRecord) {
+            try {
+                const { error: fixErr } = await supabase.from('manual_fixes').upsert([fixRecord], { onConflict: 'reference_number' });
+                if (fixErr) {
+                    Toast.show(`Failed to save fix for Ref ${ref}: ${fixErr.message}`, 'error');
+                    return;
+                }
+            } catch (err) {
+                if (err?.message && /closed/i.test(err.message)) {
+                    Toast.show(err.message, 'error');
+                    return;
+                }
+                // ignore offline errors in local mode
+            }
+        }
+
+        try {
+            const { error: fxErr } = await supabase.from('foreign_transactions').update({
+                student_id: newId,
+                matched_student_name: newName || matchingRows[0]?.matched_student_name || null,
+                id_status: status,
+                match_source: newId ? 'manual' : 'unmatched'
+            }).eq('reference_number', ref);
+            if (fxErr) {
+                Toast.show(`Failed to update BM transaction ${ref}: ${fxErr.message}`, 'error');
+                return;
+            }
+        } catch (err) {
+            if (err?.message && /closed/i.test(err.message)) {
+                Toast.show(err.message, 'error');
+                return;
+            }
+            // ignore if table not migrated yet / offline
+        }
+
         matchingRows.forEach(target => {
             target.student_id = newId;
             target.matched_student_name = newName || target.matched_student_name;
@@ -1230,40 +1297,15 @@ class ForeignUiMixin {
             target.match_source = newId ? 'manual' : 'unmatched';
         });
 
-        // Also sync with Manual Fixes (this.allFixesData + manual_fixes table) so bulk/manual fixes stay unified
-        if (newId) {
-            const fixRecord = {
-                reference_number: ref,
-                correct_id: newId,
-                item_name: null,
-                mapping: DEFAULT_FOREIGN_MAPPING,
-                second_mapping: null
-            };
-            if (Array.isArray(this.allFixesData)) {
-                const key = String(ref).trim().toLowerCase();
-                this.allFixesData = this.allFixesData.filter(f => String(f.reference_number || '').trim().toLowerCase() !== key);
-                this.allFixesData.push(fixRecord);
-                this.allFixesData.sort((a, b) => String(a.reference_number || '').localeCompare(String(b.reference_number || '')));
-                this.updateFixesStatsAndDropdowns(this.allFixesData);
-            }
-            try {
-                await supabase.from('manual_fixes').upsert([fixRecord], { onConflict: 'reference_number' });
-            } catch (_e) {
-                // ignore if offline
-            }
+        if (fixRecord && Array.isArray(this.allFixesData)) {
+            const key = String(ref).trim().toLowerCase();
+            this.allFixesData = this.allFixesData.filter(f => String(f.reference_number || '').trim().toLowerCase() !== key);
+            this.allFixesData.push(fixRecord);
+            this.allFixesData.sort((a, b) => String(a.reference_number || '').localeCompare(String(b.reference_number || '')));
+            this.updateFixesStatsAndDropdowns(this.allFixesData);
         }
 
         this.persistForeignTransactionsLocal();
-        try {
-            await supabase.from('foreign_transactions').update({
-                student_id: newId,
-                matched_student_name: newName,
-                id_status: status,
-                match_source: newId ? 'manual' : 'unmatched'
-            }).eq('reference_number', ref);
-        } catch (_e) {
-            // ignore if table not migrated yet
-        }
 
         document.getElementById('modal-foreign-fix')?.classList.add('hidden');
         this.erpBaseKey = null;

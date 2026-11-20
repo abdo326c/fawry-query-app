@@ -13,6 +13,7 @@ import {
     sanitizeExcelValue,
     sanitizeExcelRows,
     toDateOnly,
+    isDateInClosedPeriods,
     dateToExcelSerial,
     isSameDaySettlementBank,
     getStudentProgramLevel,
@@ -61,6 +62,8 @@ class App {
         this._dirtyTabs = new Set();
         this._txCountCache = null;
         this._authUsersSynced = false;
+        this.closedPeriods = [];
+        this.closedPeriodSet = new Set();
         
         this.isImporting = false;
         this.initTheme();
@@ -381,6 +384,7 @@ class App {
         this.applyRolePermissionsToUI();
         renderIcons();
         this.fetchUniqueFilters();
+        this.loadClosedPeriods({ silent: true });
         if (!this.restoreActiveTabFromUrl()) {
             this.loadTransactions();
         }
@@ -870,7 +874,7 @@ class App {
         const normTargets = [...new Set(rawTargets.map(n => normalizeItemName(n)).filter(Boolean))];
         const searchNames = [...new Set([...rawTargets, ...normTargets])];
 
-        const ruleCols = 'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+        const ruleCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
         const byItemNamePromise = fetchByIn('transactions', ruleCols, 'item_name', searchNames, 'id', 100);
 
         // Also fetch by check_column suffix for single/small batches so previously renamed items are never missed
@@ -899,8 +903,7 @@ class App {
     }
 
     // Re-applies all rules to the given rows and saves the ones that changed (rule columns only).
-    // Settled / ERP-recorded rows are never changed here; they are counted in lockedSkipped and
-    // can be reviewed with "Re-apply Rules".
+    // Settled / ERP-recorded rows and closed accounting periods are never changed here; they are counted in lockedSkipped / periodLockedSkipped.
     async reapplyRulesTo(rows, opts = {}) {
         const all = await recomputeTransactions(rows, {
             includeLocked: true,
@@ -908,19 +911,34 @@ class App {
             fixes: opts.fixes ?? this.allFixesData ?? undefined,
             links: opts.links ?? undefined
         });
-        const open = all.filter(c => !c.diff.locked);
+        const periodSet = this.closedPeriodSet;
+        let periodLockedSkipped = 0;
+        const open = all.filter(c => {
+            if (isDateInClosedPeriods(c.tx?.payment_date, periodSet)) {
+                periodLockedSkipped++;
+                return false;
+            }
+            return !c.diff.locked;
+        });
         const updated = open.length > 0 ? await updateRuleFields(open) : 0;
         if (updated > 0) {
             this.invalidateDistinctCache();
             this.invalidateTabs('dashboard', 'transactions', 'erp-export');
         }
-        return { updated, lockedSkipped: all.length - open.length, appliedChanges: open, allChanges: all };
+        return {
+            updated,
+            lockedSkipped: all.length - open.length - periodLockedSkipped,
+            periodLockedSkipped,
+            appliedChanges: open,
+            allChanges: all
+        };
     }
 
     // Toast text for a reapplyRulesTo result
-    reapplySummary({ updated, lockedSkipped }) {
+    reapplySummary({ updated, lockedSkipped, periodLockedSkipped = 0 }) {
         let msg = `${updated} transaction(s) updated.`;
         if (lockedSkipped > 0) msg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged – review them with "Re-apply Rules".`;
+        if (periodLockedSkipped > 0) msg += ` ${periodLockedSkipped} transaction(s) skipped because their accounting month is closed.`;
         return msg;
     }
 

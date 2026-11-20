@@ -2369,3 +2369,72 @@ export function matchTransactionToStudent(tx, {
 
     return { proposedStudent: null, matchReason: '', confidenceTier: 'unmatched' };
 }
+
+const PERIOD_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Extracts a normalized 'YYYY-MM' accounting period month from a Date, YYYY-MM string, or date string.
+ */
+export function toPeriodMonth(dateInput) {
+    if (dateInput === null || dateInput === undefined || dateInput === '') return '';
+    if (typeof dateInput === 'string') {
+        const trimmed = dateInput.trim();
+        if (/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmed)) return trimmed;
+    }
+    const dOnly = toDateOnly(dateInput);
+    if (!dOnly || typeof dOnly !== 'string') return '';
+    const ym = dOnly.slice(0, 7);
+    return /^\d{4}-(0[1-9]|1[0-2])$/.test(ym) ? ym : '';
+}
+
+/**
+ * Returns true if the given date or YYYY-MM string belongs to any closed period in closedPeriodSet.
+ */
+export function isDateInClosedPeriods(dateInput, closedPeriodSet) {
+    if (!closedPeriodSet) return false;
+    const size = closedPeriodSet instanceof Set ? closedPeriodSet.size : (Array.isArray(closedPeriodSet) ? closedPeriodSet.length : 0);
+    if (size === 0) return false;
+    const ym = toPeriodMonth(dateInput);
+    if (!ym) return false;
+    return closedPeriodSet instanceof Set ? closedPeriodSet.has(ym) : closedPeriodSet.includes(ym);
+}
+
+/**
+ * Scans rows and returns rows whose date belongs to a closed period along with the sorted closed months found.
+ */
+export function findClosedPeriodsInRows(rows, closedPeriodSet, dateGetter = 'payment_date') {
+    const blockedRows = [];
+    const months = new Set();
+    if (!Array.isArray(rows) || rows.length === 0 || !closedPeriodSet) {
+        return { blockedRows, closedMonths: [] };
+    }
+    const hasSet = closedPeriodSet instanceof Set ? closedPeriodSet.size > 0 : (Array.isArray(closedPeriodSet) && closedPeriodSet.length > 0);
+    if (!hasSet) return { blockedRows, closedMonths: [] };
+
+    const getDate = typeof dateGetter === 'function' ? dateGetter : (r) => r?.[dateGetter];
+    for (const row of rows) {
+        const rawDate = getDate(row);
+        const ym = toPeriodMonth(rawDate);
+        if (!ym) continue;
+        const isClosed = closedPeriodSet instanceof Set ? closedPeriodSet.has(ym) : closedPeriodSet.includes(ym);
+        if (isClosed) {
+            blockedRows.push(row);
+            months.add(ym);
+        }
+    }
+    return {
+        blockedRows,
+        closedMonths: Array.from(months).sort()
+    };
+}
+
+/**
+ * Formats 'YYYY-MM' (e.g. '2026-09') to 'Sep 2026' without local timezone shift.
+ */
+export function formatPeriodMonthLabel(periodMonth) {
+    const str = String(periodMonth || '').trim();
+    const m = str.match(/^(\d{4})-(0[1-9]|1[0-2])$/);
+    if (!m) return str;
+    const monthName = PERIOD_MONTH_NAMES[Number(m[2]) - 1];
+    return monthName ? `${monthName} ${m[1]}` : str;
+}

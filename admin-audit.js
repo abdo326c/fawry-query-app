@@ -4,6 +4,9 @@ import {
     escapeHTML,
     sanitizeExcelRows,
     toDateOnly,
+    toPeriodMonth,
+    isDateInClosedPeriods,
+    formatPeriodMonthLabel,
     writeCompressedExcel
 } from './rules.js';
 import { renderIcons, formatMoney, Toast } from './app-utils.js';
@@ -96,7 +99,232 @@ class AdminAuditMixin {
             searchAudit.addEventListener('input', () => this.renderAuditLogsTable());
         }
 
+        this.initAccountingPeriodLock();
         this.initColdStorageArchive();
+    }
+
+    isDateInClosedPeriod(dateInput) {
+        return isDateInClosedPeriods(dateInput, this.closedPeriodSet);
+    }
+
+    async loadClosedPeriods({ silent = true } = {}) {
+        const tbody = document.getElementById('closed-periods-table-body');
+        try {
+            const { data, error } = await supabase
+                .from('closed_periods')
+                .select('*')
+                .order('period_month', { ascending: false })
+                .limit(500);
+            if (error) throw error;
+
+            const rows = Array.isArray(data) ? data : [];
+            this.closedPeriods = rows;
+            this.closedPeriodSet = new Set(rows.filter(r => r.is_closed).map(r => r.period_month));
+            this.closedPeriodsError = null;
+            this.renderClosedPeriodsCard();
+            return rows;
+        } catch (err) {
+            this.closedPeriods = [];
+            this.closedPeriodSet = new Set();
+            this.closedPeriodsError = err.message;
+            if (!silent && tbody) {
+                tbody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center; padding: 1rem;">Could not load closed_periods (${escapeHTML(err.message)}). Run migration <code>2.11.4_accounting_period_lock.sql</code> in Supabase SQL Editor.</td></tr>`;
+            }
+            return [];
+        }
+    }
+
+    initAccountingPeriodLock() {
+        const monthInput = document.getElementById('period-lock-month');
+        const notesInput = document.getElementById('period-lock-notes');
+        const btnClose = document.getElementById('btn-close-period');
+        const statusEl = document.getElementById('period-lock-status');
+        const unlockPanel = document.getElementById('period-unlock-panel');
+        const unlockTargetLabel = document.getElementById('period-unlock-target-label');
+        const unlockReasonInput = document.getElementById('period-unlock-reason');
+        const btnConfirmUnlock = document.getElementById('btn-confirm-period-unlock');
+        const btnCancelUnlock = document.getElementById('btn-cancel-period-unlock');
+        const tbody = document.getElementById('closed-periods-table-body');
+
+        if (!monthInput || !btnClose) return;
+
+        if (!monthInput.value) {
+            const d = new Date();
+            d.setDate(1);
+            d.setMonth(d.getMonth() - 1);
+            monthInput.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        this._pendingUnlockMonth = null;
+
+        const hideUnlockPanel = () => {
+            this._pendingUnlockMonth = null;
+            if (unlockPanel) unlockPanel.classList.add('hidden');
+            if (unlockReasonInput) unlockReasonInput.value = '';
+            if (unlockTargetLabel) unlockTargetLabel.textContent = '';
+        };
+
+        const togglePeriod = async (periodMonth, isClosed, notes) => {
+            const cleanMonth = toPeriodMonth(periodMonth);
+            if (!cleanMonth) {
+                Toast.show('Select a valid YYYY-MM accounting month.', 'warning');
+                return;
+            }
+            const cleanNotes = String(notes || '').trim();
+            if (!isClosed && !cleanNotes) {
+                Toast.show('An audit reason is required to unlock a closed accounting period.', 'warning');
+                unlockReasonInput?.focus();
+                return;
+            }
+            const { error } = await supabase.rpc('set_accounting_period_lock', {
+                p_period_month: cleanMonth,
+                p_is_closed: isClosed,
+                p_notes: cleanNotes || null
+            });
+            if (error) throw error;
+
+            this.invalidateTabs('erp-export', 'transactions', 'fixes', 'users');
+            if (statusEl) {
+                const actionWord = isClosed ? 'Closed' : 'Unlocked';
+                statusEl.innerHTML = `<span style="color: ${isClosed ? 'var(--success)' : 'var(--warning, #f59e0b)'}; font-weight: 600;">✓ ${actionWord} ${escapeHTML(formatPeriodMonthLabel(cleanMonth))} (${escapeHTML(cleanMonth)})</span>.`;
+            }
+            Toast.show(
+                isClosed
+                    ? `Accounting period ${cleanMonth} is now CLOSED.`
+                    : `Accounting period ${cleanMonth} unlocked (${cleanNotes}).`,
+                'success'
+            );
+            await this.loadUsersAndRoles({ skipSync: true });
+        };
+
+        btnClose.addEventListener('click', async () => {
+            if (!this.requireRole('admin', 'close an accounting period')) return;
+            const month = toPeriodMonth(monthInput.value);
+            if (!month) {
+                Toast.show('Select a valid accounting month (YYYY-MM).', 'warning');
+                return;
+            }
+            const notes = String(notesInput?.value || '').trim();
+            const ok = await window.customConfirm(
+                `Close accounting period ${formatPeriodMonthLabel(month)} (${month})? Once closed, nobody can backdate imports, edit manual fixes, or unlink ERP batches in this month without an audited Admin unlock.`,
+                'Close Period',
+                'Cancel'
+            );
+            if (!ok) return;
+
+            const origHtml = btnClose.innerHTML;
+            btnClose.disabled = true;
+            btnClose.innerHTML = '<i data-lucide="loader" class="spin"></i> Closing...';
+            renderIcons(btnClose);
+            try {
+                await togglePeriod(month, true, notes);
+                if (notesInput) notesInput.value = '';
+                hideUnlockPanel();
+            } catch (err) {
+                Toast.show('Failed to close accounting period: ' + err.message, 'error');
+            } finally {
+                btnClose.innerHTML = origHtml;
+                btnClose.disabled = false;
+                renderIcons(btnClose);
+            }
+        });
+
+        btnCancelUnlock?.addEventListener('click', () => hideUnlockPanel());
+
+        btnConfirmUnlock?.addEventListener('click', async () => {
+            if (!this.requireRole('admin', 'unlock a closed accounting period')) return;
+            const targetMonth = this._pendingUnlockMonth;
+            const reason = String(unlockReasonInput?.value || '').trim();
+            if (!targetMonth) return;
+            if (!reason) {
+                Toast.show('Enter an audit reason before unlocking a closed period.', 'warning');
+                unlockReasonInput?.focus();
+                return;
+            }
+
+            btnConfirmUnlock.disabled = true;
+            try {
+                await togglePeriod(targetMonth, false, reason);
+                hideUnlockPanel();
+            } catch (err) {
+                Toast.show('Failed to unlock accounting period: ' + err.message, 'error');
+            } finally {
+                btnConfirmUnlock.disabled = false;
+            }
+        });
+
+        if (tbody && !tbody.dataset.periodLockBound) {
+            tbody.dataset.periodLockBound = '1';
+            tbody.addEventListener('click', async (e) => {
+                const btn = e.target.closest('.btn-toggle-period-lock');
+                if (!btn) return;
+                if (!this.requireRole('admin', 'manage accounting period locks')) return;
+
+                const periodMonth = btn.getAttribute('data-month');
+                const action = btn.getAttribute('data-action');
+                if (!periodMonth) return;
+
+                if (action === 'unlock') {
+                    this._pendingUnlockMonth = periodMonth;
+                    if (unlockTargetLabel) {
+                        unlockTargetLabel.textContent = `${formatPeriodMonthLabel(periodMonth)} (${periodMonth})`;
+                    }
+                    if (unlockReasonInput) unlockReasonInput.value = '';
+                    unlockPanel?.classList.remove('hidden');
+                    unlockReasonInput?.focus();
+                } else if (action === 'lock') {
+                    const ok = await window.customConfirm(
+                        `Re-close accounting period ${formatPeriodMonthLabel(periodMonth)} (${periodMonth})?`,
+                        'Close Period',
+                        'Cancel'
+                    );
+                    if (!ok) return;
+                    btn.disabled = true;
+                    try {
+                        await togglePeriod(periodMonth, true, 'Re-closed by Admin');
+                        hideUnlockPanel();
+                    } catch (err) {
+                        Toast.show('Failed to close accounting period: ' + err.message, 'error');
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }
+            });
+        }
+    }
+
+    renderClosedPeriodsCard() {
+        const tbody = document.getElementById('closed-periods-table-body');
+        if (!tbody) return;
+        const rows = this.closedPeriods || [];
+        if (rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 1rem; color: var(--text-muted);">No accounting periods closed yet. Select a month above to enforce month-end close.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map(r => {
+            const month = String(r.period_month || '');
+            const closed = r.is_closed !== false;
+            const badge = closed
+                ? '<span class="badge" style="background: rgba(239, 68, 68, 0.14); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3);">Locked</span>'
+                : '<span class="badge" style="background: rgba(245, 158, 11, 0.14); color: var(--warning, #f59e0b); border: 1px solid rgba(245, 158, 11, 0.3);">Reopened</span>';
+            const actor = closed ? (r.closed_by || 'Admin') : (r.reopened_by || r.closed_by || 'Admin');
+            const ts = closed ? r.closed_at : (r.reopened_at || r.updated_at || r.closed_at);
+            const tsStr = ts ? new Date(ts).toLocaleString() : '—';
+            const btnHtml = closed
+                ? `<button type="button" class="btn btn-outline btn-sm btn-toggle-period-lock" data-action="unlock" data-month="${escapeHTML(month)}" style="padding: 0.25rem 0.6rem; font-size: 0.76rem; color: var(--warning, #f59e0b); border-color: rgba(245, 158, 11, 0.4);">Audited Unlock</button>`
+                : `<button type="button" class="btn btn-outline btn-sm btn-toggle-period-lock" data-action="lock" data-month="${escapeHTML(month)}" style="padding: 0.25rem 0.6rem; font-size: 0.76rem;">Re-Lock</button>`;
+
+            return `
+                <tr>
+                    <td><strong>${escapeHTML(formatPeriodMonthLabel(month))}</strong> <span class="text-muted" style="font-family: monospace; font-size: 0.78rem;">(${escapeHTML(month)})</span></td>
+                    <td>${badge}</td>
+                    <td style="font-size: 0.78rem;"><div>${escapeHTML(actor)}</div><div class="text-muted">${escapeHTML(tsStr)}</div></td>
+                    <td style="font-size: 0.8rem;">${escapeHTML(r.notes || '—')}</td>
+                    <td>${btnHtml}</td>
+                </tr>
+            `;
+        }).join('');
     }
 
     initColdStorageArchive() {
@@ -237,7 +465,8 @@ class AdminAuditMixin {
 
         const [rolesRes, logsRes] = await Promise.all([
             supabase.from('user_roles').select('*').order('updated_at', { ascending: false }),
-            supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)
+            supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200),
+            this.loadClosedPeriods({ silent: false })
         ]);
 
         if (rolesRes.error) {

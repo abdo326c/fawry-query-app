@@ -6,6 +6,7 @@ import {
     escapeHTML,
     sanitizeExcelValue,
     toDateOnly,
+    toPeriodMonth,
     dateToExcelSerial,
     calculateSettlementDate,
     isSameDaySettlementBank,
@@ -504,15 +505,20 @@ class ErpExportMixin {
             let erpStatusHtml = '';
             const canManageErp = this.hasRole('accountant');
             const isForeignRow = isSameDaySettlementBank(row);
+            const payDate = toDateOnly(row.value_date || row.payment_date || row.transaction_date) || '';
+            const periodMonth = toPeriodMonth(payDate);
+            const isPeriodClosed = this.isDateInClosedPeriod(payDate);
             if (row.erp_batch_number) {
                 erpStatusHtml = `
                     <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
                         <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; font-size: 0.72rem;" title="${row.erp_voucher ? 'Voucher: ' + escapeHTML(row.erp_voucher) : 'Posted to ERP'}">
                             Batch: ${escapeHTML(row.erp_batch_number)}${row.erp_voucher ? ` (${escapeHTML(row.erp_voucher)})` : ''}
                         </span>
-                        ${canManageErp ? `<button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id ?? '')}" data-ref="${escapeHTML(row.reference_number || '')}" data-source="${isForeignRow ? 'foreign' : 'fawry'}" data-batch="${escapeHTML(row.erp_batch_number)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
+                        ${canManageErp ? (isPeriodClosed
+                            ? `<span class="badge" style="background: rgba(239, 68, 68, 0.14); color: var(--danger); font-size: 0.7rem;" title="Accounting period ${escapeHTML(periodMonth)} is closed. Ask an Admin to unlock it before unlinking."><i data-lucide="lock" style="width: 11px; height: 11px; vertical-align: -1px;"></i> Closed</span>`
+                            : `<button type="button" class="btn-icon erp-unlink-batch-btn" data-id="${escapeHTML(row.id ?? '')}" data-ref="${escapeHTML(row.reference_number || '')}" data-source="${isForeignRow ? 'foreign' : 'fawry'}" data-batch="${escapeHTML(row.erp_batch_number)}" data-date="${escapeHTML(payDate)}" title="Clear ERP Batch Reference" style="width: 22px; height: 22px; padding: 0; color: var(--text-muted);">
                             <i data-lucide="x" style="width: 13px; height: 13px;"></i>
-                        </button>` : ''}
+                        </button>`) : ''}
                     </div>`;
             } else if (!isValid) {
                 erpStatusHtml = canManageErp ? `
@@ -523,7 +529,6 @@ class ErpExportMixin {
                 erpStatusHtml = `<span class="badge" style="background: rgba(16, 185, 129, 0.14); color: #10b981; font-size: 0.72rem;">Ready</span>`;
             }
 
-            const payDate = toDateOnly(row.value_date || row.payment_date || row.transaction_date) || '';
             const stlDate = isForeignRow ? payDate : (calculateSettlementDate(payDate) || '');
             const stlDay = this.erpDayShort(stlDate);
             const dateCellHtml = `
@@ -585,8 +590,13 @@ class ErpExportMixin {
                 const ref = btn.getAttribute('data-ref');
                 const source = btn.getAttribute('data-source') || 'fawry';
                 const batch = btn.getAttribute('data-batch');
+                const txDate = btn.getAttribute('data-date') || '';
                 if (source === 'fawry' && !id) return;
                 if (source === 'foreign' && !ref) return;
+                if (this.isDateInClosedPeriod(txDate)) {
+                    Toast.show(`Accounting period ${toPeriodMonth(txDate)} is closed. Ask an Admin to unlock it before unlinking ERP batch "${batch}".`, 'error');
+                    return;
+                }
                 if (!await window.customConfirm(`Clear ERP Batch "${batch}" from this transaction so it can be re-exported?`, 'Clear Batch', 'Cancel')) {
                     return;
                 }

@@ -2173,6 +2173,63 @@
                     </table>
                 </div>
 
+                <!-- Accounting Period Lock / Month-End Close (Admin Only) -->
+                <div class="glass-card" id="admin-period-lock-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.9rem;">
+                        <div style="max-width: 560px;">
+                            <h3 style="margin: 0 0 0.4rem 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <i data-lucide="lock" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                                Accounting Period Lock (Month-End Close)
+                            </h3>
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
+                                Locking a month enforces a PostgreSQL trigger that blocks backdated imports, manual fix edits, and ERP batch unlinking for transactions inside that period without an audited Admin unlock.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: flex-end;">
+                            <div class="form-group" style="margin: 0; min-width: 155px;">
+                                <label for="period-lock-month" style="font-size: 0.75rem;">Accounting Month</label>
+                                <input type="month" id="period-lock-month" class="input-text" style="padding: 0.42rem 0.65rem; font-size: 0.85rem;">
+                            </div>
+                            <div class="form-group" style="margin: 0; min-width: 220px;">
+                                <label for="period-lock-notes" style="font-size: 0.75rem;">Close Note (Optional)</label>
+                                <input type="text" id="period-lock-notes" class="input-text" placeholder="e.g. Month-end reconciled" style="padding: 0.42rem 0.65rem; font-size: 0.85rem;">
+                            </div>
+                            <button type="button" class="btn btn-primary" id="btn-close-period" style="padding: 0.46rem 1rem; font-size: 0.84rem;">
+                                <i data-lucide="lock"></i> Close Period
+                            </button>
+                        </div>
+                    </div>
+                    <div id="period-lock-status" style="margin-bottom: 0.65rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
+                    <div id="period-unlock-panel" class="hidden" style="margin-bottom: 0.9rem; padding: 0.85rem 1rem; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08);">
+                        <div style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--warning, #f59e0b);">
+                            Audited Unlock for <span id="period-unlock-target-label"></span>
+                        </div>
+                        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
+                            <input type="text" id="period-unlock-reason" class="input-text" placeholder="Mandatory audit reason for unlocking this closed month..." style="flex: 1; min-width: 240px; padding: 0.42rem 0.7rem; font-size: 0.84rem;">
+                            <button type="button" class="btn btn-primary" id="btn-confirm-period-unlock" style="padding: 0.44rem 0.95rem; font-size: 0.82rem;">Confirm Audited Unlock</button>
+                            <button type="button" class="btn btn-outline" id="btn-cancel-period-unlock" style="padding: 0.44rem 0.85rem; font-size: 0.82rem;">Cancel</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table class="data-table" style="width: 100%; font-size: 0.83rem;">
+                            <thead>
+                                <tr>
+                                    <th>Period</th>
+                                    <th>Status</th>
+                                    <th>Closed / Updated By</th>
+                                    <th>Notes / Unlock Reason</th>
+                                    <th style="width: 155px;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="closed-periods-table-body">
+                                <tr>
+                                    <td colspan="5" class="text-center" style="padding: 1rem; color: var(--text-muted);">Loading accounting periods...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- Cold-Storage Transaction Archiving (Admin Only) -->
                 <div class="glass-card" id="admin-archive-card" style="padding: 1.25rem; margin-bottom: 1.5rem;">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">

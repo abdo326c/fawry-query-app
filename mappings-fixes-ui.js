@@ -12,6 +12,7 @@ import {
     originalItemName,
     escapeHTML,
     toDateOnly,
+    toPeriodMonth,
     writeCompressedExcel
 } from './rules.js';
 import {
@@ -1429,7 +1430,7 @@ class MappingsFixesUiMixin {
                         if (this.hasRole('admin') && !this._mappingsDedupedOnce) {
                             await this.deduplicateItemMappings({ silent: true });
                         }
-                        const ruleCols = 'id, reference_number, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
+                        const ruleCols = 'id, reference_number, payment_date, student_id, original_student_id, item_name, check_column, mapping, second_mapping, id_status, is_settled, erp_batch_number';
                         const [mappings, fixes, links, txs] = await Promise.all([
                             fetchAll('item_mappings', '*', null, 'item_name'),
                             fetchAll('manual_fixes', '*', null, 'reference_number'),
@@ -1450,7 +1451,13 @@ class MappingsFixesUiMixin {
                         for (const tx of txs) {
                             const ref = String(tx.reference_number);
                             const diff = diffTransaction(tx, { link: linksMap.get(ref), fix: fixesMap.get(ref), lookupMapping });
-                            if (diff.changed) proposals.push({ tx, diff });
+                            if (diff.changed) {
+                                proposals.push({
+                                    tx,
+                                    diff,
+                                    periodClosed: this.isDateInClosedPeriod(tx.payment_date)
+                                });
+                            }
                         }
                         window.reapplyProposals = proposals;
 
@@ -1471,20 +1478,27 @@ class MappingsFixesUiMixin {
                         }
 
                         const lockedCount = proposals.filter(p => p.diff.locked).length;
+                        const periodClosedCount = proposals.filter(p => p.periodClosed).length;
                         if (summaryEl) {
                             summaryEl.textContent = `${proposals.length} transaction(s) would change.` +
-                                (lockedCount > 0 ? ` ${lockedCount} of them are settled or already recorded in ERP and are not selected by default – changing them does not change what was already posted to ERP.` : '');
+                                (lockedCount > 0 ? ` ${lockedCount} of them are settled or already recorded in ERP and are not selected by default – changing them does not change what was already posted to ERP.` : '') +
+                                (periodClosedCount > 0 ? ` ${periodClosedCount} transaction(s) belong to closed accounting period(s) and are locked.` : '');
                         }
 
                         tbody.innerHTML = proposals.map((p, idx) => {
-                            const { tx, diff } = p;
+                            const { tx, diff, periodClosed } = p;
                             const lockBadge = diff.locked
                                 ? ` <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: var(--warning, #f59e0b);">${tx.erp_batch_number ? 'In ERP' : 'Settled'}</span>`
                                 : '';
+                            const closedBadge = periodClosed
+                                ? ` <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger);">Closed ${escapeHTML(toPeriodMonth(tx.payment_date))}</span>`
+                                : '';
+                            const isDisabled = periodClosed ? 'disabled' : '';
+                            const isChecked = (!diff.locked && !periodClosed) ? 'checked' : '';
                             return `
                         <tr>
-                            <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" ${diff.locked ? '' : 'checked'}></td>
-                            <td>${escapeHTML(tx.reference_number || '')}${lockBadge}</td>
+                            <td><input type="checkbox" class="reapply-checkbox" data-index="${idx}" ${isChecked} ${isDisabled}></td>
+                            <td>${escapeHTML(tx.reference_number || '')}${lockBadge}${closedBadge}</td>
                             <td><span class="badge" style="background: rgba(0, 229, 255, 0.1); color: var(--primary-color);">${escapeHTML(diff.changes.map(c => c.label).join(', '))}</span></td>
                             <td style="color: var(--text-muted); text-decoration: line-through;">${escapeHTML(diff.changes.map(c => fmt(c.from)).join(', '))}</td>
                             <td style="color: var(--success-color); font-weight: 500;">${escapeHTML(diff.changes.map(c => fmt(c.to)).join(', '))}</td>
@@ -1493,10 +1507,12 @@ class MappingsFixesUiMixin {
                     `;
                         }).join('');
 
-                        // "Select all" reflects the rows as rendered (locked rows start unticked)
+                        // "Select all" reflects the rows as rendered (locked / period-closed rows start unticked)
+                        const selectableCount = proposals.filter(p => !p.periodClosed).length;
+                        const defaultCheckedCount = proposals.filter(p => !p.periodClosed && !p.diff.locked).length;
                         if (selectAll) {
-                            selectAll.checked = lockedCount === 0;
-                            selectAll.indeterminate = lockedCount > 0 && lockedCount < proposals.length;
+                            selectAll.checked = selectableCount > 0 && defaultCheckedCount === selectableCount;
+                            selectAll.indeterminate = defaultCheckedCount > 0 && defaultCheckedCount < selectableCount;
                         }
 
                         progressToast.dismiss();
@@ -1512,7 +1528,7 @@ class MappingsFixesUiMixin {
         // "Select All" checkbox
         selectAll?.addEventListener('change', (e) => {
             e.target.indeterminate = false;
-            document.querySelectorAll('.reapply-checkbox').forEach(cb => cb.checked = e.target.checked);
+            document.querySelectorAll('.reapply-checkbox:not(:disabled)').forEach(cb => cb.checked = e.target.checked);
         });
 
         // "Apply Selected" button: writes only the rule columns of the selected rows
