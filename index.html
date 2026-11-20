@@ -519,34 +519,35 @@
 
                 <!-- Unified Ledger Sheet (Filters + Telemetry + Grid) -->
                 <div class="ledger-sheet">
-                <div class="ledger-toolbar">
-                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
-                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem">Date From</label>
-                            <input type="date" id="filter-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                <div class="ledger-toolbar ledger-toolbar-compact">
+                    <!-- Tier 1: Primary Search + Unified Date Range & Presets Capsule + Actions -->
+                    <div class="ledger-command-row">
+                        <div class="ledger-search-box">
+                            <i data-lucide="search" class="ledger-search-icon"></i>
+                            <input type="text" id="search-input" class="input-text" placeholder="Search Student ID, Ref #, Mobile, Item, or Mapping...">
                         </div>
-                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem">Date To</label>
-                            <input type="date" id="filter-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem">
+                        <div class="ledger-date-capsule">
+                            <i data-lucide="calendar" style="width: 13px; height: 13px; color: var(--text-muted); margin: 0 0.15rem;"></i>
+                            <input type="date" id="filter-date-from" class="input-text" aria-label="Date From" title="Date From">
+                            <span style="color: var(--text-muted); font-size: 0.74rem;">&rarr;</span>
+                            <input type="date" id="filter-date-to" class="input-text" aria-label="Date To" title="Date To">
+                            <span class="ledger-capsule-divider"></span>
+                            <div class="ledger-date-presets">
+                                <button type="button" class="btn btn-ghost btn-sm" data-tx-date-preset="today">Today</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-tx-date-preset="7d">7d</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-tx-date-preset="this_month">Month</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-tx-date-preset="last_month">Last Mo</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-tx-date-preset="all">All</button>
+                            </div>
                         </div>
-                        <div class="form-group" style="margin: 0; flex: 2; min-width: 240px;">
-                            <label style="font-size: 0.75rem">Search</label>
-                            <input type="text" id="search-input" class="input-text" placeholder="Search by Student ID, Ref Number, Mobile, Item, or Mapping..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem">
-                        </div>
-                        <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
-                            <button class="btn btn-primary" id="btn-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
-                            <button class="btn btn-outline" id="btn-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem; flex-shrink: 0;">
+                            <button class="btn btn-primary btn-sm" id="btn-apply-filters" style="height: 33px; padding: 0 0.85rem;">Apply</button>
+                            <button class="btn btn-outline btn-sm" id="btn-clear-filters" style="height: 33px; padding: 0 0.72rem;">Clear</button>
                         </div>
                     </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
-                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Date Presets:</span>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="today" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Today</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="7d" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last 7 Days</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="this_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">This Month</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="last_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last Month</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-tx-date-preset="all" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">All Dates</button>
-                        </div>
+
+                    <!-- Tier 2: Status Filter Tabs + Compact Saved Views Capsule -->
+                    <div class="ledger-subbar-row">
                         <div class="segmented-tabs" id="tx-quick-filter-group">
                             <button type="button" class="btn btn-primary btn-sm" data-tx-quick-filter="all">All</button>
                             <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="missing_id">Missing ID</button>
@@ -554,41 +555,38 @@
                             <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unmapped">Unmapped</button>
                             <button type="button" class="btn btn-outline btn-sm" data-tx-quick-filter="unsettled">Unsettled</button>
                         </div>
-                    </div>
-                    <div id="tx-saved-presets-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.55rem; padding-top: 0.6rem; border-top: 1px solid var(--border-color);">
-                        <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;">
-                            <span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">Saved Views:</span>
-                            <select id="tx-saved-preset-select" class="input-text" style="width: 185px; height: 28px; padding: 0 0.55rem; font-size: 0.76rem; border-radius: 6px;">
-                                <option value="">Load saved view...</option>
+
+                        <div id="tx-saved-presets-bar" class="saved-views-capsule">
+                            <i data-lucide="bookmark" style="width: 13px; height: 13px; color: var(--text-muted); margin-left: 0.15rem;"></i>
+                            <select id="tx-saved-preset-select" class="input-text" style="width: 148px;">
+                                <option value="">Saved views...</option>
                             </select>
-                            <div id="tx-saved-presets-pills" style="display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;"></div>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: nowrap;">
-                            <input type="text" id="tx-preset-name-input" class="input-text" placeholder="Save current view as..." style="width: 180px; height: 28px; padding: 0 0.6rem; font-size: 0.76rem; border-radius: 6px;">
-                            <button type="button" class="btn btn-outline btn-sm" id="btn-save-tx-preset" style="height: 28px; padding: 0 0.65rem; font-size: 0.75rem; white-space: nowrap;"><i data-lucide="bookmark-plus"></i> Save View</button>
-                            <button type="button" class="btn btn-outline btn-sm" id="btn-delete-tx-preset" disabled title="Delete selected saved view" style="height: 28px; width: 28px; padding: 0; justify-content: center; flex-shrink: 0; color: var(--danger);"><i data-lucide="trash-2"></i></button>
+                            <div id="tx-saved-presets-pills" style="display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap;"></div>
+                            <input type="text" id="tx-preset-name-input" class="input-text" placeholder="Save view as..." style="width: 132px;">
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-save-tx-preset" title="Save current filters as a view"><i data-lucide="bookmark-plus"></i> Save</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="btn-delete-tx-preset" disabled title="Delete selected saved view" style="width: 26px; padding: 0; justify-content: center; color: var(--danger);"><i data-lucide="trash-2"></i></button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Attached Telemetry Strip -->
-                <div id="transactions-summary-bar" class="ledger-telemetry-strip">
-                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
-                        <div style="display: flex; align-items: center; gap: 0.45rem;">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Matching Records:</span>
-                            <strong id="tx-stat-count" style="font-size: 1rem; color: var(--text-main);">0</strong>
+                <div id="transactions-summary-bar" class="ledger-telemetry-strip" style="padding: 0.48rem 1.1rem;">
+                    <div style="display: flex; align-items: center; gap: 1.15rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                            <span style="color: var(--text-muted); font-size: 0.78rem;">Records:</span>
+                            <strong id="tx-stat-count" style="font-size: 0.92rem; color: var(--text-main);">0</strong>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Page Total:</span>
-                            <strong id="tx-stat-page-amount" style="font-size: 1rem; color: var(--primary);">EGP 0.00</strong>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; padding-left: 0.85rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.78rem;">Page Total:</span>
+                            <strong id="tx-stat-page-amount" style="font-size: 0.92rem; color: var(--primary);">EGP 0.00</strong>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Page Valid / Issues:</span>
-                            <strong id="tx-stat-page-health" style="font-size: 0.9rem; color: var(--success);">0 Valid</strong>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; padding-left: 0.85rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.78rem;">Page Health:</span>
+                            <strong id="tx-stat-page-health" style="font-size: 0.85rem; color: var(--success);">0 Valid</strong>
                         </div>
                     </div>
-                    <div style="font-size: 0.78rem; color: var(--text-muted);">
-                        <span>Click any row to view full details, student info &amp; payment breakdown</span>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">
+                        <span>Click any row for full transaction &amp; student details</span>
                     </div>
                 </div>
 
@@ -749,34 +747,32 @@
 
                 <!-- Unified Ledger Sheet -->
                 <div class="ledger-sheet">
-                <div class="ledger-toolbar">
-                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; width: 100%;">
-                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem;">Date From</label>
-                            <input type="date" id="foreign-date-from" class="input-text" style="padding: 0.4rem; font-size: 0.85rem;">
+                <div class="ledger-toolbar ledger-toolbar-compact">
+                    <div class="ledger-command-row">
+                        <div class="ledger-search-box">
+                            <i data-lucide="search" class="ledger-search-icon"></i>
+                            <input type="text" id="foreign-search-input" class="input-text" placeholder="Search Student ID, Ref #, Description, Student Name, or Mapping...">
                         </div>
-                        <div class="form-group" style="margin: 0; min-width: 130px; flex: 1;">
-                            <label style="font-size: 0.75rem;">Date To</label>
-                            <input type="date" id="foreign-date-to" class="input-text" style="padding: 0.4rem; font-size: 0.85rem;">
+                        <div class="ledger-date-capsule">
+                            <i data-lucide="calendar" style="width: 13px; height: 13px; color: var(--text-muted); margin: 0 0.15rem;"></i>
+                            <input type="date" id="foreign-date-from" class="input-text" aria-label="Date From" title="Date From">
+                            <span style="color: var(--text-muted); font-size: 0.74rem;">&rarr;</span>
+                            <input type="date" id="foreign-date-to" class="input-text" aria-label="Date To" title="Date To">
+                            <span class="ledger-capsule-divider"></span>
+                            <div class="ledger-date-presets">
+                                <button type="button" class="btn btn-ghost btn-sm" data-foreign-date-preset="today">Today</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-foreign-date-preset="7d">7d</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-foreign-date-preset="this_month">Month</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-foreign-date-preset="last_month">Last Mo</button>
+                                <button type="button" class="btn btn-ghost btn-sm" data-foreign-date-preset="all">All</button>
+                            </div>
                         </div>
-                        <div class="form-group" style="margin: 0; flex: 2; min-width: 240px;">
-                            <label style="font-size: 0.75rem;">Search</label>
-                            <input type="text" id="foreign-search-input" class="input-text" placeholder="Search by Student ID, Ref Number, Description, Student Name, or Mapping..." style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">
-                        </div>
-                        <div class="form-group" style="margin: 0; display: flex; align-items: flex-end;">
-                            <button type="button" class="btn btn-primary" id="btn-foreign-apply-filters" style="padding: 0.4rem 1rem;">Apply</button>
-                            <button type="button" class="btn btn-outline" id="btn-foreign-clear-filters" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">Clear</button>
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem; flex-shrink: 0;">
+                            <button type="button" class="btn btn-primary btn-sm" id="btn-foreign-apply-filters" style="height: 33px; padding: 0 0.85rem;">Apply</button>
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-foreign-clear-filters" style="height: 33px; padding: 0 0.72rem;">Clear</button>
                         </div>
                     </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
-                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.2rem;">Date Presets:</span>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="today" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Today</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="7d" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last 7 Days</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="this_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">This Month</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="last_month" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">Last Month</button>
-                            <button type="button" class="btn btn-outline btn-sm" data-foreign-date-preset="all" style="padding: 0.15rem 0.55rem; font-size: 0.74rem;">All Dates</button>
-                        </div>
+                    <div class="ledger-subbar-row">
                         <div class="segmented-tabs" id="foreign-quick-filter-group">
                             <button type="button" class="btn btn-primary btn-sm" data-foreign-quick-filter="all">All</button>
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="missing_id">Missing ID</button>
@@ -784,29 +780,29 @@
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="valid_id">Valid ID</button>
                             <button type="button" class="btn btn-outline btn-sm" data-foreign-quick-filter="name_match">Matched by Name</button>
                         </div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">
+                            <span id="foreign-stat-account-badge">Bank: NuMisrUsd5 · Click any row for details or Fix icon to edit Student ID</span>
+                        </div>
                     </div>
                 </div>
 
-                <div id="foreign-summary-bar" class="ledger-telemetry-strip">
-                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
-                        <div style="display: flex; align-items: center; gap: 0.45rem;">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Matching Records:</span>
-                            <strong id="foreign-stat-count" style="font-size: 1rem; color: var(--text-main);">0</strong>
+                <div id="foreign-summary-bar" class="ledger-telemetry-strip" style="padding: 0.48rem 1.1rem;">
+                    <div style="display: flex; align-items: center; gap: 1.15rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                            <span style="color: var(--text-muted); font-size: 0.78rem;">Records:</span>
+                            <strong id="foreign-stat-count" style="font-size: 0.92rem; color: var(--text-main);">0</strong>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Total Amount:</span>
-                            <strong id="foreign-stat-amount" style="font-size: 1rem; color: var(--primary);">USD 0.00</strong>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; padding-left: 0.85rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.78rem;">Total Amount:</span>
+                            <strong id="foreign-stat-amount" style="font-size: 0.92rem; color: var(--primary);">USD 0.00</strong>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.45rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">
-                            <span style="color: var(--text-muted); font-size: 0.82rem;">Valid / Issues:</span>
-                            <strong id="foreign-stat-valid" style="font-size: 0.9rem; color: var(--success);">0 Valid</strong>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; padding-left: 0.85rem; border-left: 1px solid var(--border-color);">
+                            <span style="color: var(--text-muted); font-size: 0.78rem;">Valid / Issues:</span>
+                            <strong id="foreign-stat-valid" style="font-size: 0.85rem; color: var(--success);">0 Valid</strong>
                             <span style="color: var(--text-muted);">·</span>
-                            <strong id="foreign-stat-invalid" style="font-size: 0.9rem; color: var(--danger);">0 Issues</strong>
+                            <strong id="foreign-stat-invalid" style="font-size: 0.85rem; color: var(--danger);">0 Issues</strong>
                             <span id="foreign-stat-name-matched" style="display: none;">0</span>
                         </div>
-                    </div>
-                    <div style="font-size: 0.78rem; color: var(--text-muted);">
-                        <span id="foreign-stat-account-badge">Bank: NuMisrUsd5 · Click any row for full transaction details, or click the Fix icon to edit Student ID</span>
                     </div>
                 </div>
 
@@ -1855,27 +1851,25 @@
                                 </div>
                             </div>
 
-                            <div class="segmented-tabs">
-                                <button type="button" class="btn btn-outline btn-sm active" data-erp-filter="all">All</button>
-                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="ready">Ready to Export</button>
-                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="unposted">Unposted</button>
-                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="recorded">Already in ERP</button>
-                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="invalid">Invalid IDs</button>
-                                <button type="button" class="btn btn-outline btn-sm" data-erp-filter="settled">Settled Only</button>
-                            </div>
-
-                            <div id="erp-saved-presets-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.55rem; padding-top: 0.6rem; border-top: 1px solid var(--border-color);">
-                                <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;">
-                                    <span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">Saved Views:</span>
-                                    <select id="erp-saved-preset-select" class="input-text" style="width: 185px; height: 28px; padding: 0 0.55rem; font-size: 0.76rem; border-radius: 6px;">
-                                        <option value="">Load saved view...</option>
-                                    </select>
-                                    <div id="erp-saved-presets-pills" style="display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;"></div>
+                            <div class="ledger-subbar-row">
+                                <div class="segmented-tabs">
+                                    <button type="button" class="btn btn-outline btn-sm active" data-erp-filter="all">All</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-erp-filter="ready">Ready to Export</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-erp-filter="unposted">Unposted</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-erp-filter="recorded">Already in ERP</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-erp-filter="invalid">Invalid IDs</button>
+                                    <button type="button" class="btn btn-outline btn-sm" data-erp-filter="settled">Settled Only</button>
                                 </div>
-                                <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: nowrap;">
-                                    <input type="text" id="erp-preset-name-input" class="input-text" placeholder="Save current view as..." style="width: 180px; height: 28px; padding: 0 0.6rem; font-size: 0.76rem; border-radius: 6px;">
-                                    <button type="button" class="btn btn-outline btn-sm" id="btn-save-erp-preset" style="height: 28px; padding: 0 0.65rem; font-size: 0.75rem; white-space: nowrap;"><i data-lucide="bookmark-plus"></i> Save View</button>
-                                    <button type="button" class="btn btn-outline btn-sm" id="btn-delete-erp-preset" disabled title="Delete selected saved view" style="height: 28px; width: 28px; padding: 0; justify-content: center; flex-shrink: 0; color: var(--danger);"><i data-lucide="trash-2"></i></button>
+
+                                <div id="erp-saved-presets-bar" class="saved-views-capsule">
+                                    <i data-lucide="bookmark" style="width: 13px; height: 13px; color: var(--text-muted); margin-left: 0.15rem;"></i>
+                                    <select id="erp-saved-preset-select" class="input-text" style="width: 148px;">
+                                        <option value="">Saved views...</option>
+                                    </select>
+                                    <div id="erp-saved-presets-pills" style="display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap;"></div>
+                                    <input type="text" id="erp-preset-name-input" class="input-text" placeholder="Save view as..." style="width: 132px;">
+                                    <button type="button" class="btn btn-outline btn-sm" id="btn-save-erp-preset" title="Save current ERP filters as a view"><i data-lucide="bookmark-plus"></i> Save</button>
+                                    <button type="button" class="btn btn-ghost btn-sm" id="btn-delete-erp-preset" disabled title="Delete selected saved view" style="width: 26px; padding: 0; justify-content: center; color: var(--danger);"><i data-lucide="trash-2"></i></button>
                                 </div>
                             </div>
                         </div>

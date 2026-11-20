@@ -2015,3 +2015,127 @@ tr:hover .inline-copy-btn,
     transform: translateY(-1px);
     outline: none;
 }
+
+/* ==========================================================================
+   COMPACT 2-TIER LEDGER COMMAND BAR & SAVED VIEWS CAPSULE
+   ========================================================================== */
+.ledger-toolbar.ledger-toolbar-compact {
+    padding: 0.72rem 1.1rem;
+    gap: 0.52rem;
+}
+
+.ledger-command-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    width: 100%;
+}
+
+.ledger-search-box {
+    position: relative;
+    flex: 1 1 250px;
+    min-width: 210px;
+    display: flex;
+    align-items: center;
+}
+
+.ledger-search-box .ledger-search-icon {
+    position: absolute;
+    left: 0.68rem;
+    width: 14px;
+    height: 14px;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.ledger-search-box .input-text {
+    height: 33px;
+    padding: 0 0.75rem 0 2.05rem;
+    font-size: 0.82rem;
+}
+
+.ledger-date-capsule {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.16rem 0.42rem;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    min-height: 33px;
+}
+
+.ledger-date-capsule .input-text {
+    width: 126px;
+    height: 27px;
+    padding: 0 0.35rem;
+    font-size: 0.78rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.ledger-capsule-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border-color);
+    margin: 0 0.2rem;
+}
+
+.ledger-date-presets {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.18rem;
+    flex-wrap: wrap;
+}
+
+.ledger-date-presets .btn-sm {
+    height: 25px;
+    padding: 0 0.48rem;
+    font-size: 0.72rem;
+    border-radius: 5px;
+}
+
+.ledger-subbar-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.saved-views-capsule {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.16rem 0.38rem;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.saved-views-capsule .input-text {
+    height: 26px;
+    font-size: 0.74rem;
+    border-radius: 6px;
+    padding: 0 0.5rem;
+    background: var(--bg-card);
+}
+
+.saved-views-capsule .btn-sm {
+    height: 26px;
+    padding: 0 0.52rem;
+    font-size: 0.73rem;
+    border-radius: 6px;
+}
+
+.filter-chips:empty {
+    display: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
