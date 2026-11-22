@@ -502,6 +502,64 @@ export function orderBidiPdfLineItems(items) {
     return ordered;
 }
 
+/**
+ * Finds the statement table header on a page and returns X boundaries:
+ *   descStart..descEnd   = Description column
+ *   codesStart..codesEnd = External Ref, Transaction Code, Transaction Reference, Event
+ * Returns null when the header isn't on the page (callers fall back to text matching).
+ */
+export function detectBanqueMisrColumns(hLines) {
+    for (const line of hLines || []) {
+        const text = line.items.map(i => i.str).join(' ');
+        if (!/Description/i.test(text) || !/Credit/i.test(text)) continue;
+        const xOf = (re) => {
+            const it = line.items.find(i => re.test(i.str));
+            return it ? it.x : null;
+        };
+        const descX = xOf(/^Description$/i);
+        const instrX = xOf(/Instrument/i);
+        const extX = xOf(/External/i);
+        const branchX = xOf(/Executed\s+Branch\s+Code|Branch\s+Code/i);
+        const descEndX = instrX ?? extX;
+        if (descX === null || descEndX === null || extX === null) return null;
+        const pad = 3;
+        return {
+            headerY: line.y,
+            descStart: descX - pad,
+            descEnd: descEndX - pad,
+            codesStart: extX - pad,
+            // the Event cell ends where the branch columns start (or the page edge on older layouts)
+            codesEnd: branchX !== null ? branchX - pad : Infinity
+        };
+    }
+    return null;
+}
+
+/**
+ * Assigns wrapped Description lines to rows. The bank centres each description vertically on its
+ * row's numbers, so a row has as many wrapped lines below its numbers as above them. Lines between
+ * two rows' numbers therefore go: the first N to the upper row (N = its lines above), the rest to
+ * the lower row. "Nearest row" got this wrong for tall rows (e.g. a 7-line SWIFT description), whose
+ * last lines are closer to the next row's numbers.
+ * anchors and lines are ordered top to bottom (descending PDF y).
+ */
+export function assignCenteredDescriptionLines(anchors, lines) {
+    if (!anchors.length) return;
+    const gaps = Array.from({ length: anchors.length + 1 }, () => []);
+    for (const line of [...lines].sort((a, b) => b.y - a.y)) {
+        const anchorsAbove = anchors.filter(a => a.y > line.y).length;
+        gaps[anchorsAbove].push(line.text);
+    }
+    anchors[0].extraDescAbove.push(...gaps[0]);
+    for (let g = 1; g < gaps.length; g++) {
+        const upper = anchors[g - 1];
+        const lower = anchors[g];
+        const n = lower ? Math.min(upper.extraDescAbove.length, gaps[g].length) : gaps[g].length;
+        upper.extraDescBelow.push(...gaps[g].slice(0, n));
+        if (lower) lower.extraDescAbove.push(...gaps[g].slice(n));
+    }
+}
+
 export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
     const outputLines = [];
 
@@ -531,6 +589,12 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
             line.items = orderBidiPdfLineItems(line.items);
         });
 
+        // Column boundaries from this page's table header ("Balance After | Credit | Debit | ...").
+        // Reading cells by X position keeps wrapped text in its own column: the bank added
+        // "Executed Branch Code / Name" columns after "Event", and without this the branch name
+        // (and the row-matching regex failing on it) shifted every description onto the previous row.
+        const cols = detectBanqueMisrColumns(hLines);
+
         // Identify Anchor Lines: lines that contain a transaction date-time (\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})
         // or an Event code (INIT|REVR|DEBK|ILIQ|IMAT) + numeric balances
         const anchorLines = [];
@@ -557,8 +621,11 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
             continue;
         }
 
-        const topTableY = anchorLines[0].y + 22;
-        const bottomTableY = anchorLines[anchorLines.length - 1].y - 22;
+        // Table bounds. With a detected header the table starts right below it: a tall row at the
+        // top of a page wraps more than 22pt above its numbers and was being cut off as "header".
+        const topTableY = cols ? cols.headerY - 1 : anchorLines[0].y + 22;
+        const bottomTableY = cols ? -Infinity : anchorLines[anchorLines.length - 1].y - 22;
+        const descLines = [];
 
         for (const line of hLines) {
             const text = line.items.map(i => i.str).join(' ');
@@ -585,6 +652,18 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
             // Skip repeated table header row
             if (/Balance\s+After.*Credit.*Debit/i.test(text)) continue;
 
+            // With known columns, only Description-column text belongs to a row's description
+            // (a wrapped branch name or reference must not be glued onto it).
+            let descText = text;
+            if (cols) {
+                if (/^\d+\s*\/\s*\d+$/.test(text.trim())) continue; // page footer "3 / 9"
+                const descItems = line.items.filter(i => i.x >= cols.descStart && i.x < cols.descEnd);
+                if (descItems.length === 0) continue;
+                descText = orderBidiPdfLineItems(descItems).map(i => i.str).join(' ');
+                descLines.push({ y: line.y, text: descText });
+                continue;
+            }
+
             // Find the closest anchor line by Y distance
             let bestAnchor = anchorLines[0];
             let bestDist = Math.abs(line.y - bestAnchor.y);
@@ -597,20 +676,39 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
             }
 
             if (line.y > bestAnchor.y) {
-                bestAnchor.extraDescAbove.push(text);
+                bestAnchor.extraDescAbove.push(descText);
             } else {
-                bestAnchor.extraDescBelow.push(text);
+                bestAnchor.extraDescBelow.push(descText);
             }
         }
 
+        if (cols) assignCenteredDescriptionLines(anchorLines, descLines);
+
         // Now emit each anchor row with all its description lines placed cleanly before the trailing refs/codes
         for (const anchor of anchorLines) {
+            if (cols) {
+                const join = (arr) => orderBidiPdfLineItems(arr).map(i => i.str).join(' ').trim();
+                const leftCols = join(anchor.anchorItems.filter(i => i.x < cols.descStart));
+                const midDesc = join(anchor.anchorItems.filter(i => i.x >= cols.descStart && i.x < cols.descEnd));
+                // External Ref .. Event; Instrument Code and Executed Branch Code/Name are dropped
+                const rightCodes = join(anchor.anchorItems.filter(i => i.x >= cols.codesStart && i.x < cols.codesEnd));
+                if (/^[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+\d{2}-\d{2}-\d{4}$/.test(leftCols)) {
+                    const fullDesc = [
+                        ...anchor.extraDescAbove,
+                        ...(midDesc ? [midDesc] : []),
+                        ...anchor.extraDescBelow
+                    ].join(' ').replace(/\s+/g, ' ').trim();
+                    outputLines.push(`${leftCols} ${fullDesc} ${rightCodes}`.replace(/\s+/g, ' ').trim());
+                    continue;
+                }
+            }
             const baseText = anchor.anchorItems.map(i => i.str).join(' ');
-            const trailRegex = /(?:\b(FJB\d{8,18}|\d{3}DEBK[A-Z0-9]+)\s+)?\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([0-9A-Z]{3}[A-Z0-9\s]{4,22}?)\s+\b(INIT|REVR|DEBK|ILIQ|IMAT)\b\s*$/;
+            // Optional trailing "Executed Branch Code / Name" after the Event column.
+            const trailRegex = /(?:\b(FJB\d{8,18}|\d{3}DEBK[A-Z0-9]+|IRS[A-Z0-9]{6,14})\s+)?\b(CHF|SIR|T30|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([0-9A-Z]{3}[A-Za-z0-9\s]{4,22}?)\s+\b(INIT|REVR|DEBK|ILIQ|IMAT)\b(?:\s+\d{3}\b.*)?\s*$/;
             const tm = baseText.match(trailRegex);
             if (tm) {
                 const leftAndMid = baseText.slice(0, tm.index).trim();
-                const rightCodes = tm[0].trim();
+                const rightCodes = [tm[1], tm[2], tm[3], tm[4]].filter(Boolean).join(' ');
                 const startMatch = leftAndMid.match(/^([\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+\d{2}-\d{2}-\d{4})\s*(.*)$/);
                 if (startMatch) {
                     const leftCols = startMatch[1];
@@ -690,7 +788,9 @@ export function parseBanqueMisrPdfText(fullText) {
         const nextIndex = i + 1 < starts.length ? starts[i + 1].index : text.length;
         let tail = text.slice(cur.endOfHeader, nextIndex);
 
-        const pageBreakIdx = tail.search(/\b\d+\s*\/\s*\d+\b|Statement of Account|Customer Name|جامعة النيل الاهلية/i);
+        // Page footer "3 / 9" only: a stand-alone pair, not part of a date ("13/01/2008") or an
+        // ID written as "241002692/2".
+        const pageBreakIdx = tail.search(/(?:^|\s)\d{1,3}\s*\/\s*\d{1,3}(?=\s|$)(?!\s*\/)|Statement of Account|Customer Name|جامعة النيل الاهلية/i);
         if (pageBreakIdx !== -1) {
             tail = tail.slice(0, pageBreakIdx);
         }
@@ -704,7 +804,7 @@ export function parseBanqueMisrPdfText(fullText) {
         let extRef = '';
         let description = tail;
 
-        const codeBlockRegex = /(?:(FJB\d{8,18}|\d{3}DEBK[A-Z0-9]+)\s+)?\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([0-9A-Z]{3}[A-Z0-9\s]{4,22}?)\s+\b(INIT|REVR|DEBK|ILIQ|IMAT)\b/;
+        const codeBlockRegex = /(?:(FJB\d{8,18}|\d{3}DEBK[A-Z0-9]+|IRS[A-Z0-9]{6,14})\s+)?\b(CHF|SIR|T30|T35|TD1|TD2|TD3|TD4|T02|T06)\s+([0-9A-Z]{3}[A-Za-z0-9\s]{4,22}?)\s+\b(INIT|REVR|DEBK|ILIQ|IMAT)\b/;
         const cbMatch = tail.match(codeBlockRegex);
         if (cbMatch) {
             extRef = (cbMatch[1] || '').trim();
@@ -716,7 +816,7 @@ export function parseBanqueMisrPdfText(fullText) {
                 .trim();
         } else {
             // Secondary fallback: extract FJB external ref and event independently if present
-            const fjbMatch = tail.match(/\b(FJB\d{8,18})\b/);
+            const fjbMatch = tail.match(/\b(FJB\d{8,18}|IRS[A-Z0-9]{6,14})\b/);
             if (fjbMatch) {
                 extRef = fjbMatch[1];
                 description = description.replace(fjbMatch[0], ' ');
@@ -726,7 +826,7 @@ export function parseBanqueMisrPdfText(fullText) {
                 event = evMatch[1];
                 description = description.replace(evMatch[0], ' ');
             }
-            const tcMatch = tail.match(/\b(CHF|T35|TD1|TD2|TD3|TD4|T02|T06)\b/);
+            const tcMatch = tail.match(/\b(CHF|SIR|T30|T35|TD1|TD2|TD3|TD4|T02|T06)\b/);
             if (tcMatch) {
                 txCode = tcMatch[1];
                 description = description.replace(tcMatch[0], ' ');
