@@ -31,6 +31,26 @@ const TABLE_ORDERS = {
 };
 
 const TABLES = Object.keys(TABLE_ORDERS);
+
+// Primary key of each table. Re-runs skip rows whose primary key is already copied; a clash
+// on any OTHER unique key (e.g. two payment links with one invoice number) now fails loudly.
+// (INSERT OR REPLACE silently deleted the existing row on any unique clash.)
+const PRIMARY_KEYS = {
+  user_roles: ['email'],
+  import_batches: ['id'],
+  student_master: ['student_id'],
+  item_mappings: ['id'],
+  manual_fixes: ['id'],
+  links: ['id'],
+  payment_links: ['id'],
+  transactions: ['id'],
+  transactions_archive: ['id'],
+  foreign_transactions: ['id'],
+  exchange_rates: ['rate_date', 'currency_pair'],
+  settlement_batches: ['id'],
+  closed_periods: ['period_month'],
+  audit_logs: ['id']
+};
 const SELECTED_TABLES = process.env.MIGRATE_TABLES
   ? process.env.MIGRATE_TABLES.split(',').map(s => s.trim()).filter(t => TABLES.includes(t))
   : TABLES;
@@ -62,7 +82,8 @@ async function fetchSupabasePage(table, from, to) {
 
     const headers = {
       apikey: SUPABASE_KEY,
-      Range: `${from}-${to}`
+      Range: `${from}-${to}`,
+      Prefer: 'count=exact'
     };
     if (!SUPABASE_KEY.startsWith('sb_secret_')) {
       headers.Authorization = `Bearer ${SUPABASE_KEY}`;
@@ -76,7 +97,10 @@ async function fetchSupabasePage(table, from, to) {
       }
       throw new Error(`Supabase fetch failed for ${table} (${res.status}): ${text}`);
     }
-    return { skipped: false, rows: await res.json() };
+    // Content-Range: "0-999/12345" -> total rows in Supabase
+    const range = res.headers.get('content-range') || '';
+    const totalInSource = /\/(\d+)$/.test(range) ? Number(range.match(/\/(\d+)$/)[1]) : null;
+    return { skipped: false, rows: await res.json(), totalInSource };
   });
 }
 
@@ -96,6 +120,7 @@ for (const table of SELECTED_TABLES) {
   let offset = 0;
   let total = 0;
   let skipped = false;
+  let expected = null;
 
   while (true) {
     const page = await fetchSupabasePage(table, offset, offset + PAGE_SIZE - 1);
@@ -105,34 +130,47 @@ for (const table of SELECTED_TABLES) {
       break;
     }
 
+    if (expected === null && page.totalInSource !== null) expected = page.totalInSource;
     const rows = page.rows;
     if (!Array.isArray(rows) || rows.length === 0) break;
 
     const cols = Object.keys(rows[0]).filter(c => !allowedCols || allowedCols.has(c));
     const colList = cols.map(c => `"${c}"`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
-    const sql = `INSERT OR REPLACE INTO "${table}" (${colList}) VALUES (${placeholders})`;
+    const pk = PRIMARY_KEYS[table].map(c => `"${c}"`).join(', ');
+    const sql = `INSERT INTO "${table}" (${colList}) VALUES (${placeholders}) ON CONFLICT(${pk}) DO NOTHING`;
 
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const slice = rows.slice(i, i + BATCH_SIZE);
-      const stmts = slice.map(row => ({
-        sql,
-        args: cols.map(c => serializeCell(c, row[c]))
-      }));
+      // Historical rows may sit in closed accounting periods: switch the period-lock triggers
+      // off inside this batch only (set and cleared in the same transaction).
+      const stmts = [
+        { sql: 'INSERT OR IGNORE INTO period_lock_bypass (id) VALUES (1)', args: [] },
+        ...slice.map(row => ({
+          sql,
+          args: cols.map(c => serializeCell(c, row[c]))
+        })),
+        { sql: 'DELETE FROM period_lock_bypass', args: [] }
+      ];
       await withRetry(() => turso.batch(stmts, 'write'));
     }
 
     total += rows.length;
-    offset += PAGE_SIZE;
+    offset += rows.length; // not PAGE_SIZE: a capped page must not skip rows
     if (total > 0 && total % 2000 === 0) {
       console.log(`  ${table}: ${total} rows migrated so far...`);
     }
-    if (rows.length < PAGE_SIZE) break;
+    // Supabase may cap pages below PAGE_SIZE (max_rows); trust the exact count when we have it.
+    if (expected !== null ? total >= expected : rows.length < PAGE_SIZE) break;
+  }
+
+  if (!skipped && expected !== null && total !== expected) {
+    throw new Error(`${table}: copied ${total} rows but Supabase has ${expected}. Migration is incomplete.`);
   }
 
   if (!skipped) {
     migratedCounts[table] = total;
-    console.log(`Migrated ${table}: ${total} rows`);
+    console.log(`Migrated ${table}: ${total} rows${expected !== null ? ` (Supabase: ${expected})` : ''}`);
   }
 }
 

@@ -65,6 +65,35 @@ export async function withDbRetry(fn, { attempts = 5, baseDelayMs = 60 } = {}) {
   throw lastErr;
 }
 
+// SQLite refuses a write it could not lock BEFORE applying anything, so these are safe to retry.
+const WRITE_RETRYABLE_RE = /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i;
+
+export function isWriteRetryableDbError(err) {
+  if (!err) return false;
+  const hay = [err.code, err.message, err.cause?.code, err.cause?.message].filter(Boolean).join(' ');
+  return WRITE_RETRYABLE_RE.test(hay);
+}
+
+/**
+ * Like withDbRetry, but for writes: retries only lock errors. A network/transport error
+ * ("fetch failed", ECONNRESET, timeout) can arrive after the write committed, so re-running
+ * it could duplicate rows.
+ */
+export async function withDbWriteRetry(fn, { attempts = 5, baseDelayMs = 60 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isWriteRetryableDbError(err) || i === attempts - 1) throw err;
+      const delay = baseDelayMs * (2 ** i) + Math.floor(Math.random() * 40);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Reads and parses a JSON request body safely in Vercel Node.js functions.
  */

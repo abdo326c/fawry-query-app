@@ -107,6 +107,12 @@ describe('Turso / Vercel API Backend (Auth, RBAC Query, RPCs)', () => {
   });
 
   beforeEach(async () => {
+    // Test-only reset: the append-only guards (audit log, archive) are dropped for the wipe and
+    // re-created from the schema afterwards. closed_periods is emptied first so the period-lock
+    // triggers don't block the deletes.
+    await db.execute('DELETE FROM closed_periods');
+    await db.execute('DROP TRIGGER IF EXISTS trg_audit_logs_no_delete');
+    await db.execute('DROP TRIGGER IF EXISTS trg_tx_archive_no_delete');
     await db.execute('DELETE FROM transactions');
     await db.execute('DELETE FROM transactions_archive');
     await db.execute('DELETE FROM foreign_transactions');
@@ -118,6 +124,7 @@ describe('Turso / Vercel API Backend (Auth, RBAC Query, RPCs)', () => {
     await db.execute('DELETE FROM exchange_rates');
     await db.execute('DELETE FROM import_batches');
     await db.execute('DELETE FROM audit_logs');
+    await db.executeMultiple(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'turso', 'schema.sql'), 'utf8'));
   });
 
   afterEach(() => {

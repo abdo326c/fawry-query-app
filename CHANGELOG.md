@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.12.1 – 2026-11-22
+
+Security and data-safety fixes for the new Turso / Vercel API (critical and high findings from the review).
+
+**After deploying:** run `node scripts/turso_setup.mjs` once against the production database (with `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` set and **without** `ADMIN_INITIAL_PASSWORD`) to install the new database triggers. It is safe to re-run; it changes no data.
+
+### Critical
+- **Any signed-in user could make themselves admin.** `upsert` had no entry in the permission table, so the role check always passed, even for viewers and deactivated users. One request could set `role: 'admin'`, reopen a closed accounting period, overwrite audit entries or change settled/archived rows. Upsert now needs both the insert and update roles. Unknown operations and unknown roles are refused, and deactivated or role-less accounts can't write anything.
+
+### High
+- **The month-end period lock is enforced by the database again.** SQLite triggers on `transactions`, `foreign_transactions` and `manual_fixes` block inserts, updates and deletes in a closed month, and moving rows into one. Postgres had these triggers; the Turso port only checked in some API paths. These paths now covered:
+  - bulk rule-field updates
+  - ERP reverts
+  - hygiene rollbacks
+  - student-level updates (closed months are skipped, as before)
+  - upserts that would overwrite a closed-month row
+- **The audit log is append-only.** Nobody can edit or delete entries through the API, and the database refuses deletes. Inserts can no longer set their own id, timestamp or author.
+- **The archive is append-only.** Archived rows can't be changed or deleted. Re-importing an old Fawry file no longer brings archived (settled, ERP-posted) payments back as unsettled. The archive run no longer deletes a payment it failed to copy into the archive.
+- **Other admins can't take over the owner account.** Only the primary admin can reset or set the primary admin's password.
+- **Updating and deleting manual fixes works again.** The period-lock check failed every time with "ambiguous column name".
+- **Each write request is saved completely or not at all.** Imports were split into 200-row batches that could half-commit while the screen reported the whole chunk as failed.
+- **Writes are no longer re-sent after an unclear network error.** Re-sending could save audit entries, settlement runs or payments twice. Reads still retry. Writes retry only when the database was locked, which means nothing was saved.
+- **The Supabase-to-Turso copy script fails loudly** instead of silently replacing rows. It checks the row count against Supabase and never skips rows when Supabase returns short pages.
+
 ## 2.11.1 – 2026-11-18
 
 - **All Excel exports show dates as `yyyy-mm-dd`** (`yyyy-mm-dd hh:mm:ss` when there is a time). Real Excel date cells (Fawry Query export, Dynamics 365 journal) keep their date value with the new display format; date text in columns named "… Date", "Created", "Expiry", "Time" etc. is rewritten (e.g. `17/11/2026`, `17-Nov-2026`, `1/25/2026 3:05 PM`). Applied once in `writeCompressedExcel`, so every export is covered. The dashboard collection report's daily rows also use `yyyy-mm-dd` instead of `17-Nov-2026`.

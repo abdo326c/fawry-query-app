@@ -1,8 +1,17 @@
 import crypto from 'node:crypto';
 import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
-import { clearRoleCache, createJwt, getAuthUser, hashPassword, isLegacyBcryptHash, verifyPassword } from './_lib/auth.js';
+import { clearRoleCache, createJwt, getAuthUser, hashPassword, isLegacyBcryptHash, PRIMARY_ADMIN_EMAIL, verifyPassword } from './_lib/auth.js';
 
-const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
+// Only the primary admin may set the primary admin's password. Any other admin doing it
+// (reset, or "create" over the existing login) could take over the owner account, which the
+// app always treats as admin and which cannot be deactivated or deleted.
+function refusePrimaryAdminTarget(res, actor, targetEmail) {
+  if (targetEmail === PRIMARY_ADMIN_EMAIL && actor.email !== PRIMARY_ADMIN_EMAIL) {
+    sendJson(res, 403, { error: 'Only the primary admin can change the primary admin account.' });
+    return true;
+  }
+  return false;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -123,7 +132,7 @@ export default async function handler(req, res) {
 
     if (action === 'admin_create_user') {
       const actor = await getAuthUser(req, db);
-      if (!actor || actor.role !== 'admin') {
+      if (!actor || !actor.isActive || actor.role !== 'admin') {
         return sendJson(res, 403, { error: 'Access denied: admin role required.' });
       }
       const targetEmail = String(body.email || '').trim().toLowerCase();
@@ -138,6 +147,7 @@ export default async function handler(req, res) {
       if (!['viewer', 'operator', 'accountant', 'admin'].includes(role)) {
         return sendJson(res, 400, { error: 'Invalid role.' });
       }
+      if (refusePrimaryAdminTarget(res, actor, targetEmail)) return;
 
       const id = crypto.randomUUID();
       const hash = hashPassword(password);
@@ -161,7 +171,7 @@ export default async function handler(req, res) {
 
     if (action === 'admin_reset_password') {
       const actor = await getAuthUser(req, db);
-      if (!actor || actor.role !== 'admin') {
+      if (!actor || !actor.isActive || actor.role !== 'admin') {
         return sendJson(res, 403, { error: 'Access denied: admin role required.' });
       }
       const targetEmail = String(body.email || '').trim().toLowerCase();
@@ -169,6 +179,7 @@ export default async function handler(req, res) {
       if (!targetEmail || newPassword.length < 8) {
         return sendJson(res, 400, { error: 'Valid email and password (8+ chars) are required.' });
       }
+      if (refusePrimaryAdminTarget(res, actor, targetEmail)) return;
       const hash = hashPassword(newPassword);
       const resUpd = await withDbRetry(() => db.execute({
         sql: 'UPDATE app_users SET password_hash = ? WHERE LOWER(TRIM(email)) = ?',
