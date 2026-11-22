@@ -656,27 +656,27 @@ class ForeignUiMixin {
     }
 
     async loadPdfJsLibrary() {
+        // pdf.js 4.x (3.11.174 had CVE-2024-4367, arbitrary JS via crafted font data). v4 ships
+        // ES modules only, so it is loaded with a dynamic import from the CDN.
         if (window.pdfjsLib) return window.pdfjsLib;
-        return new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-            script.onload = () => {
-                if (window.pdfjsLib) {
-                    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-                    resolve(window.pdfjsLib);
-                } else {
-                    reject(new Error('PDF.js failed to initialize'));
-                }
-            };
-            script.onerror = () => reject(new Error('Failed to load PDF reader library from CDN'));
-            document.head.appendChild(script);
-        });
+        const base = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38';
+        let lib;
+        try {
+            lib = await import(/* @vite-ignore */ `${base}/pdf.min.mjs`);
+        } catch {
+            throw new Error('Failed to load PDF reader library from CDN');
+        }
+        if (!lib?.getDocument) throw new Error('PDF.js failed to initialize');
+        lib.GlobalWorkerOptions.workerSrc = `${base}/pdf.worker.min.mjs`;
+        window.pdfjsLib = lib;
+        return lib;
     }
 
     async extractTextFromPdfFile(file) {
         const pdfjsLib = await this.loadPdfJsLibrary();
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        // isEvalSupported:false: never compile font/function code with eval/new Function.
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false }).promise;
         const pagesItems = [];
 
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {

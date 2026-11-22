@@ -1,8 +1,30 @@
-import { getDb, readJsonBody, sendJson, withDbRetry, withDbWriteRetry } from './_lib/db.js';
-import { clearRoleCache, getAuthUser } from './_lib/auth.js';
-import { assertPeriodsUnlocked, hasMinRole, resolveStudentLevelsBatch, roleLevel } from './_lib/rbac.js';
+import { getDb, readJsonBody, sendJson, sendServerError, withDbRetry, withDbWriteRetry } from './_lib/db.js';
+import {
+  bumpTokenVersion,
+  clearRoleCache,
+  getAuthUser,
+  PRIMARY_ADMIN_EMAIL,
+  verifyServerPayload
+} from './_lib/auth.js';
+import {
+  assertPeriodsUnlocked,
+  AUDIT_REVERT_SIG_PURPOSE,
+  auditRevertSigInput,
+  hasMinRole,
+  resolveStudentLevelsBatch,
+  roleLevel
+} from './_lib/rbac.js';
 
-const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
+/** Most elements any array argument of an RPC may have (413 above). */
+export const MAX_RPC_ARRAY = 5000;
+const SYSTEM_AUDIT_EMAIL = 'system@nu.edu.eg';
+
+/** True for a real calendar date written as YYYY-MM-DD. */
+function isIsoDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
 
 const EXEMPT_MAPPING_SQL = `(
   LOWER(TRIM(COALESCE(mapping, ''))) = 'dip'
@@ -44,7 +66,7 @@ function parseDetailsJson(raw) {
 
 async function executeHygieneRollback(db, user, auditId) {
   const logRes = await withDbRetry(() => db.execute({
-    sql: 'SELECT id, action, details FROM audit_logs WHERE id = ? LIMIT 1',
+    sql: 'SELECT id, user_email, action, details FROM audit_logs WHERE id = ? LIMIT 1',
     args: [auditId]
   }));
   if (!logRes.rows.length) {
@@ -53,7 +75,31 @@ async function executeHygieneRollback(db, user, auditId) {
     throw err;
   }
 
-  const details = parseDetailsJson(logRes.rows[0].details);
+  // Only a real hygiene run may be rolled back, and only from a snapshot the server wrote:
+  // /api/query strips revert_snapshot from every insert and audit entries cannot be edited
+  // through the API, so a snapshot can only come from run_database_hygiene_audit (an admin) or
+  // scripts/database_hygiene.js (system@). The author check also rejects any legacy entry
+  // inserted through the API by a non-admin before that stripping existed.
+  const logRow = logRes.rows[0];
+  if (logRow.action !== 'Database Hygiene Audit') {
+    const err = new Error(`Audit log record ${auditId} is not a Database Hygiene Audit run`);
+    err.status = 400;
+    throw err;
+  }
+  const author = String(logRow.user_email || '').trim().toLowerCase();
+  if (author !== SYSTEM_AUDIT_EMAIL && author !== PRIMARY_ADMIN_EMAIL) {
+    const authorRes = await withDbRetry(() => db.execute({
+      sql: 'SELECT role FROM user_roles WHERE LOWER(TRIM(email)) = ? LIMIT 1',
+      args: [author]
+    }));
+    if (authorRes.rows[0]?.role !== 'admin') {
+      const err = new Error(`Security block: hygiene snapshot of audit #${auditId} was not written by the server`);
+      err.status = 403;
+      throw err;
+    }
+  }
+
+  const details = parseDetailsJson(logRow.details);
   if (details.is_reverted === true) {
     const err = new Error(`Audit run ${auditId} has already been reverted`);
     err.status = 400;
@@ -128,6 +174,11 @@ export default async function handler(req, res) {
     const body = await readJsonBody(req);
     const fn = String(body.fn || '').trim();
     const args = body.args && typeof body.args === 'object' ? body.args : {};
+    for (const [key, value] of Object.entries(args)) {
+      if (Array.isArray(value) && value.length > MAX_RPC_ARRAY) {
+        return sendJson(res, 413, { error: `Too many items in ${key} (max ${MAX_RPC_ARRAY}). Send them in smaller chunks.` });
+      }
+    }
 
     switch (fn) {
       case 'get_dashboard_pivot': {
@@ -495,6 +546,8 @@ export default async function handler(req, res) {
                   updated_at = datetime('now')`,
           args: [targetEmail, roleForInsert, active, user.email]
         }));
+        // A deactivated user's outstanding tokens die now, not when they expire.
+        if (active === 0) await bumpTokenVersion(db, targetEmail);
         clearRoleCache(targetEmail);
 
         const appRes = await withDbRetry(() => db.execute({
@@ -522,6 +575,9 @@ export default async function handler(req, res) {
         if (targetEmail === user.email) {
           return sendJson(res, 400, { error: 'You cannot delete your own active Admin account' });
         }
+        // Deleting the app_users row revokes every token of this login: getAuthUser rejects tokens
+        // whose login no longer exists, and tokens whose `sub` is not the current row id (so a
+        // re-created account with the same email does not revive old tokens).
         const [, delAuth] = await withDbWriteRetry(() => db.batch([
           { sql: 'DELETE FROM user_roles WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] },
           { sql: 'DELETE FROM app_users WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] }
@@ -539,10 +595,30 @@ export default async function handler(req, res) {
         requireRole(user, 'admin', 'lock or unlock accounting periods');
         const periodMonth = String(args.p_period_month || '').trim();
         const isClosed = args.p_is_closed ? 1 : 0;
-        const notes = args.p_notes ?? null;
+        const notesText = args.p_notes === null || args.p_notes === undefined ? '' : String(args.p_notes).trim();
+        const notes = notesText ? notesText.slice(0, 1000) : null;
         if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodMonth)) {
           return sendJson(res, 400, { error: 'Invalid period_month format. Expected YYYY-MM.' });
         }
+        if (!isClosed && !notes) {
+          return sendJson(res, 400, { error: 'An audit reason is required to unlock an accounting period.' });
+        }
+
+        const prevRes = await withDbRetry(() => db.execute({
+          sql: 'SELECT is_closed, closed_by, closed_at, reopened_by, reopened_at, notes FROM closed_periods WHERE period_month = ? LIMIT 1',
+          args: [periodMonth]
+        }));
+        const prev = prevRes.rows[0];
+        const previousState = prev
+          ? {
+            is_closed: Boolean(prev.is_closed),
+            closed_by: prev.closed_by ?? null,
+            closed_at: prev.closed_at ?? null,
+            reopened_by: prev.reopened_by ?? null,
+            reopened_at: prev.reopened_at ?? null,
+            notes: prev.notes ?? null
+          }
+          : null;
 
         await withDbWriteRetry(() => db.batch([
           {
@@ -571,7 +647,7 @@ export default async function handler(req, res) {
               user.email,
               isClosed ? 'Accounting Period Closed' : 'Accounting Period Unlocked',
               periodMonth,
-              JSON.stringify({ period_month: periodMonth, is_closed: Boolean(isClosed), notes })
+              JSON.stringify({ period_month: periodMonth, is_closed: Boolean(isClosed), notes, previous_state: previousState })
             ]
           }
         ], 'write'));
@@ -589,7 +665,12 @@ export default async function handler(req, res) {
         cutoff.setUTCDate(cutoff.getUTCDate() - 90);
         const minAllowed = cutoff.toISOString().slice(0, 10);
 
-        if (!beforeDate || beforeDate > minAllowed) {
+        // String comparison against minAllowed is only meaningful for a real YYYY-MM-DD date
+        // ("2" or "0000-99-99" compared lower and passed the guard).
+        if (!isIsoDate(beforeDate)) {
+          return sendJson(res, 400, { error: 'p_before_date must be a date in YYYY-MM-DD format.' });
+        }
+        if (beforeDate > minAllowed) {
           return sendJson(res, 400, { error: 'Safety guard: cutoff date must be at least 90 days in the past' });
         }
 
@@ -919,9 +1000,27 @@ export default async function handler(req, res) {
           return sendJson(res, 400, { error: `Audit log entry #${auditId} has already been reverted` });
         }
 
-        if (auditRow.action === 'Database Hygiene Audit' && !details.revert_data) {
+        if (auditRow.action === 'Database Hygiene Audit') {
           const result = await executeHygieneRollback(db, user, auditId);
           return sendJson(res, 200, { data: result });
+        }
+
+        // Only replay revert instructions the server accepted when the entry was written:
+        // sanitizeAuditLogRow signs revert_data (bound to author + action) for accountant+ and
+        // strips it for everyone else. Unsigned payloads (planted via string details, direct DB
+        // edits, entries written before signing existed) or payloads copied to another entry
+        // fail here.
+        if (details.revert_data !== undefined && details.revert_data !== null) {
+          const sigOk = verifyServerPayload(
+            AUDIT_REVERT_SIG_PURPOSE,
+            auditRevertSigInput(auditRow.user_email, auditRow.action, details.revert_data),
+            details.revert_sig
+          );
+          if (!sigOk) {
+            return sendJson(res, 403, {
+              error: `Security block: the revert data of audit entry #${auditId} was not recorded by the server (unsigned or altered), so it cannot be replayed automatically.`
+            });
+          }
         }
 
         const authorEmail = String(auditRow.user_email || '').trim().toLowerCase();
@@ -1084,6 +1183,11 @@ export default async function handler(req, res) {
     }
   } catch (err) {
     const guardHit = /Accounting period is closed|cannot be (deleted|changed)/i.test(String(err?.message || ''));
-    return sendJson(res, err.status || (guardHit ? 403 : 500), { error: err.message || 'RPC execution error' });
+    const status = err.status || (guardHit ? 403 : 500);
+    if (status >= 500) {
+      // Raw driver/SQL errors can reveal schema and query text: log them, return a generic message.
+      return sendServerError(res, err, 'api/rpc');
+    }
+    return sendJson(res, status, { error: err.message || 'RPC execution error' });
   }
 }

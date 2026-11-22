@@ -9,10 +9,22 @@ CREATE TABLE IF NOT EXISTS app_users (
   email           TEXT UNIQUE NOT NULL,
   password_hash   TEXT NOT NULL,
   last_sign_in_at TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Session version: every JWT carries it as `tv`; bumping it (logout, password change,
+  -- deactivation) revokes all outstanding tokens. Existing databases get it from
+  -- scripts/turso_setup.mjs (ALTER TABLE, CREATE TABLE IF NOT EXISTS does not add columns).
+  token_version   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_users_email_lower ON app_users (LOWER(TRIM(email)));
+
+-- Failed sign-in counters (key = 'email:<addr>' or 'ip:<addr>'), used by api/auth.js throttling.
+CREATE TABLE IF NOT EXISTS login_attempts (
+  key          TEXT PRIMARY KEY,
+  count        INTEGER NOT NULL DEFAULT 0,
+  window_start TEXT NOT NULL,
+  locked_until TEXT
+);
 
 -- 1. Role-Based Access Control (4-tier RBAC: viewer < operator < accountant < admin)
 CREATE TABLE IF NOT EXISTS user_roles (
@@ -424,6 +436,19 @@ CREATE TRIGGER IF NOT EXISTS trg_audit_logs_no_delete
 BEFORE DELETE ON audit_logs
 BEGIN
   SELECT RAISE(ABORT, 'Audit log entries cannot be deleted.');
+END;
+
+-- Only `details` of an audit entry may change (the revert RPCs flag is_reverted there); who did
+-- what, when and to which records is immutable.
+CREATE TRIGGER IF NOT EXISTS trg_audit_logs_immutable_fields
+BEFORE UPDATE ON audit_logs
+WHEN NEW.id IS NOT OLD.id
+  OR NEW.user_email IS NOT OLD.user_email
+  OR NEW.action IS NOT OLD.action
+  OR NEW.affected_references IS NOT OLD.affected_references
+  OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'Audit log entries cannot be changed (only details may be updated).');
 END;
 
 -- 15f. Archive is append-only: archived rows cannot be changed or removed.

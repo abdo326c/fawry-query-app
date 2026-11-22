@@ -21,6 +21,17 @@ console.log('Applying Turso schema...');
 await withDbRetry(() => db.executeMultiple(schemaSql));
 console.log('Schema applied successfully.');
 
+// CREATE TABLE IF NOT EXISTS never adds columns to an existing table, so new columns are added
+// here, guarded by PRAGMA table_info so re-running is safe.
+async function addColumnIfMissing(table, column, definition) {
+  const info = await withDbRetry(() => db.execute(`PRAGMA table_info(${table})`));
+  if (info.rows.some(r => String(r.name) === column)) return;
+  await withDbRetry(() => db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`));
+  console.log(`Added column ${table}.${column}.`);
+}
+
+await addColumnIfMissing('app_users', 'token_version', 'INTEGER NOT NULL DEFAULT 0');
+
 const adminEmail = (process.env.ADMIN_EMAIL || 'ammahmoud@nu.edu.eg').trim().toLowerCase();
 const adminPassword = process.env.ADMIN_INITIAL_PASSWORD;
 

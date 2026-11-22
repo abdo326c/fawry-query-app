@@ -85,7 +85,9 @@ async function apiFetch(path, payload) {
     }
 
     const errMsg = json.error || `HTTP ${res.status}`;
-    const shouldRetry = attempt < RETRY_DELAYS_MS.length && (idempotent
+    // A 429 from /api/auth is the login lockout (minutes, not milliseconds): never auto-retry it.
+    const isAuthLockout = res.status === 429 && String(path).endsWith('/api/auth');
+    const shouldRetry = !isAuthLockout && attempt < RETRY_DELAYS_MS.length && (idempotent
       ? (TRANSIENT_HTTP_STATUSES.has(res.status) || (res.status === 500 && TRANSIENT_MSG_RE.test(errMsg)))
       : (WRITE_SAFE_HTTP_STATUSES.has(res.status) || (res.status === 500 && WRITE_SAFE_MSG_RE.test(errMsg))));
     if (shouldRetry) {
@@ -246,9 +248,15 @@ export const supabase = {
     },
 
     async signOut() {
+      // Tell the server first (with the token) so it revokes the session, then forget it locally.
+      // The local sign-out happens even if the request fails.
+      try {
+        if (getStoredToken()) await apiFetch('/api/auth', { action: 'logout' });
+      } catch {
+        /* ignore network errors: the token is dropped locally below */
+      }
       setStoredToken(null);
       notifyAuth('SIGNED_OUT', null);
-      await apiFetch('/api/auth', { action: 'logout' }).catch(() => {});
       return { error: null };
     },
 
@@ -264,6 +272,9 @@ export const supabase = {
 
     async changePassword({ currentPassword, newPassword }) {
       const res = await apiFetch('/api/auth', { action: 'change_password', currentPassword, newPassword });
+      // Changing the password revokes every existing token; the server returns a fresh one.
+      const newToken = res._raw?.session?.access_token;
+      if (!res.error && newToken) setStoredToken(newToken);
       return { data: res._raw || null, error: res.error };
     },
 

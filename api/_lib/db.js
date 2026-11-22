@@ -101,16 +101,40 @@ export async function readJsonBody(req) {
   if (req.body && typeof req.body === 'object') {
     return req.body;
   }
+  const parse = (raw) => {
+    try {
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      const err = new Error('Invalid JSON request body.');
+      err.status = 400;
+      throw err;
+    }
+  };
   if (typeof req.body === 'string') {
-    return req.body ? JSON.parse(req.body) : {};
+    return parse(req.body);
   }
 
   const chunks = [];
   for await (const chunk of req) {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
   }
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
-  return raw ? JSON.parse(raw) : {};
+  return parse(Buffer.concat(chunks).toString('utf8').trim());
+}
+
+/**
+ * Sends a 5xx without leaking the raw driver/SQL message (logged server-side instead).
+ * Lock errors become 503 "database is busy" (SQLite refused the write before applying it, so the
+ * client may safely retry); transport errors say "timeout" so the client retries reads only.
+ */
+export function sendServerError(res, err, scope = 'api') {
+  console.error(`[${scope}]`, err);
+  if (isWriteRetryableDbError(err)) {
+    return sendJson(res, 503, { error: 'The database is busy (database is locked). Please retry.' });
+  }
+  if (isRetryableDbError(err)) {
+    return sendJson(res, 500, { error: 'Database connection timeout. Please retry.' });
+  }
+  return sendJson(res, 500, { error: 'Internal server error.' });
 }
 
 /**
