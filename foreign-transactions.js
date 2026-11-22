@@ -309,6 +309,36 @@ export function crossCheckStatements(excelParsed, pdfParsed) {
 }
 
 /**
+ * Merges the database's BM deposits with this browser's cached copy.
+ *  - The database is the truth: its rows replace cached ones with the same reference.
+ *  - A cached row the database doesn't have is kept (and re-uploaded) ONLY if it is marked
+ *    `_pendingSync` — an import whose save to the database failed.
+ *  - Any other cached row the database doesn't have was deleted (by a user, Detect Duplicates or
+ *    the delete script) and is dropped. It used to be uploaded again, so deleted deposits came back
+ *    whenever someone with an old cached copy opened the BM page.
+ * Returns { merged, pendingUpload, droppedCount }.
+ */
+export function mergeForeignCloudAndLocal(localRows, cloudRows) {
+    const cloudRefs = new Set((cloudRows || []).map(r => r && r.reference_number).filter(Boolean));
+    const byRef = new Map();
+    const pendingUpload = [];
+    let droppedCount = 0;
+    for (const r of localRows || []) {
+        if (!r || !r.reference_number || cloudRefs.has(r.reference_number)) continue;
+        if (r._pendingSync) {
+            byRef.set(r.reference_number, r);
+            pendingUpload.push(r);
+        } else {
+            droppedCount++;
+        }
+    }
+    for (const r of cloudRows || []) {
+        if (r && r.reference_number) byRef.set(r.reference_number, r);
+    }
+    return { merged: [...byRef.values()], pendingUpload, droppedCount };
+}
+
+/**
  * Decides which uploaded files are imported and runs every check.
  * files: [{ name, isPdf, parsed }] where parsed is a parse*Statement result.
  *  - Excel/CSV statements are the data (exact cells).

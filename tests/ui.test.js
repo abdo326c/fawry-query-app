@@ -1016,6 +1016,12 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
 
         // Error during auto-match still restores button state and shows an error toast
         toastContainer.innerHTML = '';
+        // Auto-Match reloads from the database first; a row only in this browser survives that
+        // reload only when it is an unsaved import (_pendingSync).
+        window.app.foreignTransactions = [{
+            reference_number: 'FJB_TEST_2', amount: 10, value_date: '2026-09-03',
+            description: 'Deposit for Sara Ali', id_status: 'Missing ID', _pendingSync: true
+        }];
         window.app.ensureStudentsLoadedForForeign = vi.fn().mockRejectedValue(new Error('DB offline'));
         await window.app.runForeignAutoMatchNames();
         expect(fxToolsBtn.disabled).toBe(false);
@@ -1851,5 +1857,30 @@ test('BM import: Excel + PDF that disagree block the import; a matching pair can
         app.parseSingleForeignStatementFile = origParse;
         app.ensureStudentsLoadedForForeign = origStudents;
         app.syncForeignTransactionsToSupabase = origSave;
+    }
+});
+
+test('BM page load: an old cached copy does not re-upload deposits deleted from the database', async () => {
+    await import('../app.js');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    const app = window.app;
+    const { supabase: supabaseMock } = await import('../supabase.js');
+    const origSync = app.syncForeignTransactionsToSupabase;
+    const origRole = app.hasRole;
+    const syncSpy = vi.fn().mockResolvedValue({ synced: 0, error: null });
+    app.syncForeignTransactionsToSupabase = syncSpy;
+    app.hasRole = () => true;
+    try {
+        app.foreignTransactions = [
+            { reference_number: 'FJB_DELETED', amount: 10, value_date: '2026-09-03', description: 'Cash Deposit A' },
+            { reference_number: 'FJB_UNSAVED', amount: 20, value_date: '2026-09-04', description: 'Cash Deposit B', _pendingSync: true }
+        ];
+        await withForeignDbRows(supabaseMock, [], () => app.loadForeignTransactions());
+        expect(app.foreignTransactions.map(r => r.reference_number)).toEqual(['FJB_UNSAVED']);
+        expect(syncSpy).toHaveBeenCalledTimes(1);
+        expect(syncSpy.mock.calls[0][0].rows.map(r => r.reference_number)).toEqual(['FJB_UNSAVED']);
+    } finally {
+        app.syncForeignTransactionsToSupabase = origSync;
+        app.hasRole = origRole;
     }
 });

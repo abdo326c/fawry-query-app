@@ -183,3 +183,28 @@ test('a file\'s own integrity errors carry its name into the blocking list', () 
     const { integrity } = pairStatementFiles([{ name: 'bad.xls', isPdf: false, parsed: bad }]);
     expect(integrity.errors).toEqual(['bad.xls: Running balance does not add up']);
 });
+
+// ---------------------------------------------------------------- browser cache vs database
+import { mergeForeignCloudAndLocal } from '../foreign-transactions.js';
+
+test('cached deposits deleted from the database are dropped, not uploaded again', () => {
+    const local = [
+        { reference_number: 'KEEP', amount: 1, description: 'old local copy' },
+        { reference_number: 'DELETED', amount: 2 },                       // deleted elsewhere
+        { reference_number: 'UNSAVED', amount: 3, _pendingSync: true }     // import whose save failed
+    ];
+    const cloud = [{ reference_number: 'KEEP', amount: 1, description: 'database copy' }];
+    const { merged, pendingUpload, droppedCount } = mergeForeignCloudAndLocal(local, cloud);
+    expect(merged.map(r => r.reference_number).sort()).toEqual(['KEEP', 'UNSAVED']);
+    expect(merged.find(r => r.reference_number === 'KEEP').description).toBe('database copy');
+    expect(pendingUpload.map(r => r.reference_number)).toEqual(['UNSAVED']);
+    expect(droppedCount).toBe(1);
+});
+
+test('after the delete script empties the table, an old cached copy uploads nothing', () => {
+    const local = Array.from({ length: 50 }, (_, i) => ({ reference_number: `FJB${i}`, amount: i }));
+    const { merged, pendingUpload, droppedCount } = mergeForeignCloudAndLocal(local, []);
+    expect(merged).toEqual([]);
+    expect(pendingUpload).toEqual([]);
+    expect(droppedCount).toBe(50);
+});
