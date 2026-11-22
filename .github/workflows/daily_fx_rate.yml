@@ -2,27 +2,37 @@ name: Daily USD-EGP FX Rate Sync (12 PM Egypt)
 
 on:
   schedule:
-    # 09:00 UTC = 12:00 PM Africa/Cairo during DST (UTC+3)
-    # 10:00 UTC = 12:00 PM Africa/Cairo during standard time (UTC+2)
-    # update_fx_rate.js verifies Africa/Cairo hour === 12 so only one run updates daily.
-    - cron: '0 9,10 * * *'
+    # 09:00 UTC = 12:00 Cairo in summer (UTC+3); 10:00 UTC = 12:00 Cairo in winter (UTC+2).
+    # GitHub cron is often late, so 11:00/12:00 UTC are catch-up slots: update_fx_rate.js
+    # saves only at 12:xx Cairo time, or later when today has no rate yet. Manual rates are
+    # never overwritten.
+    - cron: '0 9,10,11,12 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: daily-fx-rate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   sync-fx-rate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node.js (version from .nvmrc)
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Sync USD -> EGP daily rate at 12:00 PM Egypt time
         env:
@@ -33,4 +43,18 @@ jobs:
             node scripts/update_fx_rate.js --force
           else
             node scripts/update_fx_rate.js
+          fi
+
+      - name: Open or update a failure issue (scheduled runs)
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Scheduled job failed: Daily FX rate sync'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The scheduled run failed: $RUN_URL"
           fi

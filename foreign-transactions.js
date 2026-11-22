@@ -32,9 +32,12 @@ export function normalizePersonName(str) {
 export function parseStatementAmount(val) {
     if (val === null || val === undefined || val === '') return 0;
     if (typeof val === 'number') return isNaN(val) ? 0 : Math.round(val * 100) / 100;
-    const cleaned = String(val).replace(/,/g, '').replace(/[^\d.-]/g, '').trim();
+    const raw = String(val).trim();
+    const negative = /^\(.*\)$/.test(raw); // accounting format: (1,500.00) = -1500
+    const cleaned = raw.replace(/,/g, '').replace(/[^\d.-]/g, '').trim();
     const num = parseFloat(cleaned);
-    return isNaN(num) ? 0 : Math.round(num * 100) / 100;
+    if (isNaN(num)) return 0;
+    return Math.round((negative ? -Math.abs(num) : num) * 100) / 100;
 }
 
 /**

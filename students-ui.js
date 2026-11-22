@@ -24,6 +24,7 @@ import {
     readIndexedDbCache,
     writeIndexedDbCache,
     clearIndexedDbCache,
+    formatDateTime,
     Toast
 } from './app-utils.js';
 
@@ -472,7 +473,7 @@ class StudentsUiMixin {
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Students");
                 await writeCompressedExcel(wb, `Student_Master_Export_${toDateOnly(new Date())}.xlsx`);
-                Toast.show(`Exported ${rows.length.toLocaleString()} students`, "success");
+                Toast.show(`Exported ${rows.length.toLocaleString('en-US')} students`, "success");
 
                 btn.innerHTML = oldHtml;
                 btn.disabled = false;
@@ -907,7 +908,7 @@ class StudentsUiMixin {
             if (loadingToast) loadingToast.dismiss();
             if (!silent) {
                 Toast.show(
-                    `Labeled ${(allRows || []).length.toLocaleString()} students (${ugCount.toLocaleString()} UG, ${pgCount.toLocaleString()} PG — ${rowsToUpdate.length.toLocaleString()} updated in DB).`,
+                    `Labeled ${(allRows || []).length.toLocaleString('en-US')} students (${ugCount.toLocaleString('en-US')} UG, ${pgCount.toLocaleString('en-US')} PG — ${rowsToUpdate.length.toLocaleString('en-US')} updated in DB).`,
                     'success'
                 );
             }
@@ -1266,7 +1267,7 @@ class StudentsUiMixin {
 
             let insertedCount = 0;
             if (recordsToUpsert.length > 0) {
-                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${recordsToUpsert.length.toLocaleString()} new/updated records...`;
+                status.innerHTML = `<i data-lucide="loader" class="spin"></i> Uploading ${recordsToUpsert.length.toLocaleString('en-US')} new/updated records...`;
                 insertedCount = await this.upsertStudentMasterBatches(recordsToUpsert, {
                     batchSize: 150,
                     concurrency: 2,
@@ -1304,8 +1305,8 @@ class StudentsUiMixin {
 
             status.className = 'alert alert-success';
             status.innerHTML = unchangedCount > 0
-                ? `<i data-lucide="check-circle"></i> Successfully processed ${mergedRecords.length.toLocaleString()} students (${insertedCount.toLocaleString()} added/updated, ${unchangedCount.toLocaleString()} unchanged)!`
-                : `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length.toLocaleString()} students!`;
+                ? `<i data-lucide="check-circle"></i> Successfully processed ${mergedRecords.length.toLocaleString('en-US')} students (${insertedCount.toLocaleString('en-US')} added/updated, ${unchangedCount.toLocaleString('en-US')} unchanged)!`
+                : `<i data-lucide="check-circle"></i> Successfully imported & merged ${mergedRecords.length.toLocaleString('en-US')} students!`;
             if (window.lucide) lucide.createIcons();
             await this.loadStudents({ forceReload: true });
 
@@ -1504,14 +1505,14 @@ class StudentsUiMixin {
             if (el) el.textContent = val;
         };
         const totalLabel = hasActiveFilter && masterList.length > 0 && statsList.length !== masterList.length
-            ? `${statsList.length.toLocaleString()} / ${masterList.length.toLocaleString()}`
-            : `${total.toLocaleString()}${isPartial ? '...' : ''}`;
+            ? `${statsList.length.toLocaleString('en-US')} / ${masterList.length.toLocaleString('en-US')}`
+            : `${total.toLocaleString('en-US')}${isPartial ? '...' : ''}`;
 
         setStat('students-stat-total', totalLabel);
-        setStat('students-stat-colleges', collegesSet.size.toLocaleString());
-        setStat('students-stat-mobile', sampleCount > 0 ? `${withMobile.toLocaleString()} (${Math.round((withMobile / sampleCount) * 100)}%)` : '0');
-        setStat('students-stat-nat-id', sampleCount > 0 ? `${withNatId.toLocaleString()} (${Math.round((withNatId / sampleCount) * 100)}%)` : '0');
-        setStat('students-stat-merged', mergedCount.toLocaleString());
+        setStat('students-stat-colleges', collegesSet.size.toLocaleString('en-US'));
+        setStat('students-stat-mobile', sampleCount > 0 ? `${withMobile.toLocaleString('en-US')} (${Math.round((withMobile / sampleCount) * 100)}%)` : '0');
+        setStat('students-stat-nat-id', sampleCount > 0 ? `${withNatId.toLocaleString('en-US')} (${Math.round((withNatId / sampleCount) * 100)}%)` : '0');
+        setStat('students-stat-merged', mergedCount.toLocaleString('en-US'));
 
         const collegeSelect = document.getElementById('student-filter-college');
         const currentVal = collegeSelect ? collegeSelect.value : '';
@@ -1605,7 +1606,7 @@ class StudentsUiMixin {
         if (paginationEl) {
             paginationEl.innerHTML = `
                 <div class="pagination-info" style="font-size: 0.85rem; color: var(--text-muted);">
-                    Showing <strong>${(startIdx + 1).toLocaleString()}</strong>–<strong>${Math.min(startIdx + pageSize, total).toLocaleString()}</strong> of <strong>${total.toLocaleString()}</strong> students
+                    Showing <strong>${(startIdx + 1).toLocaleString('en-US')}</strong>–<strong>${Math.min(startIdx + pageSize, total).toLocaleString('en-US')}</strong> of <strong>${total.toLocaleString('en-US')}</strong> students
                 </div>
                 <div class="pagination-controls" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                     <button class="btn btn-secondary btn-sm" id="students-prev-page" ${this.studentsCurrentPage <= 1 ? 'disabled' : ''}>Previous</button>
@@ -1693,9 +1694,10 @@ class StudentsUiMixin {
                     <head>
                         <title>Official Student Statement - ${sid}</title>
                         <style>
-                            @page { size: A4; margin: 0; }
+                            /* Page margins on @page so they apply to EVERY printed page (body padding only pads page 1). */
+                            @page { size: A4; margin: 14mm; }
                             * { box-sizing: border-box; }
-                            body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; max-width: 900px; margin: 0 auto; padding: 14mm; font-size: 12.5px; line-height: 1.45; }
+                            body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; max-width: 900px; margin: 0 auto; padding: 0; font-size: 12.5px; line-height: 1.45; }
                             .brand-bar { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2.5px solid #0f766e; padding-bottom: 0.9rem; margin-bottom: 1.25rem; }
                             .brand-title { font-size: 1.35rem; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -0.02em; }
                             .brand-sub { font-size: 0.8rem; color: #475569; margin: 0.2rem 0 0 0; }
@@ -1717,7 +1719,8 @@ class StudentsUiMixin {
                             .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #e2e8f0; color: #0f172a; font-weight: 600; font-size: 0.72rem; }
                             h3 { font-size: 0.95rem; margin: 1.1rem 0 0.55rem 0; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.3rem; }
                             .custom-footer { margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; color: #64748b; font-size: 0.75rem; border-top: 1px solid #cbd5e1; padding-top: 0.75rem; }
-                            @media print { body { padding: 14mm; max-width: none; } }
+                            @media print { body { padding: 0; max-width: none; } }
+                            tr { break-inside: avoid; }
                         </style>
                     </head>
                     <body>
@@ -1754,7 +1757,7 @@ class StudentsUiMixin {
                         ${profileContent.innerHTML}
                         <div class="custom-footer">
                             <span>NU Finance Team · Official Computer-Generated Statement</span>
-                            <span>Generated: ${escapeHTML(new Date().toLocaleString())}</span>
+                            <span>Generated: ${escapeHTML(formatDateTime(new Date()))}</span>
                         </div>
                     </body>
                     </html>
@@ -1834,7 +1837,9 @@ class StudentsUiMixin {
                     ...r,
                     payment_date: pDate,
                     item_name: r.description || r.item_name || 'Cash Deposit',
-                    item_price: fx.rate > 0 ? fx.egpAmount : usdAmt,
+                    // No synced USD→EGP rate: do NOT count the USD figure as EGP in the totals.
+                    item_price: fx.rate > 0 ? fx.egpAmount : 0,
+                    fx_missing: !(fx.rate > 0),
                     raw_usd: usdAmt,
                     currency: r.currency || 'USD',
                     is_settled: true
@@ -2086,7 +2091,7 @@ class StudentsUiMixin {
                     <td><span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-size: 0.74rem;">${escapeHTML(t.mapping || 'Unmapped')}</span></td>
                     <td style="font-size: 0.82rem; color: var(--text-secondary);">${escapeHTML(t.second_mapping || '-')}</td>
                     <td style="font-size: 0.82rem;">${escapeHTML(bankName)}</td>
-                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${isSameDaySettlementBank(t) ? `USD ${formatMoney(t.raw_usd ?? t.amount ?? 0)} <span style="font-size: 0.72rem; color: var(--text-muted);">(≈ EGP ${formatMoney(t.item_price || 0)})</span>` : formatMoney(t.item_price || 0)}</td>
+                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${isSameDaySettlementBank(t) ? `USD ${formatMoney(t.raw_usd ?? t.amount ?? 0)} <span style="font-size: 0.72rem; color: ${t.fx_missing ? 'var(--danger)' : 'var(--text-muted)'};">${t.fx_missing ? '(no FX rate synced — not in EGP total)' : `(≈ EGP ${formatMoney(t.item_price || 0)})`}</span>` : formatMoney(t.item_price || 0)}</td>
                 </tr>
             `;
             }).join('');
@@ -2223,7 +2228,7 @@ class StudentsUiMixin {
             { 'Field': 'National ID', 'Value': st.national_id || '-' },
             { 'Field': 'Total Transactions', 'Value': txs.length },
             { 'Field': 'Total Paid (EGP)', 'Value': Number(grandTotal.toFixed(2)) },
-            { 'Field': 'Statement Generated On', 'Value': new Date().toLocaleString() }
+            { 'Field': 'Statement Generated On', 'Value': formatDateTime(new Date()) }
         ];
 
         const wb = XLSX.utils.book_new();

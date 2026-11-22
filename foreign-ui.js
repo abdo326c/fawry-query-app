@@ -35,6 +35,48 @@ import {
     withDropdownTaskProgress
 } from './app-utils.js';
 
+/** Student-match columns of a BM deposit that a statement re-import must not wipe. */
+export const FOREIGN_STUDENT_MATCH_FIELDS = Object.freeze(['student_id', 'student_level', 'id_status', 'match_source', 'matched_student_name']);
+
+/**
+ * True when the stored deposit's student match must survive a re-import / re-sync of the same
+ * reference: it is already posted to the ERP, it was matched by hand, or it has a Valid student
+ * ID while the new parse does not.
+ */
+export function shouldKeepExistingForeignMatch(existing, incoming) {
+    if (!existing) return false;
+    if (String(existing.erp_batch_number || '').trim()) return true;
+    if (String(existing.match_source || '').trim().toLowerCase() === 'manual') return true;
+    return existing.id_status === 'Valid' && incoming?.id_status !== 'Valid';
+}
+
+/**
+ * Returns the row to upsert: the incoming statement row, with the stored student-match fields
+ * kept when shouldKeepExistingForeignMatch() says so (description, amounts, dates still update).
+ */
+export function mergeExistingForeignMatch(incoming, existing) {
+    if (!shouldKeepExistingForeignMatch(existing, incoming)) return incoming;
+    const out = { ...incoming };
+    for (const f of FOREIGN_STUDENT_MATCH_FIELDS) out[f] = existing[f] ?? null;
+    return out;
+}
+
+/** Keep-copy score for BM duplicate groups: ERP-posted > Valid ID > manual match > external ref. */
+export function scoreForeignDuplicateKeepCopy(r) {
+    return (String(r?.erp_batch_number || '').trim() ? 1000 : 0)
+        + (r?.id_status === 'Valid' ? 100 : 0)
+        + (r?.match_source === 'manual' ? 50 : 0)
+        + (r?.external_ref ? 25 : 0);
+}
+
+/** A BM row that duplicate cleanup must never delete: ERP-posted or in a closed accounting period. */
+export function isProtectedForeignRow(r, isDateClosed) {
+    if (!r) return false;
+    if (String(r.erp_batch_number || '').trim()) return true;
+    const d = r.value_date || r.transaction_date || r.payment_date;
+    return Boolean(d && typeof isDateClosed === 'function' && isDateClosed(d));
+}
+
 class ForeignUiMixin {
     // =========================================================================
     // FOREIGN TRANSACTIONS (Smart Bank Statement Student Deposit Extractor)
@@ -195,18 +237,56 @@ class ForeignUiMixin {
         }
 
         try {
-            const tableClient = supabase.from('foreign_transactions');
-            if (!tableClient || typeof tableClient.upsert !== 'function') {
+            const probeClient = supabase.from('foreign_transactions');
+            if (!probeClient || typeof probeClient.upsert !== 'function') {
                 return { synced: 0, error: null };
             }
             const chunkSize = 200;
+
+            // An upsert by reference_number overwrites the stored row. Read what is stored first, so
+            // a re-import / re-sync never wipes a manual match, a Valid match, or the student of an
+            // ERP-posted deposit (see mergeExistingForeignMatch).
+            const keptMatches = new Map();
+            if (typeof probeClient.select === 'function') {
+                for (let i = 0; i < dbRows.length; i += chunkSize) {
+                    const refs = dbRows.slice(i, i + chunkSize).map(r => r.reference_number);
+                    const { data: existingRows, error: readErr } = await supabase.from('foreign_transactions')
+                        .select('reference_number, student_id, student_level, id_status, match_source, matched_student_name, erp_batch_number')
+                        .in('reference_number', refs);
+                    if (readErr) {
+                        // Without the stored rows we cannot protect existing matches: do not write blind.
+                        if (!silent) Toast.show(`Supabase sync failed: ${readErr.message}`, 'error');
+                        return { synced: 0, error: readErr };
+                    }
+                    for (const ex of (Array.isArray(existingRows) ? existingRows : [])) {
+                        const key = String(ex?.reference_number || '').trim();
+                        const idx = dbRows.findIndex(r => r.reference_number === key);
+                        if (idx === -1) continue;
+                        const merged = mergeExistingForeignMatch(dbRows[idx], ex);
+                        if (merged !== dbRows[idx]) {
+                            dbRows[idx] = merged;
+                            keptMatches.set(key, merged);
+                        }
+                    }
+                }
+            }
+
             for (let i = 0; i < dbRows.length; i += chunkSize) {
                 const batch = dbRows.slice(i, i + chunkSize);
-                const { error } = await tableClient.upsert(batch, { onConflict: 'reference_number' });
+                const { error } = await supabase.from('foreign_transactions').upsert(batch, { onConflict: 'reference_number' });
                 if (error) {
                     if (!silent) Toast.show(`Supabase sync failed: ${error.message}`, 'error');
                     return { synced: 0, error };
                 }
+            }
+
+            // Keep this browser's copy in line with what was actually saved.
+            if (keptMatches.size > 0) {
+                (this.foreignTransactions || []).forEach(r => {
+                    const kept = r && keptMatches.get(String(r.reference_number || '').trim());
+                    if (!kept) return;
+                    for (const f of FOREIGN_STUDENT_MATCH_FIELDS) r[f] = kept[f];
+                });
             }
             // Saved: these rows are no longer "pending" in this browser's cache.
             const savedRefs = new Set(dbRows.map(r => r.reference_number));
@@ -656,27 +736,27 @@ class ForeignUiMixin {
     }
 
     async loadPdfJsLibrary() {
+        // pdf.js 4.x (3.11.174 had CVE-2024-4367, arbitrary JS via crafted font data). v4 ships
+        // ES modules only, so it is loaded with a dynamic import from the CDN.
         if (window.pdfjsLib) return window.pdfjsLib;
-        return new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-            script.onload = () => {
-                if (window.pdfjsLib) {
-                    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-                    resolve(window.pdfjsLib);
-                } else {
-                    reject(new Error('PDF.js failed to initialize'));
-                }
-            };
-            script.onerror = () => reject(new Error('Failed to load PDF reader library from CDN'));
-            document.head.appendChild(script);
-        });
+        const base = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38';
+        let lib;
+        try {
+            lib = await import(/* @vite-ignore */ `${base}/pdf.min.mjs`);
+        } catch {
+            throw new Error('Failed to load PDF reader library from CDN');
+        }
+        if (!lib?.getDocument) throw new Error('PDF.js failed to initialize');
+        lib.GlobalWorkerOptions.workerSrc = `${base}/pdf.worker.min.mjs`;
+        window.pdfjsLib = lib;
+        return lib;
     }
 
     async extractTextFromPdfFile(file) {
         const pdfjsLib = await this.loadPdfJsLibrary();
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        // isEvalSupported:false: never compile font/function code with eval/new Function.
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false }).promise;
         const pagesItems = [];
 
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -1433,7 +1513,10 @@ class ForeignUiMixin {
             const txRefGrouped = {};
             for (const tx of allData) {
                 if (!tx.transaction_ref) continue;
-                const txKey = `${tx.transaction_ref}|${Number(tx.amount || tx.item_price || 0).toFixed(2)}|${toDateOnly(tx.value_date || tx.payment_date)}`;
+                // The description is part of the key: this grouping crosses reference_numbers, so
+                // two different deposits sharing a transaction_ref / amount / date must not merge.
+                const txDesc = String(tx.description || tx.item_name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const txKey = `${tx.transaction_ref}|${Number(tx.amount || tx.item_price || 0).toFixed(2)}|${toDateOnly(tx.value_date || tx.payment_date)}|${txDesc}`;
                 if (!txRefGrouped[txKey]) txRefGrouped[txKey] = [];
                 txRefGrouped[txKey].push(tx);
             }
@@ -1441,17 +1524,19 @@ class ForeignUiMixin {
             const duplicates = [];
             const toDeleteUidsSet = new Set();
 
+            let protectedSkipped = 0;
             const processGroup = (txs) => {
                 if (txs.length <= 1) return;
-                // Prefer rows with Valid Student ID or manual fix
-                txs.sort((a, b) => {
-                    const aScore = (a.id_status === 'Valid' ? 100 : 0) + (a.match_source === 'manual' ? 50 : 0) + (a.external_ref ? 25 : 0);
-                    const bScore = (b.id_status === 'Valid' ? 100 : 0) + (b.match_source === 'manual' ? 50 : 0) + (b.external_ref ? 25 : 0);
-                    return bScore - aScore;
-                });
+                // Keep the ERP-posted copy first, then Valid Student ID, then manual match
+                txs.sort((a, b) => scoreForeignDuplicateKeepCopy(b) - scoreForeignDuplicateKeepCopy(a));
 
                 let addedAny = false;
                 for (let i = 1; i < txs.length; i++) {
+                    // Never delete a posted deposit or one in a closed accounting period.
+                    if (isProtectedForeignRow(txs[i], d => this.isDateInClosedPeriod?.(d))) {
+                        protectedSkipped++;
+                        continue;
+                    }
                     if (!toDeleteUidsSet.has(txs[i]._uid)) {
                         toDeleteUidsSet.add(txs[i]._uid);
                         addedAny = true;
@@ -1476,7 +1561,7 @@ class ForeignUiMixin {
 
             const summaryEl = document.getElementById('duplicates-summary');
             if (summaryEl) {
-                summaryEl.innerText = `Found ${duplicates.length} duplicated foreign transaction(s) (${toDeleteUidsSet.size} extra row(s) will be removed). Valid / manually matched copies are always kept.`;
+                summaryEl.innerText = `Found ${duplicates.length} duplicated foreign transaction(s) (${toDeleteUidsSet.size} extra row(s) will be removed). ERP-posted, Valid and manually matched copies are always kept.${protectedSkipped > 0 ? ` ${protectedSkipped} ERP-posted / closed-period copy(ies) are never deleted.` : ''}`;
             }
             const tbody = document.getElementById('duplicates-body');
             if (tbody) {
@@ -1526,8 +1611,10 @@ class ForeignUiMixin {
             const existingList = this.foreignTransactions || [];
             const removedRefs = new Set();
             const keptRows = [];
+            const isProtected = r => isProtectedForeignRow(r, d => this.isDateInClosedPeriod?.(d));
             existingList.forEach(r => {
-                if (uids.has(r._uid)) {
+                // Re-checked at delete time: the row may have been posted since detection.
+                if (uids.has(r._uid) && !isProtected(r)) {
                     if (r.reference_number) removedRefs.add(String(r.reference_number).trim());
                 } else {
                     keptRows.push(r);
@@ -1541,14 +1628,19 @@ class ForeignUiMixin {
             const deletedCount = beforeCount - this.foreignTransactions.length;
             this.persistForeignTransactionsLocal();
 
+            let dbDeleted = 0;
+            let dbError = null;
             if (orphanedRefs.length > 0 && this.hasRole('admin')) {
-                try {
-                    const fxClient = supabase.from('foreign_transactions');
-                    if (fxClient && typeof fxClient.delete === 'function') {
-                        await fxClient.delete().in('reference_number', orphanedRefs);
-                    }
-                } catch (_e) {
-                    // ignore if offline / table not migrated
+                // Server-side guard as well: never delete a row that is (now) ERP-posted. Closed
+                // periods are refused by the server / DB trigger, and that error is reported.
+                for (let i = 0; i < orphanedRefs.length && !dbError; i += 200) {
+                    const { data, error } = await supabase.from('foreign_transactions')
+                        .delete()
+                        .in('reference_number', orphanedRefs.slice(i, i + 200))
+                        .is('erp_batch_number', null)
+                        .select('reference_number');
+                    if (error) dbError = error;
+                    else dbDeleted += Array.isArray(data) ? data.length : 0;
                 }
             }
 
@@ -1556,7 +1648,15 @@ class ForeignUiMixin {
             window.duplicateForeignUidsToDelete = [];
             this.invalidateTabs('dashboard', 'erp-export');
             this.applyForeignFilters();
-            Toast.show(`Successfully deleted ${deletedCount} duplicate foreign transaction(s).`, 'success');
+            const skippedProtected = uids.size - deletedCount;
+            const protectedNote = skippedProtected > 0 ? ` ${skippedProtected} ERP-posted / closed-period row(s) were kept.` : '';
+            if (dbError) {
+                Toast.show(`Removed ${deletedCount} duplicate(s) from this browser, but the database delete FAILED (${dbError.message}); ${dbDeleted} of ${orphanedRefs.length} database row(s) were deleted. Reload BM Transactions before retrying.${protectedNote}`, 'error');
+            } else if (orphanedRefs.length > 0 && dbDeleted < orphanedRefs.length && this.hasRole('admin')) {
+                Toast.show(`Deleted ${deletedCount} duplicate foreign transaction(s); ${orphanedRefs.length - dbDeleted} database row(s) were left because they are ERP-posted or already gone.${protectedNote}`, 'warning');
+            } else {
+                Toast.show(`Successfully deleted ${deletedCount} duplicate foreign transaction(s).${protectedNote}`, 'success');
+            }
         } catch (err) {
             Toast.show('Error deleting duplicates: ' + err.message, 'error');
         } finally {

@@ -69,7 +69,34 @@ export function renderIcons(root = null) {
     }
 }
 
-export const SUPABASE_EXEMPT_OR_FILTER = 'id_status.eq.Exempt,mapping.ilike.Dip,mapping.ilike.Dip *,mapping.ilike.Diploma*,mapping.ilike.*Workshop*,second_mapping.ilike.Dip,second_mapping.ilike.Dip *,second_mapping.ilike.Diploma*,second_mapping.ilike.*Workshop*';
+/**
+ * Server-side (PostgREST-style .or()) twin of rules.js isIdValidationExempt():
+ * a mapping / second_mapping is exempt when it contains the WORD dip, diploma, workshop or
+ * workshops (rules.js uses /\b(dip|diploma|workshops?)\b/). The filter syntax has no word
+ * boundaries, so every "token delimited by a separator or the string edge" form is enumerated
+ * for the separators below. api/rpc.js EXEMPT_MAPPING_SQL implements the same rule in SQL; a test
+ * (tests/money-erp-dashboard.test.js) keeps the three definitions in agreement.
+ * ("PG Diploma" and "Dip-Workshop" are exempt; "Diplomacy" and "Workshop2026" are not.)
+ */
+export const EXEMPT_LABEL_TOKENS = Object.freeze(['dip', 'diploma', 'workshop', 'workshops']);
+export const EXEMPT_FILTER_SEPARATORS = Object.freeze([' ', '-', '/', '.', '&']);
+
+export function buildExemptOrFilter(columns = ['mapping', 'second_mapping']) {
+    const terms = ['id_status.eq.Exempt'];
+    for (const col of columns) {
+        for (const t of EXEMPT_LABEL_TOKENS) {
+            terms.push(`${col}.ilike.${t}`);
+            for (const s of EXEMPT_FILTER_SEPARATORS) terms.push(`${col}.ilike.${t}${s}*`);
+            for (const s of EXEMPT_FILTER_SEPARATORS) terms.push(`${col}.ilike.*${s}${t}`);
+            for (const a of EXEMPT_FILTER_SEPARATORS) {
+                for (const b of EXEMPT_FILTER_SEPARATORS) terms.push(`${col}.ilike.*${a}${t}${b}*`);
+            }
+        }
+    }
+    return terms.join(',');
+}
+
+export const SUPABASE_EXEMPT_OR_FILTER = buildExemptOrFilter();
 
 /**
  * Returns normalized display metadata for a transaction's Student ID status badge.
@@ -146,6 +173,22 @@ export function sanitizeForFilter(str) {
     return String(str).replace(/[,)(%\\"*]/g, '').trim();
 }
 
+/**
+ * Format a timestamp (ISO string, Date or epoch ms) as "YYYY-MM-DD HH:mm" in local time.
+ * Returns `fallback` for empty / unparseable input. Used for every user-facing timestamp so the
+ * app shows one consistent, locale-independent date format.
+ */
+export function formatDateTime(value, fallback = '-') {
+    if (value === null || value === undefined || value === '') return fallback;
+    const d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return fallback;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Error/warning toasts stay up long enough to read (and have a close button); success/info are brief. */
+export const TOAST_DURATIONS = { success: 3000, info: 3000, warning: 8000, error: 8000 };
+
 export class Toast {
     static show(msg, type = 'info') {
         const container = document.getElementById('toast-container');
@@ -153,6 +196,9 @@ export class Toast {
 
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
+        const isAlert = type === 'error' || type === 'warning';
+        toast.setAttribute('role', isAlert ? 'alert' : 'status');
+        toast.setAttribute('aria-live', isAlert ? 'assertive' : 'polite');
 
         let iconName = 'info';
         if (type === 'success') iconName = 'check-circle';
@@ -162,15 +208,22 @@ export class Toast {
         toast.innerHTML = `
             <i data-lucide="${iconName}" class="toast-icon"></i>
             <div class="toast-content">${escapeHTML(msg)}</div>
+            <button type="button" class="toast-close" aria-label="Dismiss notification">&times;</button>
         `;
+
+        let hideTimer = null;
+        const dismiss = () => {
+            if (toast.classList.contains('toast-hiding')) return;
+            clearTimeout(hideTimer);
+            toast.classList.add('toast-hiding');
+            setTimeout(() => toast.remove(), 300);
+        };
+        toast.querySelector('.toast-close')?.addEventListener('click', dismiss);
 
         container.appendChild(toast);
         if (window.lucide) lucide.createIcons({ root: toast });
 
-        setTimeout(() => {
-            toast.classList.add('toast-hiding');
-            setTimeout(() => toast.remove(), 300);
-        }, 3000);
+        hideTimer = setTimeout(dismiss, TOAST_DURATIONS[type] || TOAST_DURATIONS.info);
     }
 
     static showLoading(msg) {

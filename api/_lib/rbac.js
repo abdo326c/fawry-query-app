@@ -1,3 +1,5 @@
+import { signServerPayload } from './auth.js';
+
 const ROLE_LEVELS = {
   none: 0,
   deactivated: 0,
@@ -30,8 +32,9 @@ export const NOBODY = 'nobody';
  */
 export const TABLE_PERMISSIONS = {
   transactions:         { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
-  // Append-only: rows are moved in by the archive RPC; nobody edits or deletes them.
-  transactions_archive: { select: 'viewer', insert: 'admin',      update: NOBODY,       delete: NOBODY },
+  // Append-only: rows are moved in only by the archive RPC (server-side); nobody inserts, edits
+  // or deletes them through the API.
+  transactions_archive: { select: 'viewer', insert: NOBODY,       update: NOBODY,       delete: NOBODY },
   links:                { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   item_mappings:        { select: 'viewer', insert: 'accountant', update: 'accountant', delete: 'admin' },
   manual_fixes:         { select: 'viewer', insert: 'accountant', update: 'accountant', delete: 'admin' },
@@ -44,8 +47,11 @@ export const TABLE_PERMISSIONS = {
   foreign_transactions: { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   exchange_rates:       { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   settlement_batches:   { select: 'viewer', insert: 'operator',   update: 'accountant', delete: 'admin' },
-  closed_periods:       { select: 'viewer', insert: 'admin',      update: 'admin',      delete: 'admin' },
-  user_roles:           { select: 'self_or_viewer', insert: 'admin', update: 'admin',   delete: 'admin' }
+  // Only the set_accounting_period_lock RPC changes period locks (it requires a reason to unlock
+  // and writes the audit entry in the same transaction).
+  closed_periods:       { select: 'viewer', insert: NOBODY,       update: NOBODY,       delete: NOBODY },
+  // Any signed-in user may read their OWN row; the full staff list needs accountant (query.js).
+  user_roles:          { select: 'self_or_viewer', insert: 'admin', update: 'admin',   delete: 'admin' }
 };
 
 export const TABLE_BOOLEAN_COLS = {
@@ -230,15 +236,24 @@ export async function assertPeriodsUnlocked(db, dates) {
 }
 
 /**
- * Classifies a student program string as 'PG' or 'UG' (mirrors schema.sql).
+ * Classifies a student program string as 'PG' or 'UG', or null when the program text does not
+ * say (callers then fall back to the student-ID pattern: 9xxxxxx = PG, 9 digits = UG).
+ * Same keyword rule as rules.js classifyProgramLevelKeywords() -- keep the two in sync
+ * (tests/money-erp-dashboard.test.js checks they agree). An unknown program is NOT guessed:
+ * the old code silently called every unrecognised program UG while the UI called it PG.
  */
 export function classifyProgramStudentLevel(program) {
-  if (!program || !String(program).trim()) return null;
-  const p = String(program);
-  if (/(^|[^a-z])(pg|post\s*grad|graduate|master|msc|mba|phd|doctorate|diploma)([^a-z]|$)/i.test(p)) {
-    return 'PG';
-  }
-  return 'UG';
+  const prog = String(program ?? '').trim();
+  if (!prog) return null;
+  if (prog === 'UG' || prog === '(UG)' || /^\(UG\)(?![a-z0-9_])/i.test(prog)) return 'UG';
+  if (prog === 'PG' || prog === '(PG)' || /^\(PG\)(?![a-z0-9_])/i.test(prog)) return 'PG';
+  const cleanProg = prog.replace(/^\((?:UG|PG)\)\s*/i, '');
+  const primarySegment = cleanProg.split('/')[0].trim();
+  if (/^(graduate|postgraduate|post\s*grad|diploma|phd|doctorate|master|msc|mba|pg)\b/i.test(primarySegment)) return 'PG';
+  if (/^(undergraduate|undergrad|bachelor|ug)\b/i.test(primarySegment)) return 'UG';
+  if (/\b(undergraduate|undergrad|bachelor|ug)\b/i.test(cleanProg)) return 'UG';
+  if (/\b(postgraduate|post\s*grad|graduate|masters?|msc|mba|phd|doctorate|diploma|pg)\b/i.test(cleanProg)) return 'PG';
+  return null;
 }
 
 /**
@@ -287,19 +302,45 @@ export async function resolveStudentLevel(db, studentId) {
   return map.get(sid) ?? null;
 }
 
+/** Purpose label of the HMAC that marks a revert payload as accepted by the server. */
+export const AUDIT_REVERT_SIG_PURPOSE = 'audit-revert-data-v1';
+
+/** What the revert signature covers: the payload bound to its (immutable) author and action. */
+export function auditRevertSigInput(userEmail, action, revertData) {
+  return {
+    u: String(userEmail || '').trim().toLowerCase(),
+    a: action ?? null,
+    d: revertData
+  };
+}
+
+// Keys only the server may put in audit details: revert_snapshot is written only by the hygiene
+// RPC/script, drive_folder_url only by the backup scripts, revert_sig only by this function.
+const SERVER_ONLY_DETAIL_KEYS = ['revert_data', 'revert_snapshot', 'drive_folder_url', 'revert_sig'];
+
+// Actions only server-side RPCs write; a forged one (even by an admin) would look like a real
+// period lock / hygiene run in the audit trail.
+const SERVER_ONLY_ACTIONS = new Set([
+  'Database Hygiene Audit',
+  'Database Hygiene Rollback',
+  'Accounting Period Closed',
+  'Accounting Period Unlocked'
+]);
+
 /**
- * Sanitizes audit_logs insert payload just like trg_secure_audit_log_insert in schema.sql.
+ * Sanitizes an audit_logs insert coming through /api/query.
+ *
+ * Revert instructions (details.revert_data) are replayed by an admin's "Undo" with the admin's
+ * privileges, so they must never be planted. Every server-only key is stripped from every insert;
+ * then, only for accountant+ (the roles whose screens legitimately record undo data: mappings,
+ * fixes, ERP export), the client's revert_data is put back together with an HMAC (revert_sig)
+ * over {author, action, revert_data}. revert_audit_log_entry replays only payloads whose
+ * signature verifies, so nothing written any other way (string-encoded details, direct DB edits,
+ * payloads copied onto other entries, lower roles) can be replayed.
  */
 export function sanitizeAuditLogRow(user, row) {
-  const adminOnlyActions = new Set([
-    'Database Hygiene Audit',
-    'Database Hygiene Rollback',
-    'Accounting Period Closed',
-    'Accounting Period Unlocked'
-  ]);
-
-  if (adminOnlyActions.has(row.action) && user.role !== 'admin') {
-    const err = new Error(`Access denied: only admin can log ${row.action}`);
+  if (SERVER_ONLY_ACTIONS.has(row.action)) {
+    const err = new Error(`Access denied: "${row.action}" entries are written by the server only.`);
     err.status = 403;
     throw err;
   }
@@ -308,12 +349,29 @@ export function sanitizeAuditLogRow(user, row) {
   // The server assigns the id and timestamp: no overwriting existing entries, no backdating.
   delete out.id;
   delete out.created_at;
-  if (!hasMinRole(user.role, 'accountant') && out.details && typeof out.details === 'object') {
-    const cloned = { ...out.details };
-    delete cloned.revert_data;
-    delete cloned.revert_snapshot;
-    delete cloned.drive_folder_url;
-    out.details = cloned;
+
+  let details = out.details;
+  if (typeof details === 'string') {
+    try {
+      details = JSON.parse(details);
+    } catch {
+      return out; // free text: nothing a revert could ever read from it
+    }
   }
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return out;
+  }
+
+  const cloned = { ...details };
+  const revertData = cloned.revert_data;
+  for (const key of SERVER_ONLY_DETAIL_KEYS) delete cloned[key];
+  if (hasMinRole(user.role, 'accountant') && revertData && typeof revertData === 'object' && !Array.isArray(revertData)) {
+    cloned.revert_data = revertData;
+    cloned.revert_sig = signServerPayload(
+      AUDIT_REVERT_SIG_PURPOSE,
+      auditRevertSigInput(user.email, out.action, revertData)
+    );
+  }
+  out.details = cloned;
   return out;
 }

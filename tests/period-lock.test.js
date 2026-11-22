@@ -69,8 +69,8 @@ describe('Accounting Period Lock (Month-End Close) Rules & Schema', () => {
   });
 
   test('migration 2.11.4 and schema.sql define closed_periods, RPCs, triggers, and compatibility guards', () => {
-    const migSql = fs.readFileSync(path.join(rootDir, 'migrations/2.11.4_accounting_period_lock.sql'), 'utf8');
-    const schemaSql = fs.readFileSync(path.join(rootDir, 'schema.sql'), 'utf8');
+    const migSql = fs.readFileSync(path.join(rootDir, 'legacy/supabase/migrations/2.11.4_accounting_period_lock.sql'), 'utf8');
+    const schemaSql = fs.readFileSync(path.join(rootDir, 'legacy/supabase/schema.sql'), 'utf8');
 
     const requiredTokens = [
       'CREATE TABLE IF NOT EXISTS public.closed_periods',

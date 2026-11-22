@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb, readJsonBody, sendJson, withDbRetry, withDbWriteRetry } from './_lib/db.js';
+import { getDb, readJsonBody, sendJson, sendServerError, withDbRetry, withDbWriteRetry } from './_lib/db.js';
 import { clearRoleCache, getAuthUser } from './_lib/auth.js';
 import {
   assertPeriodsUnlocked,
@@ -15,6 +15,13 @@ import {
   TABLE_DEFAULT_CONFLICT,
   TABLE_JSON_COLS
 } from './_lib/rbac.js';
+
+/** Most rows one select returns (also clamps limit/range). Clients page with fetchAll (≤ 4000). */
+export const MAX_SELECT_ROWS = 5000;
+/** Most rows one insert/upsert request may carry (413 above). */
+export const MAX_WRITE_ROWS = 5000;
+/** Most values in one "in" filter. */
+export const MAX_FILTER_LIST = 5000;
 
 function quoteIdent(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
@@ -94,28 +101,85 @@ function splitTopLevelCommas(expr) {
   return parts;
 }
 
+function badRequest(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
+
+/** Filter values are bound as SQL parameters: only scalars are meaningful. */
+function filterArg(table, col, val) {
+  const v = serializeValue(table, col, val);
+  if (v !== null && typeof v === 'object') {
+    throw badRequest(`Invalid filter value for column "${col}".`);
+  }
+  return v;
+}
+
+/**
+ * Accepts an array, or the PostgREST string form "(a,b,"c,d")" that supabase-js sends for
+ * .not(col, 'in', '(a,b)'). Anything else is a client error (it used to become an empty list,
+ * so NOT IN silently matched every row).
+ */
+export function parseInList(val) {
+  if (Array.isArray(val)) return val;
+  const str = typeof val === 'string' ? val.trim() : null;
+  if (str === null || !str.startsWith('(') || !str.endsWith(')')) {
+    throw badRequest('The "in" filter needs a list of values.');
+  }
+  const inner = str.slice(1, -1);
+  const items = [];
+  let current = '';
+  let quoted = false;
+  let sawQuote = false;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '"') {
+      if (!quoted && !sawQuote) current = current.trim(); // drop spaces before the opening quote
+      quoted = !quoted;
+      sawQuote = true;
+    } else if (!quoted && sawQuote && /\s/.test(ch)) {
+      // spaces after the closing quote are not part of the value
+    } else if (ch === '\\' && quoted && i + 1 < inner.length) {
+      current += inner[++i];
+    } else if (ch === ',' && !quoted) {
+      const item = sawQuote ? current : current.trim();
+      if (item !== '' || sawQuote) items.push(item);
+      current = '';
+      sawQuote = false;
+    } else {
+      current += ch;
+    }
+  }
+  const last = sawQuote ? current : current.trim();
+  if (last !== '' || sawQuote) items.push(last);
+  return items;
+}
+
 function buildSingleFilter(table, col, op, val, args) {
   assertValidColumn(table, col);
   const qCol = quoteIdent(col);
 
   switch (op) {
     case 'eq':
-      args.push(serializeValue(table, col, val));
+      args.push(filterArg(table, col, val));
       return `${qCol} = ?`;
     case 'neq':
-      args.push(serializeValue(table, col, val));
-      return `(${qCol} IS NULL OR ${qCol} != ?)`;
+      // Postgres semantics: NULL is neither equal nor unequal, so NULL rows do not match (and an
+      // update/delete .neq() filter never sweeps up NULL rows by accident).
+      args.push(filterArg(table, col, val));
+      return `${qCol} != ?`;
     case 'gt':
-      args.push(val);
+      args.push(filterArg(table, col, val));
       return `${qCol} > ?`;
     case 'gte':
-      args.push(val);
+      args.push(filterArg(table, col, val));
       return `${qCol} >= ?`;
     case 'lt':
-      args.push(val);
+      args.push(filterArg(table, col, val));
       return `${qCol} < ?`;
     case 'lte':
-      args.push(val);
+      args.push(filterArg(table, col, val));
       return `${qCol} <= ?`;
     case 'like':
       args.push(String(val));
@@ -127,14 +191,17 @@ function buildSingleFilter(table, col, op, val, args) {
       if (val === null || val === 'null') return `${qCol} IS NULL`;
       if (val === true || val === 'true') return `${qCol} = 1`;
       if (val === false || val === 'false') return `${qCol} = 0`;
-      args.push(val);
+      args.push(filterArg(table, col, val));
       return `${qCol} IS ?`;
     case 'in': {
-      const list = Array.isArray(val) ? val : [];
+      const list = parseInList(val);
       if (list.length === 0) return '1 = 0';
+      if (list.length > MAX_FILTER_LIST) {
+        throw badRequest(`The "in" filter accepts at most ${MAX_FILTER_LIST} values.`);
+      }
       const placeholders = list.map(() => '?').join(', ');
       for (const item of list) {
-        args.push(serializeValue(table, col, item));
+        args.push(filterArg(table, col, item));
       }
       return `${qCol} IN (${placeholders})`;
     }
@@ -195,12 +262,8 @@ function parseOrTerm(table, term, args) {
   const op = rest.slice(0, secondDot).trim().toLowerCase();
   let val = rest.slice(secondDot + 1);
 
-  if (op === 'in' && val.startsWith('(') && val.endsWith(')')) {
-    const items = val
-      .slice(1, -1)
-      .split(',')
-      .map(s => s.trim().replace(/^"|"$/g, ''))
-      .filter(Boolean);
+  if (op === 'in') {
+    const items = parseInList(val);
     return negate
       ? buildSingleFilter(table, col, 'not', { op: 'in', value: items }, args)
       : buildSingleFilter(table, col, 'in', items, args);
@@ -359,7 +422,9 @@ export default async function handler(req, res) {
     if (operation === 'select') {
       const extraClauses = [];
       const extraArgs = [];
-      if (table === 'user_roles' && !hasMinRole(user.role, 'viewer')) {
+      // Viewers/operators (and deactivated users) only see their own role row; the staff list
+      // (emails + roles) is for accountant+ (the Users & Roles screen is admin-only anyway).
+      if (table === 'user_roles' && !hasMinRole(user.role, 'accountant')) {
         extraClauses.push('LOWER(TRIM("email")) = ?');
         extraArgs.push(user.email);
       }
@@ -379,13 +444,15 @@ export default async function handler(req, res) {
       }
 
       const selectCols = parseColumns(table, body.columns);
-      let limitSql = '';
+      // Every select is bounded: no limit/range means MAX_SELECT_ROWS, and larger ones are clamped
+      // (an unbounded "select *" of transactions could exhaust the function's memory).
+      let limitSql = `LIMIT ${MAX_SELECT_ROWS}`;
       if (body.range && Number.isInteger(body.range.from) && Number.isInteger(body.range.to)) {
         const offset = Math.max(0, body.range.from);
-        const limit = Math.max(0, body.range.to - offset + 1);
+        const limit = Math.min(MAX_SELECT_ROWS, Math.max(0, body.range.to - offset + 1));
         limitSql = `LIMIT ${limit} OFFSET ${offset}`;
       } else if (Number.isInteger(body.limit) && body.limit >= 0) {
-        limitSql = `LIMIT ${body.limit}`;
+        limitSql = `LIMIT ${Math.min(MAX_SELECT_ROWS, body.limit)}`;
       }
 
       const selectSql = `SELECT ${selectCols} FROM ${quoteIdent(table)} ${whereSql} ${orderSql} ${limitSql}`;
@@ -424,6 +491,9 @@ export default async function handler(req, res) {
 
     if (operation === 'insert' || operation === 'upsert') {
       const rawRows = Array.isArray(body.values) ? body.values : [body.values];
+      if (rawRows.length > MAX_WRITE_ROWS) {
+        return sendJson(res, 413, { error: `Too many rows in one request (max ${MAX_WRITE_ROWS}). Send them in smaller chunks.` });
+      }
       const rows = rawRows.filter(Boolean);
       if (rows.length === 0) {
         return sendJson(res, 200, { data: [] });
@@ -631,6 +701,11 @@ export default async function handler(req, res) {
 
     return sendJson(res, 400, { error: `Unsupported operation: ${operation}` });
   } catch (err) {
-    return sendJson(res, statusForDbError(err), { error: err.message || 'Database query error' });
+    const status = statusForDbError(err);
+    if (status >= 500) {
+      // Raw driver/SQL errors can reveal schema and query text: log them, return a generic message.
+      return sendServerError(res, err, 'api/query');
+    }
+    return sendJson(res, status, { error: err.message || 'Database query error' });
   }
 }

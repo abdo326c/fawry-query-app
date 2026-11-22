@@ -1348,9 +1348,37 @@ export function normalizeStudentIdValue(val) {
  * Rule: All Undergraduate programs are labeled 'UG'; otherwise 'PG'.
  * Returns '' when no student or program is provided.
  */
+/**
+ * Keyword rule for a program string: 'PG', 'UG', or '' when the text does not say.
+ * api/_lib/rbac.js classifyProgramStudentLevel() implements the SAME rule server-side
+ * (tests/money-erp-dashboard.test.js keeps them in agreement).
+ */
+export function classifyProgramLevelKeywords(program) {
+    const prog = String(program ?? '').trim();
+    if (!prog) return '';
+    if (prog === 'UG' || prog === '(UG)' || /^\(UG\)(?![a-z0-9_])/i.test(prog)) return 'UG';
+    if (prog === 'PG' || prog === '(PG)' || /^\(PG\)(?![a-z0-9_])/i.test(prog)) return 'PG';
+    const cleanProg = prog.replace(/^\((?:UG|PG)\)\s*/i, '');
+    const primarySegment = cleanProg.split('/')[0].trim();
+    if (/^(graduate|postgraduate|post\s*grad|diploma|phd|doctorate|master|msc|mba|pg)\b/i.test(primarySegment)) return 'PG';
+    if (/^(undergraduate|undergrad|bachelor|ug)\b/i.test(primarySegment)) return 'UG';
+    if (/\b(undergraduate|undergrad|bachelor|ug)\b/i.test(cleanProg)) return 'UG';
+    if (/\b(postgraduate|post\s*grad|graduate|masters?|msc|mba|phd|doctorate|diploma|pg)\b/i.test(cleanProg)) return 'PG';
+    return '';
+}
+
+/** Student-ID pattern fallback shared with the server: 9xxxxxx = PG, 9 digits = UG. */
+export function studentLevelFromIdPattern(studentId) {
+    const sid = String(studentId ?? '').trim();
+    if (/^9\d{6}$/.test(sid)) return 'PG';
+    if (/^\d{9}$/.test(sid)) return 'UG';
+    return '';
+}
+
 export function getStudentProgramLevel(studentOrProgram) {
     if (studentOrProgram === null || studentOrProgram === undefined) return '';
     let prog = '';
+    let sid = '';
     if (typeof studentOrProgram === 'object') {
         const hasIdentity = Boolean(
             studentOrProgram.student_id ||
@@ -1362,23 +1390,14 @@ export function getStudentProgramLevel(studentOrProgram) {
         if (studentOrProgram.level === 'UG' || studentOrProgram.level === '(UG)') return 'UG';
         if (studentOrProgram.level === 'PG' || studentOrProgram.level === '(PG)') return 'PG';
         prog = String(studentOrProgram.program || '').trim();
+        sid = studentOrProgram.student_id;
     } else {
         prog = String(studentOrProgram).trim();
         if (!prog) return '';
-        if (prog === 'UG' || prog === '(UG)') return 'UG';
-        if (prog === 'PG' || prog === '(PG)') return 'PG';
     }
-    if (/^\(UG\)\b/i.test(prog)) return 'UG';
-    if (/^\(PG\)\b/i.test(prog)) return 'PG';
-    const cleanProg = prog.replace(/^\((?:UG|PG)\)\s*/i, '');
-    const primarySegment = cleanProg.split('/')[0].trim();
-    if (/^(graduate|postgraduate|diploma|phd|master|msc|mba|pg)\b/i.test(primarySegment)) {
-        return 'PG';
-    }
-    if (/^(undergraduate|undergrad|bachelor|ug)\b/i.test(primarySegment)) {
-        return 'UG';
-    }
-    return /\b(undergraduate|undergrad|bachelor|ug)\b/i.test(cleanProg) ? 'UG' : 'PG';
+    // Same order as the server (rbac.js): program keywords, then the student-ID pattern.
+    // Only when neither says does the UI keep its historical display default of PG.
+    return classifyProgramLevelKeywords(prog) || studentLevelFromIdPattern(sid) || 'PG';
 }
 
 /**

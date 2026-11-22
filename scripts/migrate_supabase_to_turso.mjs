@@ -111,7 +111,20 @@ function serializeCell(col, val) {
   return val;
 }
 
-await turso.execute('PRAGMA foreign_keys = OFF');
+// turso/schema.sql has exactly one foreign key: transactions.batch_id -> import_batches(id)
+// (ON DELETE SET NULL). A separate "PRAGMA foreign_keys = OFF" request is not reliable on Turso
+// (each request may run on a different connection, and the pragma is a no-op inside the batch
+// transaction), so it is not used. Instead import_batches is copied before transactions
+// (TABLE_ORDERS), and a transaction pointing at a batch that no longer exists gets
+// batch_id = NULL, which is what ON DELETE SET NULL did when that batch was deleted.
+let knownBatchIds = null;
+let orphanBatchRefs = 0;
+async function loadKnownBatchIds() {
+  const ids = new Set();
+  const res = await withRetry(() => turso.execute('SELECT id FROM import_batches'));
+  for (const r of res.rows) ids.add(String(r.id));
+  return ids;
+}
 
 const migratedCounts = {};
 
@@ -133,6 +146,16 @@ for (const table of SELECTED_TABLES) {
     if (expected === null && page.totalInSource !== null) expected = page.totalInSource;
     const rows = page.rows;
     if (!Array.isArray(rows) || rows.length === 0) break;
+
+    if (table === 'transactions') {
+      if (!knownBatchIds) knownBatchIds = await loadKnownBatchIds();
+      for (const row of rows) {
+        if (row.batch_id != null && !knownBatchIds.has(String(row.batch_id))) {
+          row.batch_id = null;
+          orphanBatchRefs++;
+        }
+      }
+    }
 
     const cols = Object.keys(rows[0]).filter(c => !allowedCols || allowedCols.has(c));
     const colList = cols.map(c => `"${c}"`).join(', ');
@@ -172,6 +195,10 @@ for (const table of SELECTED_TABLES) {
     migratedCounts[table] = total;
     console.log(`Migrated ${table}: ${total} rows${expected !== null ? ` (Supabase: ${expected})` : ''}`);
   }
+}
+
+if (orphanBatchRefs > 0) {
+  console.warn(`Warning: ${orphanBatchRefs} transaction(s) referenced an import batch that does not exist; their batch_id was set to NULL.`);
 }
 
 console.log('\n--- Turso Verification Row Counts ---');

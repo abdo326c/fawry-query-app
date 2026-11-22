@@ -24,6 +24,51 @@ import {
     Toast
 } from './app-utils.js';
 
+/**
+ * One predicate for "this line may be exported / recorded to the ERP": rows without an
+ * id_status (e.g. not yet classified) or whose effective status is Valid or Exempt.
+ * Used by the status filter, the summary counts, Record and Export so they always agree.
+ */
+export function isErpExportable(row) {
+    return !row?.id_status || isNonInvalidTransaction(row);
+}
+
+/**
+ * Stamps ERP batch/voucher on the given keys, but ONLY on rows that are still unposted
+ * (erp_batch_number IS NULL), so a concurrent recording by another user is never overwritten.
+ * The keys actually stamped come back via RETURNING, so the caller can audit exactly those
+ * (making a partial stamp revertable) and tell the user which rows were already posted.
+ * Stops at the first failing chunk. Returns { stampedKeys, alreadyPostedKeys, notAttemptedKeys, error }.
+ */
+export async function stampErpBatchSafely(client, table, keys, values, { keyColumn = 'id', chunkSize = 500 } = {}) {
+    const requested = [...new Set((keys || []).filter(v => v !== null && v !== undefined && v !== ''))];
+    const stampedKeys = [];
+    const alreadyPostedKeys = [];
+    for (let i = 0; i < requested.length; i += chunkSize) {
+        const chunk = requested.slice(i, i + chunkSize);
+        const { data, error } = await client
+            .from(table)
+            .update(values)
+            .in(keyColumn, chunk)
+            .is('erp_batch_number', null)
+            .select(keyColumn);
+        if (error) {
+            return {
+                stampedKeys,
+                alreadyPostedKeys,
+                notAttemptedKeys: requested.slice(i),
+                error
+            };
+        }
+        const got = new Set((data || []).map(r => String(r[keyColumn])));
+        for (const k of chunk) {
+            if (got.has(String(k))) stampedKeys.push(k);
+            else alreadyPostedKeys.push(k);
+        }
+    }
+    return { stampedKeys, alreadyPostedKeys, notAttemptedKeys: [], error: null };
+}
+
 class ErpExportMixin {
     initErpExport() {
         this.erpStatusFilter = 'all';
@@ -524,7 +569,9 @@ class ErpExportMixin {
             if (mappingSet.size > 0 && !mappingSet.has(t.mapping)) return false;
             if (batchFilter && (t.erp_batch_number || '') !== batchFilter) return false;
 
-            const isValid = !t.id_status || t.id_status === 'Valid';
+            // Same predicate as Record / Export / the summary counts: Valid OR Exempt (Diploma,
+            // Workshop) is exportable. Using 'Valid' only hid Exempt rows from "Ready".
+            const isValid = isErpExportable(t);
             const isRecorded = Boolean(t.erp_batch_number);
 
             if (statusFilter === 'ready' && (!isValid || isRecorded)) return false;
@@ -558,7 +605,7 @@ class ErpExportMixin {
         if (!labelEl) return;
         const rows = this.erpData || [];
         const validOnly = document.getElementById('erp-record-valid-only')?.checked ?? true;
-        const eligible = rows.filter(r => !r.erp_batch_number && (!validOnly || !r.id_status || isNonInvalidTransaction(r)));
+        const eligible = rows.filter(r => !r.erp_batch_number && (!validOnly || isErpExportable(r)));
         labelEl.textContent = eligible.length > 0 ? `Save References (${eligible.length.toLocaleString()} lines)` : 'Save References';
     }
 
@@ -597,10 +644,10 @@ class ErpExportMixin {
         const summaryCard = document.getElementById('erp-summary-card');
         if (summaryCard) {
             summaryCard.style.display = '';
-            const validCnt = rows.filter(r => !r.id_status || isNonInvalidTransaction(r)).length;
+            const validCnt = rows.filter(r => isErpExportable(r)).length;
             const invalidCnt = rows.length - validCnt;
             const recordedCnt = rows.filter(r => r.erp_batch_number).length;
-            const readyCnt = rows.filter(r => (!r.id_status || isNonInvalidTransaction(r)) && !r.erp_batch_number).length;
+            const readyCnt = rows.filter(r => isErpExportable(r) && !r.erp_batch_number).length;
 
             const elTotal = document.getElementById('erp-stat-total');
             const elAmount = document.getElementById('erp-stat-amount');
@@ -880,7 +927,7 @@ class ErpExportMixin {
         }
 
         const invalidTransactions = rows.filter(row => row.id_status && !isNonInvalidTransaction(row));
-        const validTransactions = rows.filter(row => !row.id_status || isNonInvalidTransaction(row));
+        const validTransactions = rows.filter(row => isErpExportable(row));
 
         if (invalidTransactions.length > 0) {
             const canFixErp = this.hasRole('accountant');
@@ -1146,7 +1193,7 @@ class ErpExportMixin {
             const alreadyExported = this.erpData.length - unexportedRows.length;
             const skippedInvalid = validOnly ? unexportedRows.filter(r => r.id_status && !isNonInvalidTransaction(r)).length : 0;
             if (validOnly) {
-                unexportedRows = unexportedRows.filter(r => !r.id_status || isNonInvalidTransaction(r));
+                unexportedRows = unexportedRows.filter(r => isErpExportable(r));
             }
             
             if (unexportedRows.length === 0) {
@@ -1163,41 +1210,25 @@ class ErpExportMixin {
 
             const fawryRows = unexportedRows.filter(r => !isSameDaySettlementBank(r) && r.id !== undefined && r.id !== null);
             const foreignRows = unexportedRows.filter(r => isSameDaySettlementBank(r));
-            const transactionIds = fawryRows.map(r => r.id);
-            const batchSize = 500;
-            const concurrency = 4;
-            const chunks = [];
-            for (let i = 0; i < transactionIds.length; i += batchSize) {
-                chunks.push(transactionIds.slice(i, i + batchSize));
-            }
+            const stampValues = { erp_batch_number: batchNum, erp_voucher: startVoucher };
 
-            for (let i = 0; i < chunks.length; i += concurrency) {
-                const batch = chunks.slice(i, i + concurrency);
-                const results = await Promise.all(batch.map(chunk =>
-                    supabase.from('transactions')
-                        .update({
-                            erp_batch_number: batchNum,
-                            erp_voucher: startVoucher
-                        })
-                        .in('id', chunk)
-                ));
-                const failed = results.find(r => r.error);
-                if (failed) throw failed.error;
-            }
+            // Only rows that are STILL unposted get stamped (another user may have recorded them
+            // since this screen was loaded); the ids actually stamped come back from the server.
+            const fawryResult = fawryRows.length > 0
+                ? await stampErpBatchSafely(supabase, 'transactions', fawryRows.map(r => r.id), stampValues, { keyColumn: 'id' })
+                : { stampedKeys: [], alreadyPostedKeys: [], notAttemptedKeys: [], error: null };
 
-            if (foreignRows.length > 0) {
-                const foreignRefSet = new Set(foreignRows.map(r => String(r.reference_number || '').trim()).filter(Boolean));
-                // Write to the database FIRST and fail loudly: a stamp that only lives in this
-                // browser lets other users export (and post) the same deposits again.
-                const foreignRefs = [...foreignRefSet];
-                for (let i = 0; i < foreignRefs.length; i += batchSize) {
-                    const { error: fErr } = await supabase.from('foreign_transactions')
-                        .update({ erp_batch_number: batchNum, erp_voucher: startVoucher })
-                        .in('reference_number', foreignRefs.slice(i, i + batchSize));
-                    if (fErr) throw new Error(`Saving ERP batch on BM (USD) deposits failed: ${fErr.message}`);
-                }
+            // Write to the database FIRST and fail loudly: a stamp that only lives in this
+            // browser lets other users export (and post) the same deposits again.
+            const foreignRefs = [...new Set(foreignRows.map(r => String(r.reference_number || '').trim()).filter(Boolean))];
+            const foreignResult = (!fawryResult.error && foreignRefs.length > 0)
+                ? await stampErpBatchSafely(supabase, 'foreign_transactions', foreignRefs, stampValues, { keyColumn: 'reference_number' })
+                : { stampedKeys: [], alreadyPostedKeys: [], notAttemptedKeys: fawryResult.error ? foreignRefs : [], error: null };
+
+            if (foreignResult.stampedKeys.length > 0) {
+                const stampedRefSet = new Set(foreignResult.stampedKeys.map(String));
                 (this.foreignTransactions || []).forEach(r => {
-                    if (foreignRefSet.has(String(r.reference_number || '').trim())) {
+                    if (stampedRefSet.has(String(r.reference_number || '').trim())) {
                         r.erp_batch_number = batchNum;
                         r.erp_voucher = startVoucher;
                     }
@@ -1205,44 +1236,58 @@ class ErpExportMixin {
                 this.persistForeignTransactionsLocal();
             }
 
-            const totalStamped = unexportedRows.length;
-            if (fawryRows.length > 0) {
+            // Audit exactly what was stamped -- also after a partial failure -- so "Revert" in the
+            // audit log can undo it (the revert clears only these ids / references).
+            const stampError = fawryResult.error || foreignResult.error;
+            const alreadyPosted = fawryResult.alreadyPostedKeys.length + foreignResult.alreadyPostedKeys.length;
+            if (fawryResult.stampedKeys.length > 0) {
                 await this.logAudit('ERP References Recorded', batchNum, {
                     batch_number: batchNum,
                     voucher: startVoucher,
-                    count: totalStamped,
+                    count: fawryResult.stampedKeys.length,
                     skipped_invalid: skippedInvalid,
+                    skipped_already_posted: fawryResult.alreadyPostedKeys.length,
+                    partial: Boolean(stampError),
                     revert_data: {
                         table_name: 'transactions_erp',
                         operation: 'update',
                         batch_number: batchNum,
-                        previous_rows: fawryRows.slice(0, 500).map(r => ({
-                            id: r.id,
-                            erp_batch_number: r.erp_batch_number || null,
-                            erp_voucher: r.erp_voucher || null
-                        }))
+                        voucher: startVoucher,
+                        stamped_ids: fawryResult.stampedKeys
                     }
                 });
-            } else {
+            }
+            if (foreignResult.stampedKeys.length > 0) {
                 await this.logAudit('ERP References Recorded (Foreign)', batchNum, {
                     batch_number: batchNum,
                     voucher: startVoucher,
-                    count: foreignRows.length,
+                    count: foreignResult.stampedKeys.length,
                     skipped_invalid: skippedInvalid,
+                    skipped_already_posted: foreignResult.alreadyPostedKeys.length,
+                    partial: Boolean(stampError),
                     revert_data: {
                         table_name: 'foreign_transactions_erp',
                         operation: 'update',
                         batch_number: batchNum,
-                        previous_rows: foreignRows.slice(0, 500).map(r => ({
-                            reference_number: r.reference_number,
-                            erp_batch_number: r.erp_batch_number || null,
-                            erp_voucher: r.erp_voucher || null
-                        }))
+                        voucher: startVoucher,
+                        stamped_refs: foreignResult.stampedKeys
                     }
                 });
             }
 
-            Toast.show(`Saved ERP batch "${batchNum}" on ${totalStamped.toLocaleString()} row(s)${skippedInvalid > 0 ? ` (${skippedInvalid} invalid skipped)` : ''}`, 'success');
+            const totalStamped = fawryResult.stampedKeys.length + foreignResult.stampedKeys.length;
+            if (stampError) {
+                this.invalidateTabs('dashboard', 'transactions', 'foreign-transactions', 'users');
+                await this.loadErpExport({ refresh: true });
+                const notDone = fawryResult.notAttemptedKeys.length + foreignResult.notAttemptedKeys.length;
+                throw new Error(`${stampError.message}. ${totalStamped.toLocaleString()} row(s) were stamped and logged in the audit log (revertable); ${notDone.toLocaleString()} row(s) were NOT stamped.`);
+            }
+
+            const skippedNote = [
+                skippedInvalid > 0 ? `${skippedInvalid} invalid skipped` : '',
+                alreadyPosted > 0 ? `${alreadyPosted} already posted by someone else, left unchanged` : ''
+            ].filter(Boolean).join('; ');
+            Toast.show(`Saved ERP batch "${batchNum}" on ${totalStamped.toLocaleString()} row(s)${skippedNote ? ` (${skippedNote})` : ''}`, alreadyPosted > 0 ? 'warning' : 'success');
             document.getElementById('erp-batch-number').value = '';
             document.getElementById('erp-voucher').value = '';
             this.invalidateTabs('dashboard', 'transactions', 'foreign-transactions', 'users');

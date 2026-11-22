@@ -9,7 +9,7 @@ import {
     formatPeriodMonthLabel,
     writeCompressedExcel
 } from './rules.js';
-import { renderIcons, formatMoney, Toast } from './app-utils.js';
+import { renderIcons, formatMoney, formatDateTime, Toast } from './app-utils.js';
 
 class AdminAuditMixin {
     initUsersAndRoles() {
@@ -116,7 +116,11 @@ class AdminAuditMixin {
 
         const searchAudit = document.getElementById('audit-log-search');
         if (searchAudit) {
-            searchAudit.addEventListener('input', () => this.renderAuditLogsTable());
+            let auditSearchTimer;
+            searchAudit.addEventListener('input', () => {
+                clearTimeout(auditSearchTimer);
+                auditSearchTimer = setTimeout(() => this.renderAuditLogsTable(), 200);
+            });
         }
 
         this.initAccountingPeriodLock();
@@ -505,7 +509,7 @@ class AdminAuditMixin {
                 : '<span class="badge" style="background: rgba(245, 158, 11, 0.14); color: var(--warning, #f59e0b); border: 1px solid rgba(245, 158, 11, 0.3);">Reopened</span>';
             const actor = closed ? (r.closed_by || 'Admin') : (r.reopened_by || r.closed_by || 'Admin');
             const ts = closed ? r.closed_at : (r.reopened_at || r.updated_at || r.closed_at);
-            const tsStr = ts ? new Date(ts).toLocaleString() : '—';
+            const tsStr = formatDateTime(ts, '—');
             const btnHtml = closed
                 ? `<button type="button" class="btn btn-outline btn-sm btn-toggle-period-lock" data-action="unlock" data-month="${escapeHTML(month)}" style="padding: 0.25rem 0.6rem; font-size: 0.76rem; color: var(--warning, #f59e0b); border-color: rgba(245, 158, 11, 0.4);">Audited Unlock</button>`
                 : `<button type="button" class="btn btn-outline btn-sm btn-toggle-period-lock" data-action="lock" data-month="${escapeHTML(month)}" style="padding: 0.25rem 0.6rem; font-size: 0.76rem;">Re-Lock</button>`;
@@ -731,7 +735,7 @@ class AdminAuditMixin {
             const isPrimaryAdmin = email === 'ammahmoud@nu.edu.eg';
             const isSelf = currentAdminEmail && email === currentAdminEmail;
             const isActive = isPrimaryAdmin || r.is_active !== false;
-            const updatedStr = r.updated_at ? new Date(r.updated_at).toLocaleString() : '-';
+            const updatedStr = formatDateTime(r.updated_at);
             const statusBadge = isActive
                 ? '<span class="badge badge-valid">Active</span>'
                 : '<span class="badge badge-error">Deactivated</span>';
@@ -916,7 +920,7 @@ class AdminAuditMixin {
 
         const isAdmin = this.hasRole('admin');
         tbody.innerHTML = logs.map(log => {
-            const ts = log.created_at ? new Date(log.created_at).toLocaleString() : '-';
+            const ts = formatDateTime(log.created_at);
             const detailsObj = log.details || {};
             const detailsStr = log.details ? JSON.stringify(log.details) : '-';
             const isReverted = detailsObj.is_reverted === true;
@@ -1057,7 +1061,11 @@ class AdminAuditMixin {
         }
 
         if (inpSearch) {
-            inpSearch.addEventListener('input', () => this.renderDoublePaymentsTable());
+            let dpSearchTimer;
+            inpSearch.addEventListener('input', () => {
+                clearTimeout(dpSearchTimer);
+                dpSearchTimer = setTimeout(() => this.renderDoublePaymentsTable(), 200);
+            });
         }
 
         if (btnExport) {
@@ -1543,7 +1551,7 @@ class AdminAuditMixin {
         // Subtitle & Timestamp
         const subEl = document.getElementById('hygiene-modal-subtitle');
         const runDate = new Date(data.created_at);
-        const timeStr = !isNaN(runDate) ? runDate.toLocaleString() : 'Just now';
+        const timeStr = formatDateTime(runDate, 'Just now');
         if (subEl) {
             subEl.textContent = `Audit #${auditId} • ${timeStr} • ${autoCleaned ? 'Auto-Clean Run' : 'Live Inspection Scan'}`;
         }

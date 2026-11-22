@@ -293,11 +293,11 @@ class MappingsFixesUiMixin {
                 dlItems.innerHTML = itemNames.map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
             }
             const dl1 = document.getElementById('datalist-mapping-categories');
-            if (dl1 && !dl1.innerHTML) {
+            if (dl1) { // refresh on every open so newly added categories show up
                 dl1.innerHTML = categories.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
             }
             const dl2 = document.getElementById('datalist-second-mapping-categories');
-            if (dl2 && !dl2.innerHTML) {
+            if (dl2) {
                 dl2.innerHTML = secondCategories.map(c => `<option value="${escapeHTML(c)}"></option>`).join('');
             }
         } catch (_err) {
@@ -563,34 +563,8 @@ class MappingsFixesUiMixin {
     }
 
     initModals() {
-        // Close modals on backdrop click or Escape key
-        document.querySelectorAll('.modal').forEach(modal => {
-            modal.addEventListener('click', (e) => {
-                if (e.target !== modal) return;
-                if (modal.id === 'modal-custom-confirm') {
-                    document.getElementById('btn-custom-confirm-cancel')?.click();
-                } else if (modal.id !== 'modal-import' || !this.isImporting) {
-                    modal.classList.add('hidden');
-                }
-            });
-        });
-
-        window.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape') return;
-            const confirmModal = document.getElementById('modal-custom-confirm');
-            if (confirmModal && !confirmModal.classList.contains('hidden')) return; // handled by customConfirm
-            const openModals = Array.from(document.querySelectorAll('.modal:not(.hidden)'));
-            if (openModals.length === 0) return;
-            // Close only the topmost open modal (highest z-index, or last in DOM on tie)
-            openModals.sort((a, b) => {
-                const zA = parseInt(window.getComputedStyle(a).zIndex, 10) || 0;
-                const zB = parseInt(window.getComputedStyle(b).zIndex, 10) || 0;
-                return zA - zB;
-            });
-            const topModal = openModals[openModals.length - 1];
-            if (topModal.id === 'modal-import' && this.isImporting) return;
-            topModal.classList.add('hidden');
-        });
+        // Backdrop click, Escape, × and Cancel are all handled by the shared closeModal()
+        // mechanism in ui-chrome.js (one listener, topmost modal only, guards for running imports).
 
         // Open Mapping Modal
         document.getElementById('btn-add-mapping').addEventListener('click', () => {
@@ -824,21 +798,35 @@ class MappingsFixesUiMixin {
         // Save Fix (with live ID validation, duplicate protection, reference rename cleanup, and Save & Next Issue)
         const btnSaveFix = document.getElementById('btn-save-fix');
         const btnSaveFixNext = document.getElementById('btn-save-fix-next');
+        // References already handled by "Save & Next Issue" in this session (fixed, or left
+        // unchanged because settled / ERP-recorded). Never offered again by Save & Next, so the
+        // queue cannot loop back to a locked or skipped row. ("Fix" buttons still open them.)
+        if (!(this.fixNextVisitedRefs instanceof Set)) this.fixNextVisitedRefs = new Set();
         const findNextUnresolvedRef = (excludeRef) => {
             const excl = String(excludeRef || '').trim();
+            const visited = this.fixNextVisitedRefs;
+            const isCandidate = (ref, tx) => ref && ref !== excl && !visited.has(ref) && !(tx && isNonInvalidTransaction(tx));
             if (this.unresolvedTxByRef instanceof Map && this.unresolvedTxByRef.size > 0) {
-                for (const [candidateRef] of this.unresolvedTxByRef.entries()) {
-                    if (candidateRef && candidateRef !== excl) return candidateRef;
+                for (const [candidateRef, tx] of this.unresolvedTxByRef.entries()) {
+                    if (isCandidate(candidateRef, tx)) return candidateRef;
                 }
             }
             for (const tx of (this.currentPageTransactions || [])) {
                 const r = String(tx?.reference_number || '').trim();
-                if (r && r !== excl && !isNonInvalidTransaction(tx)) return r;
+                if (isCandidate(r, tx)) return r;
             }
             return null;
         };
 
+        const setFixSaveButtonsDisabled = (disabled) => {
+            btnSaveFix.disabled = disabled;
+            if (btnSaveFixNext) btnSaveFixNext.disabled = disabled;
+        };
+
         const saveManualFixHandler = async (openNext = false) => {
+            if (!this.requireRole('accountant', 'save manual fixes')) return;
+            // Re-entrancy guard (double click / Ctrl+Enter while a save or the confirm dialog is pending)
+            if (btnSaveFix.disabled || this._savingManualFix) return;
             const ref = document.getElementById('fix-ref').value.trim();
             const correctId = document.getElementById('fix-id').value.trim();
             const correctName = normalizeItemName(document.getElementById('fix-name').value);
@@ -850,6 +838,11 @@ class MappingsFixesUiMixin {
                 return Toast.show('Enter at least one value to correct', 'warning');
             }
 
+            // Disable both save buttons before the first await (the invalid-ID confirm) so a second
+            // click can't start a parallel save; re-enabled on cancel and in finally.
+            this._savingManualFix = true;
+            setFixSaveButtonsDisabled(true);
+
             if (correctId) {
                 const idStatus = validateID(correctId);
                 if (idStatus !== 'Valid') {
@@ -857,12 +850,14 @@ class MappingsFixesUiMixin {
                         `The Student ID "${correctId}" is invalid (${idStatus}). Saving this ID will mark the transaction status as Error.\n\nDo you still want to save this ID?`,
                         'Save Anyway', 'Cancel'
                     );
-                    if (!proceedInvalid) return;
+                    if (!proceedInvalid) {
+                        this._savingManualFix = false;
+                        setFixSaveButtonsDisabled(false);
+                        return;
+                    }
                 }
             }
 
-            btnSaveFix.disabled = true;
-            if (btnSaveFixNext) btnSaveFixNext.disabled = true;
             try {
                 const isEditMode = document.getElementById('modal-fix-title').innerText === 'Edit Fix';
                 const oldEditingRef = this.editingFixOriginalRef;
@@ -960,7 +955,7 @@ class MappingsFixesUiMixin {
                 if (lockedSkipped > 0) summaryMsg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged.`;
 
                 Toast.show(`Manual fix saved. ${summaryMsg}`, 'success');
-                const nextUnresolvedRef = openNext ? findNextUnresolvedRef(ref) : null;
+                if (openNext) this.fixNextVisitedRefs.add(ref);
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
 
@@ -982,6 +977,9 @@ class MappingsFixesUiMixin {
                 }
 
                 if (openNext) {
+                    // Picked AFTER the unresolved list was synced, so rows that just became
+                    // Valid / Exempt are gone and the saved (or skipped) reference is excluded.
+                    const nextUnresolvedRef = findNextUnresolvedRef(ref);
                     if (nextUnresolvedRef) {
                         await this.openQuickFixForRef(nextUnresolvedRef);
                     } else {
@@ -991,8 +989,8 @@ class MappingsFixesUiMixin {
             } catch (err) {
                 Toast.show('Error saving fix: ' + err.message, 'error');
             } finally {
-                btnSaveFix.disabled = false;
-                if (btnSaveFixNext) btnSaveFixNext.disabled = false;
+                this._savingManualFix = false;
+                setFixSaveButtonsDisabled(false);
             }
         };
 
@@ -2072,19 +2070,13 @@ class MappingsFixesUiMixin {
             if (!tx || !tx.reference_number) continue;
             const refKey = String(tx.reference_number).trim();
             const updatedFields = changeById.get(tx.id);
-            const newStatus = updatedFields ? updatedFields.id_status : tx.id_status;
-            const newStudentId = updatedFields ? updatedFields.student_id : tx.student_id;
-            const newItemName = updatedFields ? updatedFields.item_name : tx.item_name;
+            const merged = { ...tx, ...(updatedFields || {}) };
 
-            if (newStatus === 'Valid') {
+            // Valid OR Exempt (e.g. a fix that maps the item to Dip / Workshop) is resolved.
+            if (isNonInvalidTransaction(merged)) {
                 if (this.unresolvedTxByRef.delete(refKey)) mutated = true;
             } else {
-                this.unresolvedTxByRef.set(refKey, {
-                    ...tx,
-                    student_id: newStudentId,
-                    item_name: newItemName,
-                    id_status: newStatus
-                });
+                this.unresolvedTxByRef.set(refKey, merged);
                 mutated = true;
             }
         }

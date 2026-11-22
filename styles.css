@@ -1665,6 +1665,11 @@ select option { background-color: var(--bg-elevated); color: var(--text-main); }
 .toast-error .toast-icon { color: var(--danger); }
 .toast-warning .toast-icon { color: var(--warning); }
 .toast-info .toast-icon { color: var(--primary); }
+.toast-close {
+    flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+    font-size: 1.1rem; line-height: 1; padding: 0 0.15rem; cursor: pointer; border-radius: 4px;
+}
+.toast-close:hover, .toast-close:focus-visible { color: var(--text-main); background: var(--bg-card-hover); }
 
 @media (max-width: 640px) {
     .toast-container { top: 4rem; left: 0.75rem; right: 0.75rem; max-width: none; }

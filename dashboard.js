@@ -861,7 +861,8 @@ class DashboardMixin {
                                 .lte('payment_date', dateTo)
                                 .in('bank', fawryBanksSelected);
 
-                            if (statusFilter === 'valid') q = q.eq('id_status', 'Valid');
+                            // "Valid" = not invalid: Valid OR Exempt (Dip / Workshop), same as get_dashboard_summary.
+                            if (statusFilter === 'valid') q = q.or(`id_status.eq.Valid,${SUPABASE_EXEMPT_OR_FILTER}`);
                             else if (statusFilter === 'invalid') q = q.neq('id_status', 'Valid').neq('id_status', 'Exempt');
                             else if (statusFilter === 'settled') q = q.eq('is_settled', true);
                             else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
@@ -895,7 +896,7 @@ class DashboardMixin {
                     const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
                     if (!pDate || pDate < dateFrom || pDate > dateTo) return false;
                     const isSettledRow = r.is_settled !== undefined ? Boolean(r.is_settled) : true;
-                    if (statusFilter === 'valid') return r.id_status === 'Valid';
+                    if (statusFilter === 'valid') return isNonInvalidTransaction(r);
                     if (statusFilter === 'invalid') return !isNonInvalidTransaction(r);
                     if (statusFilter === 'settled') return isSettledRow;
                     if (statusFilter === 'unsettled') return !isSettledRow;
@@ -913,10 +914,13 @@ class DashboardMixin {
                 this.updateDashboardFxUI();
             }
 
+            let fxMissingCount = 0;
             const matchingForeignRows = filteredForeignRaw.map(r => {
                 const pDate = toDateOnly(r.value_date || r.payment_date || r.transaction_date);
                 const usdAmt = Number(r.amount ?? r.item_price) || 0;
                 const fx = convertUsdToEgp(usdAmt, pDate, this.fxStore);
+                const fxMissing = !(fx.rate > 0);
+                if (fxMissing && usdAmt) fxMissingCount++;
                 return {
                     payment_date: pDate,
                     bank: DEFAULT_FOREIGN_BANK,
@@ -924,7 +928,10 @@ class DashboardMixin {
                     fx_rate: fx.rate,
                     fx_date: fx.rateDate,
                     fx_source: fx.source,
-                    item_price: fx.rate > 0 ? fx.egpAmount : usdAmt,
+                    // No FX rate: leave the deposit out of EGP totals (never add USD as if it were
+                    // EGP); the split label below warns how many deposits could not be converted.
+                    item_price: fxMissing ? 0 : fx.egpAmount,
+                    fx_missing: fxMissing,
                     mapping: r.mapping || DEFAULT_FOREIGN_MAPPING,
                     second_mapping: r.second_mapping || '',
                     item_name: r.description || r.item_name || '',
@@ -990,9 +997,15 @@ class DashboardMixin {
             if (splitMisrEl) splitMisrEl.textContent = `USD ${formatMoney(misrUsd5UsdTotal)}`;
             if (splitMisrEgpEl) {
                 const resolvedFx = resolveUsdToEgpRate(dateTo, this.fxStore);
-                splitMisrEgpEl.textContent = resolvedFx.rate > 0
-                    ? `(≈ EGP ${formatMoney(misrUsd5EgpVal)})`
-                    : `(No FX rate synced)`;
+                if (!(resolvedFx.rate > 0)) {
+                    splitMisrEgpEl.textContent = fxMissingCount > 0
+                        ? `(No FX rate synced — ${fxMissingCount} USD deposit(s) not included in EGP totals)`
+                        : `(No FX rate synced)`;
+                } else if (fxMissingCount > 0) {
+                    splitMisrEgpEl.textContent = `(≈ EGP ${formatMoney(misrUsd5EgpVal)}; ${fxMissingCount} deposit(s) without FX rate not included)`;
+                } else {
+                    splitMisrEgpEl.textContent = `(≈ EGP ${formatMoney(misrUsd5EgpVal)})`;
+                }
             }
 
             // Render separate numeric columns for NuMisrUsd5 (USD) and NuMisrUsd5 (EGP Eq.) so DOM, Email copy, and Excel exports have pure numbers
@@ -1304,10 +1317,19 @@ class DashboardMixin {
 
             if (rpcSucceeded) {
                 if (fawryBanksSelected.length > 0) {
-                    const exemptFilter = () => supabase.from('transactions').select('*', { count: 'exact', head: true })
-                        .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected)
-                        .neq('id_status', 'Valid')
-                        .or(SUPABASE_EXEMPT_OR_FILTER);
+                    // Exempt count must respect the Transaction Subset filter like every other KPI
+                    // (it used to count all exempt rows of the period, even under "Invalid only").
+                    const exemptFilter = () => {
+                        let q = supabase.from('transactions').select('*', { count: 'exact', head: true })
+                            .gte('payment_date', dateFrom).lte('payment_date', dateTo).in('bank', fawryBanksSelected)
+                            .neq('id_status', 'Valid')
+                            .or(SUPABASE_EXEMPT_OR_FILTER);
+                        if (statusFilter === 'settled') q = q.eq('is_settled', true);
+                        else if (statusFilter === 'unsettled') q = q.or('is_settled.is.null,is_settled.eq.false');
+                        else if (statusFilter === 'erp_recorded') q = q.not('erp_batch_number', 'is', null).neq('erp_batch_number', '');
+                        else if (statusFilter === 'erp_unposted') q = q.or('erp_batch_number.is.null,erp_batch_number.eq.');
+                        return q;
+                    };
 
                     if (summaryRpcData && summaryRpcData.kpis) {
                         validCount = Number(summaryRpcData.kpis.valid_count) || 0;
@@ -1315,10 +1337,15 @@ class DashboardMixin {
                         settledCount = Number(summaryRpcData.kpis.settled_count) || 0;
                         erpRecordedCount = Number(summaryRpcData.kpis.erp_count) || 0;
                         unmappedCount = Number(summaryRpcData.kpis.unmapped_count) || 0;
-                        try {
-                            const { count: exCnt, error: exErr } = await exemptFilter();
-                            if (!exErr && exCnt !== null && exCnt !== undefined) exemptCount += Number(exCnt) || 0;
-                        } catch (_) {}
+                        if (summaryRpcData.kpis.exempt_count !== undefined) {
+                            // Computed by the RPC under the same filters (incl. the subset filter).
+                            exemptCount += Number(summaryRpcData.kpis.exempt_count) || 0;
+                        } else if (statusFilter !== 'invalid') {
+                            try {
+                                const { count: exCnt, error: exErr } = await exemptFilter();
+                                if (!exErr && exCnt !== null && exCnt !== undefined) exemptCount += Number(exCnt) || 0;
+                            } catch (_) {}
+                        }
                         if (Array.isArray(summaryRpcData.categories)) {
                             summaryRpcData.categories.forEach(r => {
                                 const k = r.group_key || 'Unmapped';

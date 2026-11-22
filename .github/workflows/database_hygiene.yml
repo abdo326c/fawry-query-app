@@ -7,10 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       apply_fixes:
-        description: 'Auto-clean duplicate mapping rules and manual fixes'
+        description: 'Delete exact duplicate mapping rules (manual-fix variants are only reported)'
         type: boolean
         default: true
         required: true
+
+concurrency:
+  group: database-hygiene
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   database-hygiene:
@@ -20,16 +28,16 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+      - name: Setup Node.js (version from .nvmrc)
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Run Auto-Deduplication & Health Audit
         env:
@@ -37,10 +45,23 @@ jobs:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
-          # Scheduled runs only INSPECT. Deleting rows needs a manual run with apply_fixes ticked
-          # (on a schedule the input is empty, which previously fell through to --fix every night).
+          # Scheduled runs only INSPECT. Deleting rows needs a manual run with apply_fixes ticked.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.apply_fixes }}" = "true" ]; then
             node scripts/database_hygiene.js --fix
           else
             node scripts/database_hygiene.js
+          fi
+
+      - name: Open or update a failure issue (scheduled runs)
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Scheduled job failed: Daily database hygiene'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The scheduled run failed: $RUN_URL"
           fi

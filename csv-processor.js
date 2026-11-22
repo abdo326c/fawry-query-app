@@ -115,10 +115,16 @@ export class FawryProcessor {
 
     parseAmount(val) {
         if (val === null || val === undefined || val === '') return 0;
+        if (typeof val === 'number') return Number.isFinite(val) ? Math.round(val * 100) / 100 : 0;
+        const raw = String(val).trim();
+        // Accounting notation: "(1,500.00)" / "EGP (1,500.00)" is a NEGATIVE amount.
+        const isParenNegative = /^[^\d(]*\(\s*[^()]*\d[^()]*\)\s*[^\d)]*$/.test(raw);
         // Strip out currencies (like EGP), commas, and spaces, keeping only numbers, decimal, and minus sign
-        const cleaned = String(val).replace(/[^\d.-]/g, '');
+        const cleaned = raw.replace(/[^\d.-]/g, '');
         const parsed = parseFloat(cleaned);
-        return isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
+        if (isNaN(parsed)) return 0;
+        const signed = isParenNegative ? -Math.abs(parsed) : parsed;
+        return Math.round(signed * 100) / 100;
     }
 
     parsePaymentDate(rawDate) {
@@ -554,6 +560,26 @@ export class FawryProcessor {
                             reason: `Non-payable status: ${pStatus || 'Unknown'}`
                         });
                         continue;
+                    }
+
+                    if (!paymentDate) {
+                        // Still imported (as before), but never silently: a row without a usable
+                        // Payment Date drops out of every date-filtered report and period lock.
+                        this.importIssues.push({
+                            category: 'Missing / Invalid Payment Date',
+                            file_name: item.file.name,
+                            reference_number: refNumber,
+                            payment_date: '',
+                            student_id: studentId || '',
+                            item_name: itemName || '',
+                            item_price: itemPrice ?? '',
+                            bank: bank || '',
+                            status: pStatus || '',
+                            reason: rawDate === '' || rawDate === null || rawDate === undefined
+                                ? 'Payment Date is empty'
+                                : `Payment Date could not be read: ${String(rawDate).slice(0, 40)}`
+                        });
+                        this.log(`Warning: ${refNumber} has no valid Payment Date (${rawDate === '' ? 'empty' : String(rawDate).slice(0, 40)}).`);
                     }
 
                     transformedRows.push({
