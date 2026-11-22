@@ -1923,3 +1923,62 @@ test('Student search: typing never opens a profile; Enter or Search opens it whe
         }
     }
 });
+
+test('BM import window is cleared after Cancel, after Import, and when reopened', async () => {
+    await import('../app.js');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    const app = window.app;
+    const meta = { accountNumber: '7700120000000999', dateFrom: '2026-09-01', dateTo: '2026-09-30' };
+    const parsed = {
+        metadata: meta, excludedReversals: [], excludedTreasury: [], integrity: { errors: [], warnings: [] },
+        deposits: [{ reference_number: 'FJB0000000009', amount: 50, item_price: 50, value_date: '2026-09-05', payment_date: '2026-09-05',
+            description: 'Cash Deposit TEST', student_id: '261009991', id_status: 'Valid', match_source: 'statement_id', currency: 'USD' }]
+    };
+    const orig = { parse: app.parseSingleForeignStatementFile, students: app.ensureStudentsLoadedForForeign, sync: app.syncForeignTransactionsToSupabase, role: app.requireRole };
+    app.parseSingleForeignStatementFile = vi.fn().mockResolvedValue(parsed);
+    app.ensureStudentsLoadedForForeign = vi.fn().mockResolvedValue([]);
+    app.syncForeignTransactionsToSupabase = vi.fn().mockResolvedValue({ synced: 1, error: null });
+    app.requireRole = () => true;
+    const modal = document.getElementById('modal-foreign-import');
+    const panel = document.getElementById('foreign-import-preview-panel');
+    const btn = document.getElementById('btn-confirm-foreign-import');
+    const isCleared = () => {
+        expect(app.pendingForeignExtraction).toBeNull();
+        expect(panel.classList.contains('hidden')).toBe(true);
+        expect(document.getElementById('foreign-import-meta-banner').textContent.trim()).toBe('');
+        expect(document.getElementById('foreign-import-preview-body').innerHTML).toBe('');
+        expect(document.getElementById('foreign-import-integrity')).toBeNull();
+        expect(btn.disabled).toBe(true);
+    };
+    try {
+        const load = async () => {
+            document.getElementById('btn-show-foreign-import').click();
+            await app.handleForeignStatementFiles([{ name: 'Misr 999.xls' }]);
+            expect(panel.classList.contains('hidden')).toBe(false);
+            expect(document.getElementById('foreign-import-integrity')).not.toBeNull();
+        };
+
+        await load();
+        modal.querySelector('.modal-footer .btn-outline').click();   // Cancel
+        isCleared();
+
+        await load();
+        modal.querySelector('.btn-close').click();                   // ×
+        isCleared();
+
+        await load();
+        await app.savePendingForeignDeposits();                       // Import
+        expect(modal.classList.contains('hidden')).toBe(true);
+        isCleared();
+
+        await load();
+        modal.classList.add('hidden');                                 // closed some other way (Esc)
+        document.getElementById('btn-show-foreign-import').click();   // reopened -> empty
+        isCleared();
+    } finally {
+        app.parseSingleForeignStatementFile = orig.parse;
+        app.ensureStudentsLoadedForForeign = orig.students;
+        app.syncForeignTransactionsToSupabase = orig.sync;
+        app.requireRole = orig.role;
+    }
+}, 20000);

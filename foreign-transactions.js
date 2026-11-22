@@ -567,7 +567,9 @@ export function parseBankStatementGrid(gridRows) {
         const row = (gridRows[i] || []).map(c => String(c ?? '').trim());
 
         for (let c = 0; c < row.length - 1; c++) {
-            const label = row[c];
+            // The bank's Excel writes labels with a colon ("Account Number:"), which the anchored
+            // patterns below didn't match, so the account number was never read from Excel.
+            const label = String(row[c] || '').replace(/\s*[:：]\s*$/, '');
             const nextVal = row[c + 1] || row[c + 2] || '';
             if (!label || !nextVal) continue;
             if (/اسم العميل|Customer Name/i.test(label)) metadata.customerName = nextVal;
