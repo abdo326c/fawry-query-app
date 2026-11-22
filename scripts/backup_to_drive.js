@@ -67,6 +67,7 @@ export const BACKUP_TABLES = [
 /** Tables of turso/schema.sql deliberately NOT backed up. */
 export const EXCLUDED_TABLES = {
     period_lock_bypass: 'transient one-row switch, set and cleared inside a single write batch; always empty between requests',
+    login_attempts: 'transient login rate-limit counters (15-minute windows); nothing to restore',
     login_attempts: 'transient sign-in throttling counters (not part of turso/schema.sql today); restoring them would only re-lock accounts'
 };
 

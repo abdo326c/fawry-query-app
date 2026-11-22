@@ -78,7 +78,8 @@ afterAll(() => {
 
 describe('backup coverage', () => {
   test('every turso/schema.sql table is backed up or deliberately excluded', () => {
-    const schemaTables = [...schemaSql.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(m => m[1]);
+    // line-anchored: comments in the schema mention "CREATE TABLE IF NOT EXISTS does not ..."
+    const schemaTables = [...schemaSql.matchAll(/^CREATE TABLE IF NOT EXISTS (\w+)/gm)].map(m => m[1]);
     const covered = new Set([...BACKUP_TABLES.map(t => t.table), ...Object.keys(EXCLUDED_TABLES)]);
     for (const t of schemaTables) expect(covered.has(t), `table ${t} not covered by the backup`).toBe(true);
     expect(BACKUP_TABLES.map(t => t.table)).toContain('app_users');

@@ -1837,7 +1837,9 @@ class StudentsUiMixin {
                     ...r,
                     payment_date: pDate,
                     item_name: r.description || r.item_name || 'Cash Deposit',
-                    item_price: fx.rate > 0 ? fx.egpAmount : usdAmt,
+                    // No synced USD→EGP rate: do NOT count the USD figure as EGP in the totals.
+                    item_price: fx.rate > 0 ? fx.egpAmount : 0,
+                    fx_missing: !(fx.rate > 0),
                     raw_usd: usdAmt,
                     currency: r.currency || 'USD',
                     is_settled: true
@@ -2089,7 +2091,7 @@ class StudentsUiMixin {
                     <td><span class="badge" style="background: rgba(56, 189, 248, 0.12); color: var(--primary); font-size: 0.74rem;">${escapeHTML(t.mapping || 'Unmapped')}</span></td>
                     <td style="font-size: 0.82rem; color: var(--text-secondary);">${escapeHTML(t.second_mapping || '-')}</td>
                     <td style="font-size: 0.82rem;">${escapeHTML(bankName)}</td>
-                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${isSameDaySettlementBank(t) ? `USD ${formatMoney(t.raw_usd ?? t.amount ?? 0)} <span style="font-size: 0.72rem; color: var(--text-muted);">(≈ EGP ${formatMoney(t.item_price || 0)})</span>` : formatMoney(t.item_price || 0)}</td>
+                    <td style="text-align: right; font-weight: 700; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap;">${isSameDaySettlementBank(t) ? `USD ${formatMoney(t.raw_usd ?? t.amount ?? 0)} <span style="font-size: 0.72rem; color: ${t.fx_missing ? 'var(--danger)' : 'var(--text-muted)'};">${t.fx_missing ? '(no FX rate synced — not in EGP total)' : `(≈ EGP ${formatMoney(t.item_price || 0)})`}</span>` : formatMoney(t.item_price || 0)}</td>
                 </tr>
             `;
             }).join('');

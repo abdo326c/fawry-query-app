@@ -84,6 +84,9 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    exclude: ['e2e/**', '**/node_modules/**']
+    // Loading the whole app (app.js) into jsdom takes ~4s on a busy machine; 5s default flaked.
+    testTimeout: 20000,
+    // agent/worktree copies of the repo live under .claude/ — never collect their tests
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', 'e2e/**']
   }
 });

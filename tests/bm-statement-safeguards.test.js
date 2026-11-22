@@ -214,3 +214,10 @@ test('Excel header labels written with a colon ("Account Number:") are read', ()
     expect(parsed.metadata.accountNumber).toBe('7700120000000999');
     expect(parsed.metadata.branch).toBe('770');
 });
+
+import { parseStatementAmount } from '../foreign-transactions.js';
+test('bracketed (accounting) statement amounts are negative', () => {
+    expect(parseStatementAmount('(1,500.00)')).toBe(-1500);
+    expect(parseStatementAmount('1,500.00')).toBe(1500);
+    expect(parseStatementAmount('')).toBe(0);
+});

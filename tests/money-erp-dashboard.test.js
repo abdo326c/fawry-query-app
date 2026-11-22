@@ -114,12 +114,14 @@ describe('money / ERP / dashboard fixes (server)', () => {
       { reference_number: 'R1', payment_date: '2026-04-01', item_price: 10, check_column: 'a', erp_batch_number: 'B1', erp_voucher: 'V1' },
       { reference_number: 'R2', payment_date: '2026-04-01', item_price: 20, check_column: 'b', erp_batch_number: 'B1', erp_voucher: 'V1' }
     ]);
-    await db.execute({
-      sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
-      args: ['ammahmoud@nu.edu.eg', 'ERP References Recorded', 'B1', JSON.stringify({
+    // Through the API, as the app does: the server signs revert_data (unsigned payloads are refused).
+    const ins = await callApi(queryHandler, {
+      table: 'audit_logs', operation: 'insert',
+      values: { action: 'ERP References Recorded', affected_references: 'B1', details: {
         revert_data: { table_name: 'transactions_erp', operation: 'update', batch_number: 'B1', stamped_ids: [ids.R1] }
-      })]
-    });
+      } }
+    }, adminToken);
+    expect(ins.status).toBe(200);
     const auditId = Number((await db.execute('SELECT MAX(id) AS id FROM audit_logs')).rows[0].id);
     const out = await callApi(rpcHandler, { fn: 'revert_audit_log_entry', args: { p_audit_id: auditId } }, adminToken);
     expect(out.status).toBe(200);
