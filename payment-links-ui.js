@@ -120,6 +120,9 @@ class PaymentLinksUiMixin {
         });
 
         document.getElementById('btn-save-link')?.addEventListener('click', async () => {
+            const saveBtn = document.getElementById('btn-save-link');
+            // Double-click / Ctrl+Enter repeat guard: a second click while saving would insert a duplicate.
+            if (this._savingPaymentLink || saveBtn?.disabled) return;
             const id = document.getElementById('link-id').value;
             const linkData = {
                 name: document.getElementById('link-name').value.trim(),
@@ -135,6 +138,13 @@ class PaymentLinksUiMixin {
                 return;
             }
 
+            this._savingPaymentLink = true;
+            const originalBtnHtml = saveBtn ? saveBtn.innerHTML : '';
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i data-lucide="loader" class="spin"></i> Saving...';
+                if (window.lucide) window.lucide.createIcons({ root: saveBtn });
+            }
             try {
                 if (id) {
                     const existing = (this.allPaymentLinks || []).find(l => String(l.id) === String(id));
@@ -152,6 +162,13 @@ class PaymentLinksUiMixin {
                 this.loadPaymentLinks({ forceReload: true });
             } catch (err) {
                 Toast.show("Error: " + err.message, "error");
+            } finally {
+                this._savingPaymentLink = false;
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = originalBtnHtml;
+                    if (window.lucide) window.lucide.createIcons({ root: saveBtn });
+                }
             }
         });
 
@@ -319,7 +336,7 @@ class PaymentLinksUiMixin {
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Payment Links");
                 writeCompressedExcel(wb, `Payment_Links_Export_${toDateOnly(new Date())}.xlsx`);
-                Toast.show(`Exported ${exportRows.length.toLocaleString()} links`, "success");
+                Toast.show(`Exported ${exportRows.length.toLocaleString('en-US')} links`, "success");
             } catch (err) {
                 Toast.show("Error exporting: " + err.message, "error");
             }
@@ -438,10 +455,10 @@ class PaymentLinksUiMixin {
             const el = document.getElementById(id);
             if (el) el.textContent = val;
         };
-        setEl('links-stat-total', list.length.toLocaleString());
-        setEl('links-stat-active', activeCount.toLocaleString());
-        setEl('links-stat-expiring', expiringCount.toLocaleString());
-        setEl('links-stat-expired', expiredCount.toLocaleString());
+        setEl('links-stat-total', list.length.toLocaleString('en-US'));
+        setEl('links-stat-active', activeCount.toLocaleString('en-US'));
+        setEl('links-stat-expiring', expiringCount.toLocaleString('en-US'));
+        setEl('links-stat-expired', expiredCount.toLocaleString('en-US'));
         setEl('links-stat-value', `EGP ${formatMoney(activeValue)}`);
     }
 
@@ -656,7 +673,7 @@ class PaymentLinksUiMixin {
 
         this.paymentLinksTotalPages = totalPages;
         if (pageInfo) {
-            pageInfo.innerHTML = `Showing <strong>${(startIdx + 1).toLocaleString()}</strong>–<strong>${Math.min(startIdx + pageSize, total).toLocaleString()}</strong> of <strong>${total.toLocaleString()}</strong> links (Page ${this.paymentLinksPage} of ${totalPages})`;
+            pageInfo.innerHTML = `Showing <strong>${(startIdx + 1).toLocaleString('en-US')}</strong>–<strong>${Math.min(startIdx + pageSize, total).toLocaleString('en-US')}</strong> of <strong>${total.toLocaleString('en-US')}</strong> links (Page ${this.paymentLinksPage} of ${totalPages})`;
         }
         if (btnPrev) btnPrev.disabled = this.paymentLinksPage <= 1;
         if (btnNext) btnNext.disabled = this.paymentLinksPage >= totalPages;

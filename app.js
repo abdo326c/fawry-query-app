@@ -38,6 +38,7 @@ import {
     saveFilterPresetList,
     upsertFilterPreset,
     deleteFilterPreset,
+    formatDateTime,
     Toast
 } from './app-utils.js';
 import { applyDashboardMixin } from './dashboard.js';
@@ -49,6 +50,32 @@ import { applyForeignUiMixin } from './foreign-ui.js';
 import { applyPaymentLinksUiMixin } from './payment-links-ui.js';
 import { applyStudentsUiMixin } from './students-ui.js';
 import { applyMappingsFixesUiMixin } from './mappings-fixes-ui.js';
+
+/**
+ * Register a close guard / after-close hook with the shared modal mechanism in ui-chrome.js.
+ * Guards live on a window-level object so registration works whichever script loads first.
+ */
+function registerModalGuard(id, guard) {
+    if (typeof window === 'undefined') return;
+    if (typeof window.registerModalGuard === 'function') {
+        window.registerModalGuard(id, guard);
+        return;
+    }
+    const guards = (window.__spdbModalGuards = window.__spdbModalGuards || {});
+    guards[id] = Object.assign({}, guards[id] || {}, guard || {});
+}
+
+/** Close a modal through the shared mechanism (falls back to the same guard logic without ui-chrome). */
+function closeModalById(id) {
+    if (typeof window !== 'undefined' && typeof window.closeModal === 'function') return window.closeModal(id);
+    const modal = document.getElementById(id);
+    if (!modal || modal.classList.contains('hidden')) return true;
+    const guard = (typeof window !== 'undefined' && window.__spdbModalGuards && window.__spdbModalGuards[id]) || {};
+    if (typeof guard.canClose === 'function' && guard.canClose() === false) return false;
+    modal.classList.add('hidden');
+    if (typeof guard.onClose === 'function') guard.onClose();
+    return true;
+}
 
 class App {
     constructor() {
@@ -408,6 +435,7 @@ class App {
             'file-upload-mappings',
             'btn-add-fix',
             'btn-save-fix',
+            'btn-save-fix-next',
             'file-upload-fixes',
             'btn-select-high-confidence',
             'btn-apply-automatch-fixes',
@@ -741,13 +769,30 @@ class App {
             });
         }
 
+        // The import window can be closed by Done, ×, Escape or a backdrop click — all routed
+        // through the shared closeModal() (ui-chrome.js). Refuse while an import is running, and
+        // always run the post-import refresh after an import finished, however it is closed.
+        registerModalGuard('modal-import', {
+            canClose: () => {
+                if (this.isImporting) {
+                    Toast.show('Import in progress — please wait until it finishes.', 'warning');
+                    return false;
+                }
+                return true;
+            },
+            onClose: () => {
+                document.getElementById('import-progress')?.classList.add('hidden');
+                if (!this._importNeedsRefresh) return;
+                this._importNeedsRefresh = false;
+                this.invalidateTabs('dashboard', 'transactions', 'history', 'erp-export');
+                document.querySelector('.nav-link[data-tab="transactions"]')?.click();
+                this.loadTransactions();
+                this.updateSidebarBadges();
+            }
+        });
+
         document.getElementById('btn-import-done')?.addEventListener('click', () => {
-            document.getElementById('modal-import')?.classList.add('hidden');
-            document.getElementById('import-progress')?.classList.add('hidden');
-            this.invalidateTabs('dashboard', 'transactions', 'history', 'erp-export');
-            document.querySelector('.nav-link[data-tab="transactions"]')?.click();
-            this.loadTransactions();
-            this.updateSidebarBadges();
+            closeModalById('modal-import');
         });
         
         const btnShowHistory = document.getElementById('btn-show-history');
@@ -822,11 +867,22 @@ class App {
         window.addEventListener('hashchange', () => {
             const hashTab = (window.location.hash || '').replace(/^#/, '').trim();
             if (!hashTab) return;
-            const targetLink = document.querySelector(`.nav-link[data-tab="${hashTab}"]`);
+            const targetLink = this.findNavLinkForTab(hashTab);
             if (targetLink && targetLink.style.display !== 'none' && !targetLink.classList.contains('active')) {
                 targetLink.click();
             }
         });
+    }
+
+    /**
+     * Look up a sidebar nav link by tab id without interpolating the (user-controlled)
+     * URL hash into a CSS selector — a hash like `#"]` would otherwise throw a SyntaxError.
+     */
+    findNavLinkForTab(tabId) {
+        const id = String(tabId || '');
+        if (!id) return null;
+        return Array.from(document.querySelectorAll('.nav-link[data-tab]'))
+            .find(link => link.getAttribute('data-tab') === id) || null;
     }
 
     restoreActiveTabFromUrl() {
@@ -838,7 +894,7 @@ class App {
             }
         } catch (_e) { /* ignore */ }
         if (!desiredTab || desiredTab === 'transactions') return false;
-        const targetLink = document.querySelector(`.nav-link[data-tab="${desiredTab}"]`);
+        const targetLink = this.findNavLinkForTab(desiredTab);
         if (targetLink && targetLink.style.display !== 'none') {
             targetLink.click();
             return true;
@@ -997,6 +1053,8 @@ class App {
             Toast.show('Import failed: ' + err.message, 'error');
         } finally {
             this.isImporting = false;
+            // Rows may have been written even on partial failure: refresh when the window closes.
+            this._importNeedsRefresh = true;
         }
     }
 
@@ -1276,13 +1334,11 @@ class App {
         let automatchSearchTimeout;
         document.getElementById('automatcher-search')?.addEventListener('input', () => {
             clearTimeout(automatchSearchTimeout);
+            // Search is a client-side filter over the current proposals only — it never reruns
+            // the matcher (that happens from the Run button and the date inputs).
             automatchSearchTimeout = setTimeout(() => {
                 this.automatchPage = 1;
-                if (this.automatchProposals && this.automatchProposals.length > 0) {
-                    this.renderAutoMatcherPage();
-                } else {
-                    this.runAutoMatcher();
-                }
+                this.renderAutoMatcherPage();
             }, 250);
         });
 
@@ -1602,6 +1658,24 @@ class App {
             currentWrapper = null;
         };
 
+        // Escape closes just the popover (not a modal behind it); scrolling the page/table or
+        // resizing the window would leave it floating at a stale fixed position, so close it too.
+        window.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !popover.classList.contains('open')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.__spdbEscapeHandled = true;
+            closePopover();
+        }, true);
+        window.addEventListener('scroll', (e) => {
+            if (!popover.classList.contains('open')) return;
+            if (e.target && e.target.nodeType === 1 && popover.contains(e.target)) return; // scrolling the option list
+            closePopover();
+        }, true);
+        window.addEventListener('resize', () => {
+            if (popover.classList.contains('open')) closePopover();
+        });
+
         document.querySelectorAll('.th-filter-wrapper').forEach(wrapper => {
             wrapper.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -1648,8 +1722,7 @@ class App {
             closePopover();
             this.renderFilterChips(currentTable);
             if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
-            else if (this.automatchProposals && this.automatchProposals.length > 0) { this.automatchPage = 1; this.renderAutoMatcherPage(); }
-            else { this.runAutoMatcher(); }
+            else { this.automatchPage = 1; this.renderAutoMatcherPage(); } // client-side filter; no matcher rerun
         });
 
         btnApply.addEventListener('click', () => {
@@ -1666,8 +1739,7 @@ class App {
             closePopover();
             this.renderFilterChips(currentTable);
             if (currentTable === 'transactions') { this.currentPage = 1; this.loadTransactions(); }
-            else if (this.automatchProposals && this.automatchProposals.length > 0) { this.automatchPage = 1; this.renderAutoMatcherPage(); }
-            else { this.runAutoMatcher(); }
+            else { this.automatchPage = 1; this.renderAutoMatcherPage(); } // client-side filter; no matcher rerun
         });
     }
 
@@ -1792,7 +1864,15 @@ class App {
             const rawTokens = search.split(/[\r\n\t,;]+/).map(t => sanitizeForFilter(t)).filter(Boolean);
             const isMultiIdList = rawTokens.length >= 2 && rawTokens.every(t => /^[A-Za-z0-9_-]{3,40}$/.test(t));
             if (isMultiIdList) {
-                const uniqueTokens = [...new Set(rawTokens)].slice(0, 150);
+                // The list goes into the request URL, so it stays capped at 150 (chunking would break
+                // the server-side count/pagination this query feeds). Never truncate silently.
+                const MAX_MULTI_IDS = 150;
+                const allUnique = [...new Set(rawTokens)];
+                const uniqueTokens = allUnique.slice(0, MAX_MULTI_IDS);
+                if (allUnique.length > MAX_MULTI_IDS && this._multiIdTruncationWarnedFor !== search) {
+                    this._multiIdTruncationWarnedFor = search;
+                    Toast.show(`Only the first ${MAX_MULTI_IDS} of ${allUnique.length} IDs were searched. Split the list to search the rest.`, 'warning');
+                }
                 const inList = uniqueTokens.join(',');
                 query = query.or(`reference_number.in.(${inList}),student_id.in.(${inList})`);
             } else {
@@ -2729,7 +2809,7 @@ class App {
             }
             
             tbody.innerHTML = data.map(b => {
-                const date = new Date(b.created_at).toLocaleString();
+                const date = formatDateTime(b.created_at);
                 const type = b.details && b.details.type ? b.details.type : 'transactions';
                 const canRevert = this.hasRole('admin') && type === 'transactions' && b.status !== 'reverted' && b.status !== 'failed' && b.status !== 'processing';
                 
@@ -3023,12 +3103,17 @@ class App {
                 } else {
                     openSearch();
                 }
-            } else if (e.key === 'Escape') {
-                if (overlay.classList.contains('active')) {
-                    closeSearch();
-                }
             }
         });
+        // Escape closes only the search palette, never a modal behind it: handle it in the
+        // capture phase (before the shared modal Escape handler) and mark the event consumed.
+        window.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !overlay.classList.contains('active')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.__spdbEscapeHandled = true;
+            closeSearch();
+        }, true);
 
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay) closeSearch();
@@ -3058,6 +3143,12 @@ class App {
                 e.preventDefault();
                 updateActiveResult(activeResultIdx <= 0 ? resultsContainer.querySelectorAll('.search-result-item').length - 1 : activeResultIdx - 1);
             } else if (e.key === 'Enter') {
+                // Only open a result that belongs to the query currently in the box (not stale
+                // results from an earlier query still on screen while the new search runs).
+                if (resultsContainer.dataset.query !== input.value.trim()) {
+                    e.preventDefault();
+                    return;
+                }
                 const items = Array.from(resultsContainer.querySelectorAll('.search-result-item'));
                 if (items.length > 0) {
                     e.preventDefault();
@@ -3068,10 +3159,13 @@ class App {
         });
 
         let searchTimeout;
+        let searchSeq = 0;
         input.addEventListener('input', (e) => {
             activeResultIdx = -1;
             clearTimeout(searchTimeout);
             const query = e.target.value.trim();
+            const seq = ++searchSeq; // request sequence guard: only the latest query may render
+            delete resultsContainer.dataset.query;
             if (query.length < 2) {
                 resultsContainer.innerHTML = `
                     <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
@@ -3092,6 +3186,7 @@ class App {
                 try {
                     const cleanQ = sanitizeForFilter(query);
                     if (!cleanQ) return;
+                    if (seq !== searchSeq) return;
 
                     const [txRes, foreignRes, studentRes] = await Promise.all([
                         supabase.from('transactions')
@@ -3112,6 +3207,18 @@ class App {
                             .limit(5)
                     ]);
 
+                    if (seq !== searchSeq) return; // a newer query superseded this one
+                    if (txRes?.error || studentRes?.error) {
+                        const msg = (txRes?.error || studentRes?.error)?.message || 'Unknown error';
+                        resultsContainer.dataset.query = query;
+                        resultsContainer.innerHTML = `
+                            <div class="global-search-error" role="alert" style="padding: 1.5rem; text-align: center; color: var(--danger); font-size: 0.85rem;">
+                                Search failed: ${escapeHTML(msg)}. Please try again.
+                            </div>
+                        `;
+                        return;
+                    }
+
                     const txs = txRes.data || [];
                     const cloudFx = Array.isArray(foreignRes?.data) ? foreignRes.data : [];
                     const localFxMatches = (this.foreignTransactions || []).filter(r => {
@@ -3127,6 +3234,7 @@ class App {
                     const foreignHits = [...fxMap.values()].slice(0, 5);
                     const students = studentRes.data || [];
 
+                    resultsContainer.dataset.query = query;
                     if (txs.length === 0 && foreignHits.length === 0 && students.length === 0) {
                         resultsContainer.innerHTML = `
                             <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
@@ -3213,8 +3321,10 @@ class App {
                     });
 
                 } catch (err) {
+                    if (seq !== searchSeq) return;
+                    resultsContainer.dataset.query = query;
                     resultsContainer.innerHTML = `
-                        <div style="padding: 1rem; text-align: center; color: var(--danger); font-size: 0.85rem;">
+                        <div class="global-search-error" role="alert" style="padding: 1rem; text-align: center; color: var(--danger); font-size: 0.85rem;">
                             Error searching: ${escapeHTML(err.message)}
                         </div>
                     `;

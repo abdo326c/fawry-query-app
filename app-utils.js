@@ -146,6 +146,22 @@ export function sanitizeForFilter(str) {
     return String(str).replace(/[,)(%\\"*]/g, '').trim();
 }
 
+/**
+ * Format a timestamp (ISO string, Date or epoch ms) as "YYYY-MM-DD HH:mm" in local time.
+ * Returns `fallback` for empty / unparseable input. Used for every user-facing timestamp so the
+ * app shows one consistent, locale-independent date format.
+ */
+export function formatDateTime(value, fallback = '-') {
+    if (value === null || value === undefined || value === '') return fallback;
+    const d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return fallback;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Error/warning toasts stay up long enough to read (and have a close button); success/info are brief. */
+export const TOAST_DURATIONS = { success: 3000, info: 3000, warning: 8000, error: 8000 };
+
 export class Toast {
     static show(msg, type = 'info') {
         const container = document.getElementById('toast-container');
@@ -153,6 +169,9 @@ export class Toast {
 
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
+        const isAlert = type === 'error' || type === 'warning';
+        toast.setAttribute('role', isAlert ? 'alert' : 'status');
+        toast.setAttribute('aria-live', isAlert ? 'assertive' : 'polite');
 
         let iconName = 'info';
         if (type === 'success') iconName = 'check-circle';
@@ -162,15 +181,22 @@ export class Toast {
         toast.innerHTML = `
             <i data-lucide="${iconName}" class="toast-icon"></i>
             <div class="toast-content">${escapeHTML(msg)}</div>
+            <button type="button" class="toast-close" aria-label="Dismiss notification">&times;</button>
         `;
+
+        let hideTimer = null;
+        const dismiss = () => {
+            if (toast.classList.contains('toast-hiding')) return;
+            clearTimeout(hideTimer);
+            toast.classList.add('toast-hiding');
+            setTimeout(() => toast.remove(), 300);
+        };
+        toast.querySelector('.toast-close')?.addEventListener('click', dismiss);
 
         container.appendChild(toast);
         if (window.lucide) lucide.createIcons({ root: toast });
 
-        setTimeout(() => {
-            toast.classList.add('toast-hiding');
-            setTimeout(() => toast.remove(), 300);
-        }, 3000);
+        hideTimer = setTimeout(dismiss, TOAST_DURATIONS[type] || TOAST_DURATIONS.info);
     }
 
     static showLoading(msg) {
