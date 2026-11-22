@@ -282,3 +282,159 @@ CREATE TABLE IF NOT EXISTS closed_periods (
 );
 
 CREATE INDEX IF NOT EXISTS idx_closed_periods_is_closed ON closed_periods(is_closed);
+
+-- 15. Database-level guards (restored from the Postgres triggers in 2.11.4 / 2.11.3)
+--
+-- The API checks closed periods before writing, but these triggers are the backstop that
+-- covers EVERY write path (RPCs, scripts, races between the check and the write).
+-- Safe to re-run: `node scripts/turso_setup.mjs` applies this file to an existing database.
+
+-- One-row switch used only inside a single write batch (archive RPC) and cleared in the same
+-- batch, so no other connection ever sees it set. Equivalent of Postgres app.bypass_period_lock.
+CREATE TABLE IF NOT EXISTS period_lock_bypass (
+  id INTEGER PRIMARY KEY CHECK (id = 1)
+);
+
+-- 15a. transactions: no insert / update / delete inside a closed month, no moving rows into one.
+CREATE TRIGGER IF NOT EXISTS trg_transactions_period_lock_ins
+BEFORE INSERT ON transactions
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1 AND period_month = substr(NEW.payment_date, 1, 7))
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_transactions_period_lock_upd
+BEFORE UPDATE ON transactions
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND (
+   EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1 AND period_month = substr(OLD.payment_date, 1, 7))
+   OR (NEW.payment_date IS NOT OLD.payment_date
+       AND EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1 AND period_month = substr(NEW.payment_date, 1, 7)))
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_transactions_period_lock_del
+BEFORE DELETE ON transactions
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1 AND period_month = substr(OLD.payment_date, 1, 7))
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+-- 15b. foreign_transactions (BM USD deposits): period = value_date, else transaction_date.
+CREATE TRIGGER IF NOT EXISTS trg_foreign_tx_period_lock_ins
+BEFORE INSERT ON foreign_transactions
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1
+             AND period_month = substr(COALESCE(NEW.value_date, NEW.transaction_date), 1, 7))
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_foreign_tx_period_lock_upd
+BEFORE UPDATE ON foreign_transactions
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND (
+   EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1
+           AND period_month = substr(COALESCE(OLD.value_date, OLD.transaction_date), 1, 7))
+   OR (COALESCE(NEW.value_date, NEW.transaction_date) IS NOT COALESCE(OLD.value_date, OLD.transaction_date)
+       AND EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1
+                   AND period_month = substr(COALESCE(NEW.value_date, NEW.transaction_date), 1, 7)))
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_foreign_tx_period_lock_del
+BEFORE DELETE ON foreign_transactions
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND EXISTS (SELECT 1 FROM closed_periods WHERE is_closed = 1
+             AND period_month = substr(COALESCE(OLD.value_date, OLD.transaction_date), 1, 7))
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+-- 15c. manual_fixes: locked when its reference has a payment or deposit in a closed month.
+CREATE TRIGGER IF NOT EXISTS trg_manual_fixes_period_lock_ins
+BEFORE INSERT ON manual_fixes
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND (
+   EXISTS (SELECT 1 FROM transactions t JOIN closed_periods c
+             ON c.is_closed = 1 AND c.period_month = substr(t.payment_date, 1, 7)
+           WHERE t.reference_number = NEW.reference_number)
+   OR EXISTS (SELECT 1 FROM foreign_transactions f JOIN closed_periods c
+                ON c.is_closed = 1 AND c.period_month = substr(COALESCE(f.value_date, f.transaction_date), 1, 7)
+              WHERE f.reference_number = NEW.reference_number)
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_manual_fixes_period_lock_upd
+BEFORE UPDATE ON manual_fixes
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND (
+   EXISTS (SELECT 1 FROM transactions t JOIN closed_periods c
+             ON c.is_closed = 1 AND c.period_month = substr(t.payment_date, 1, 7)
+           WHERE t.reference_number IN (OLD.reference_number, NEW.reference_number))
+   OR EXISTS (SELECT 1 FROM foreign_transactions f JOIN closed_periods c
+                ON c.is_closed = 1 AND c.period_month = substr(COALESCE(f.value_date, f.transaction_date), 1, 7)
+              WHERE f.reference_number IN (OLD.reference_number, NEW.reference_number))
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_manual_fixes_period_lock_del
+BEFORE DELETE ON manual_fixes
+WHEN NOT EXISTS (SELECT 1 FROM period_lock_bypass)
+ AND (
+   EXISTS (SELECT 1 FROM transactions t JOIN closed_periods c
+             ON c.is_closed = 1 AND c.period_month = substr(t.payment_date, 1, 7)
+           WHERE t.reference_number = OLD.reference_number)
+   OR EXISTS (SELECT 1 FROM foreign_transactions f JOIN closed_periods c
+                ON c.is_closed = 1 AND c.period_month = substr(COALESCE(f.value_date, f.transaction_date), 1, 7)
+              WHERE f.reference_number = OLD.reference_number)
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'Accounting period is closed. Reopen the period in Admin before modifying these records.');
+END;
+
+-- 15d. Archived payments cannot come back through a re-import: a row whose dedupe key is
+-- already in the archive (settled + ERP-posted) is silently skipped.
+CREATE INDEX IF NOT EXISTS idx_tx_archive_dedupe_key
+  ON transactions_archive (reference_number, item_price, check_column);
+
+CREATE TRIGGER IF NOT EXISTS trg_skip_archived_transaction_insert
+BEFORE INSERT ON transactions
+WHEN EXISTS (SELECT 1 FROM transactions_archive a
+             WHERE a.reference_number = NEW.reference_number
+               AND a.item_price IS NEW.item_price
+               AND a.check_column IS NEW.check_column)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+
+-- 15e. Audit log is append-only at the database level too (the revert RPC may only flip
+-- details, e.g. is_reverted; it never deletes).
+CREATE TRIGGER IF NOT EXISTS trg_audit_logs_no_delete
+BEFORE DELETE ON audit_logs
+BEGIN
+  SELECT RAISE(ABORT, 'Audit log entries cannot be deleted.');
+END;
+
+-- 15f. Archive is append-only: archived rows cannot be changed or removed.
+CREATE TRIGGER IF NOT EXISTS trg_tx_archive_no_update
+BEFORE UPDATE ON transactions_archive
+BEGIN
+  SELECT RAISE(ABORT, 'Archived transactions cannot be changed.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_tx_archive_no_delete
+BEFORE DELETE ON transactions_archive
+BEGIN
+  SELECT RAISE(ABORT, 'Archived transactions cannot be deleted.');
+END;

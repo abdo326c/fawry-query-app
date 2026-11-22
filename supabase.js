@@ -31,8 +31,27 @@ function setStoredToken(token) {
 const RETRY_DELAYS_MS = [200, 600, 1400];
 const TRANSIENT_HTTP_STATUSES = new Set([429, 502, 503, 504]);
 const TRANSIENT_MSG_RE = /locked|busy|timeout|econnreset|fetch failed/i;
+// For writes, only retry when the server certainly did NOT apply the request: rate-limited /
+// unavailable before running it, or SQLite refused the write because the database was locked.
+// A dropped connection, a gateway timeout (502/504) or a "timeout" error may come AFTER the
+// write committed, and re-sending it would insert audit rows, settlement runs or payments twice.
+const WRITE_SAFE_HTTP_STATUSES = new Set([429, 503]);
+const WRITE_SAFE_MSG_RE = /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i;
+const READ_ONLY_RPCS = new Set([
+  'get_dashboard_pivot', 'get_dashboard_pivot_by', 'get_dashboard_summary',
+  'get_distinct_transaction_values', 'get_keyset_bounds', 'get_unresolved_tx_count',
+  'get_student_master_version', 'get_database_storage_stats', 'detect_double_payments'
+]);
+
+export function isIdempotentRequest(path, payload) {
+  if (String(path).endsWith('/api/query')) return String(payload?.operation || 'select').toLowerCase() === 'select';
+  if (String(path).endsWith('/api/rpc')) return READ_ONLY_RPCS.has(payload?.fn);
+  if (String(path).endsWith('/api/auth')) return payload?.action === 'session';
+  return false;
+}
 
 async function apiFetch(path, payload) {
+  const idempotent = isIdempotentRequest(path, payload);
   const token = getStoredToken();
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -46,7 +65,7 @@ async function apiFetch(path, payload) {
     try {
       res = await fetch(url, { method: 'POST', headers, body });
     } catch (networkErr) {
-      if (attempt < RETRY_DELAYS_MS.length) {
+      if (idempotent && attempt < RETRY_DELAYS_MS.length) {
         const jitter = Math.floor(Math.random() * 80);
         await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt] + jitter));
         continue;
@@ -66,10 +85,9 @@ async function apiFetch(path, payload) {
     }
 
     const errMsg = json.error || `HTTP ${res.status}`;
-    const shouldRetry = attempt < RETRY_DELAYS_MS.length && (
-      TRANSIENT_HTTP_STATUSES.has(res.status) ||
-      (res.status === 500 && TRANSIENT_MSG_RE.test(errMsg))
-    );
+    const shouldRetry = attempt < RETRY_DELAYS_MS.length && (idempotent
+      ? (TRANSIENT_HTTP_STATUSES.has(res.status) || (res.status === 500 && TRANSIENT_MSG_RE.test(errMsg)))
+      : (WRITE_SAFE_HTTP_STATUSES.has(res.status) || (res.status === 500 && WRITE_SAFE_MSG_RE.test(errMsg))));
     if (shouldRetry) {
       const jitter = Math.floor(Math.random() * 80);
       await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt] + jitter));

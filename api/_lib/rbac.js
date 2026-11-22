@@ -12,22 +12,35 @@ export function roleLevel(role) {
 }
 
 export function hasMinRole(userRole, requiredRole) {
+  // An unknown/missing required role must never mean "anyone may do this".
+  if (!Object.prototype.hasOwnProperty.call(ROLE_LEVELS, String(requiredRole || '').toLowerCase())) {
+    return false;
+  }
   return roleLevel(userRole) >= roleLevel(requiredRole);
 }
+
+/** Operations accepted by /api/query. Anything else is rejected before the permission check. */
+export const QUERY_OPERATIONS = new Set(['select', 'insert', 'upsert', 'update', 'delete']);
+
+/** Marker for operations nobody may perform through /api/query (only server-side RPCs may). */
+export const NOBODY = 'nobody';
 
 /**
  * Allowed tables and their per-operation minimum role, matching PostgreSQL RLS policies.
  */
 export const TABLE_PERMISSIONS = {
   transactions:         { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
-  transactions_archive: { select: 'viewer', insert: 'admin',      update: 'admin',      delete: 'admin' },
+  // Append-only: rows are moved in by the archive RPC; nobody edits or deletes them.
+  transactions_archive: { select: 'viewer', insert: 'admin',      update: NOBODY,       delete: NOBODY },
   links:                { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   item_mappings:        { select: 'viewer', insert: 'accountant', update: 'accountant', delete: 'admin' },
   manual_fixes:         { select: 'viewer', insert: 'accountant', update: 'accountant', delete: 'admin' },
   student_master:       { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   payment_links:        { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   import_batches:       { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
-  audit_logs:           { select: 'viewer', insert: 'operator',   update: 'admin',      delete: 'admin' },
+  // Append-only: nobody may edit or delete audit history through the API (the revert RPC
+  // marks entries itself, server-side).
+  audit_logs:           { select: 'viewer', insert: 'operator',   update: NOBODY,       delete: NOBODY },
   foreign_transactions: { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   exchange_rates:       { select: 'viewer', insert: 'operator',   update: 'operator',   delete: 'admin' },
   settlement_batches:   { select: 'viewer', insert: 'operator',   update: 'accountant', delete: 'admin' },
@@ -159,15 +172,32 @@ export function assertTableAccess(user, table, operation) {
     err.status = 401;
     throw err;
   }
-  const reqRole = TABLE_PERMISSIONS[table][operation];
-  if (reqRole === 'self_or_viewer') {
+  if (!QUERY_OPERATIONS.has(operation)) {
+    const err = new Error(`Unsupported operation: ${operation}`);
+    err.status = 400;
+    throw err;
+  }
+  const perms = TABLE_PERMISSIONS[table];
+  // An upsert can both insert and overwrite rows, so it needs BOTH roles.
+  const required = operation === 'upsert' ? [perms.insert, perms.update] : [perms[operation]];
+
+  if (operation === 'select' && required[0] === 'self_or_viewer') {
     // Allowed for any authenticated user to read their own row (filtered in query.js if role < viewer)
     return;
   }
-  if (!hasMinRole(user.role, reqRole)) {
-    const err = new Error(`Access denied: requires ${reqRole} role for ${operation} on ${table}.`);
+  if (!user.isActive || operation !== 'select' && roleLevel(user.role) === 0) {
+    const err = new Error('Your account is not active.');
     err.status = 403;
     throw err;
+  }
+  for (const reqRole of required) {
+    if (!reqRole || reqRole === NOBODY || !hasMinRole(user.role, reqRole)) {
+      const err = new Error(reqRole === NOBODY
+        ? `Access denied: ${operation} on ${table} is not allowed.`
+        : `Access denied: requires ${reqRole || 'unknown'} role for ${operation} on ${table}.`);
+      err.status = 403;
+      throw err;
+    }
   }
 }
 
@@ -275,6 +305,9 @@ export function sanitizeAuditLogRow(user, row) {
   }
 
   const out = { ...row, user_email: user.email };
+  // The server assigns the id and timestamp: no overwriting existing entries, no backdating.
+  delete out.id;
+  delete out.created_at;
   if (!hasMinRole(user.role, 'accountant') && out.details && typeof out.details === 'object') {
     const cloned = { ...out.details };
     delete cloned.revert_data;

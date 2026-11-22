@@ -1,6 +1,6 @@
-import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
+import { getDb, readJsonBody, sendJson, withDbRetry, withDbWriteRetry } from './_lib/db.js';
 import { clearRoleCache, getAuthUser } from './_lib/auth.js';
-import { hasMinRole, resolveStudentLevelsBatch, roleLevel } from './_lib/rbac.js';
+import { assertPeriodsUnlocked, hasMinRole, resolveStudentLevelsBatch, roleLevel } from './_lib/rbac.js';
 
 const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
 
@@ -106,7 +106,7 @@ async function executeHygieneRollback(db, user, auditId) {
     ]
   });
 
-  await withDbRetry(() => db.batch(stmts, 'write'));
+  await withDbWriteRetry(() => db.batch(stmts, 'write'));
 
   return {
     success: true,
@@ -413,11 +413,21 @@ export default async function handler(req, res) {
           });
         }
 
+        // Closed accounting periods: refuse up front with a clear message (the DB trigger is the backstop).
+        const ids = stmts.map(s => s.args[s.args.length - 1]);
+        for (let i = 0; i < ids.length; i += 500) {
+          const slice = ids.slice(i, i + 500);
+          const datesRes = await withDbRetry(() => db.execute({
+            sql: `SELECT DISTINCT payment_date FROM transactions WHERE id IN (${slice.map(() => '?').join(', ')})`,
+            args: slice
+          }));
+          await assertPeriodsUnlocked(db, datesRes.rows.map(r => r.payment_date));
+        }
+
+        // One batch = one transaction: either every row is updated or none is.
         let updatedCount = 0;
-        const BATCH_SIZE = 200;
-        for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
-          const chunk = stmts.slice(i, i + BATCH_SIZE);
-          const results = await withDbRetry(() => db.batch(chunk, 'write'));
+        if (stmts.length > 0) {
+          const results = await withDbWriteRetry(() => db.batch(stmts, 'write'));
           for (const r of results) {
             updatedCount += r.rowsAffected || 0;
           }
@@ -449,7 +459,7 @@ export default async function handler(req, res) {
           args: [PRIMARY_ADMIN_EMAIL]
         });
 
-        const batchResults = await withDbRetry(() => db.batch(stmts, 'write'));
+        const batchResults = await withDbWriteRetry(() => db.batch(stmts, 'write'));
         let inserted = 0;
         for (let i = 0; i < authRes.rows.length; i++) {
           inserted += batchResults[i]?.rowsAffected || 0;
@@ -476,7 +486,7 @@ export default async function handler(req, res) {
         }
 
         const roleForInsert = targetEmail === PRIMARY_ADMIN_EMAIL ? 'admin' : 'viewer';
-        await withDbRetry(() => db.execute({
+        await withDbWriteRetry(() => db.execute({
           sql: `INSERT INTO user_roles (email, role, is_active, updated_by, updated_at)
                 VALUES (?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(email) DO UPDATE SET
@@ -512,7 +522,7 @@ export default async function handler(req, res) {
         if (targetEmail === user.email) {
           return sendJson(res, 400, { error: 'You cannot delete your own active Admin account' });
         }
-        const [, delAuth] = await withDbRetry(() => db.batch([
+        const [, delAuth] = await withDbWriteRetry(() => db.batch([
           { sql: 'DELETE FROM user_roles WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] },
           { sql: 'DELETE FROM app_users WHERE LOWER(TRIM(email)) = ?', args: [targetEmail] }
         ], 'write'));
@@ -534,7 +544,7 @@ export default async function handler(req, res) {
           return sendJson(res, 400, { error: 'Invalid period_month format. Expected YYYY-MM.' });
         }
 
-        await withDbRetry(() => db.batch([
+        await withDbWriteRetry(() => db.batch([
           {
             sql: `INSERT INTO closed_periods (period_month, is_closed, closed_by, closed_at, reopened_by, reopened_at, notes, updated_at)
                   VALUES (?, ?, CASE WHEN ? = 1 THEN ? ELSE NULL END, CASE WHEN ? = 1 THEN datetime('now') ELSE NULL END,
@@ -604,7 +614,10 @@ export default async function handler(req, res) {
           });
         }
 
-        const [insRes] = await withDbRetry(() => db.batch([
+        // One atomic batch. The period-lock bypass row is set and cleared inside it (archiving
+        // old, closed months is the point), so no other request ever sees it.
+        const [, insRes] = await withDbWriteRetry(() => db.batch([
+          { sql: 'INSERT OR IGNORE INTO period_lock_bypass (id) VALUES (1)', args: [] },
           {
             sql: `INSERT OR IGNORE INTO transactions_archive (
                     id, reference_number, payment_date, student_id, original_student_id,
@@ -627,11 +640,15 @@ export default async function handler(req, res) {
             args: [user.email, beforeDate]
           },
           {
+            // Only delete rows that really are in the archive now (a key collision in the
+            // archive used to make INSERT OR IGNORE skip a row that was then deleted anyway).
             sql: `DELETE FROM transactions
                   WHERE payment_date < ? AND COALESCE(is_settled, 0) = 1
-                    AND TRIM(COALESCE(erp_batch_number, '')) != ''`,
+                    AND TRIM(COALESCE(erp_batch_number, '')) != ''
+                    AND id IN (SELECT id FROM transactions_archive)`,
             args: [beforeDate]
           },
+          { sql: 'DELETE FROM period_lock_bypass', args: [] },
           {
             sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
             args: [
@@ -820,7 +837,7 @@ export default async function handler(req, res) {
             fixIdx = delStmts.length;
             delStmts.push({ sql: `DELETE FROM manual_fixes WHERE id IN (${ph})`, args: dupFixIds });
           }
-          const delRes = await withDbRetry(() => db.batch(delStmts, 'write'));
+          const delRes = await withDbWriteRetry(() => db.batch(delStmts, 'write'));
           if (mapIdx >= 0) cleanedMappings = delRes[mapIdx]?.rowsAffected || 0;
           if (fixIdx >= 0) cleanedFixes = delRes[fixIdx]?.rowsAffected || 0;
         }
@@ -849,7 +866,7 @@ export default async function handler(req, res) {
           }
         };
 
-        const insAudit = await withDbRetry(() => db.execute({
+        const insAudit = await withDbWriteRetry(() => db.execute({
           sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?) RETURNING id, created_at',
           args: [
             user.email,
@@ -1030,12 +1047,12 @@ export default async function handler(req, res) {
           args: [JSON.stringify(updatedDetails), auditId]
         });
 
-        const batchResults = await withDbRetry(() => db.batch(stmts, 'write'));
+        const batchResults = await withDbWriteRetry(() => db.batch(stmts, 'write'));
         for (const idx of batchClearIndices) {
           restored += batchResults[idx]?.rowsAffected || 0;
         }
 
-        await withDbRetry(() => db.execute({
+        await withDbWriteRetry(() => db.execute({
           sql: 'INSERT INTO audit_logs (user_email, action, affected_references, details) VALUES (?, ?, ?, ?)',
           args: [
             user.email,
@@ -1066,6 +1083,7 @@ export default async function handler(req, res) {
         return sendJson(res, 400, { error: `Unknown RPC function: ${fn}` });
     }
   } catch (err) {
-    return sendJson(res, err.status || 500, { error: err.message || 'RPC execution error' });
+    const guardHit = /Accounting period is closed|cannot be (deleted|changed)/i.test(String(err?.message || ''));
+    return sendJson(res, err.status || (guardHit ? 403 : 500), { error: err.message || 'RPC execution error' });
   }
 }

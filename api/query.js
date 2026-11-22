@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb, readJsonBody, sendJson, withDbRetry } from './_lib/db.js';
+import { getDb, readJsonBody, sendJson, withDbRetry, withDbWriteRetry } from './_lib/db.js';
 import { clearRoleCache, getAuthUser } from './_lib/auth.js';
 import {
   assertPeriodsUnlocked,
@@ -282,6 +282,46 @@ async function checkPeriodLockForRows(db, table, rows) {
   }
 }
 
+// Student-level propagation skips rows in closed accounting periods (as the Postgres version
+// did), so it neither rewrites closed-month UG/PG splits nor trips the period-lock trigger.
+const OPEN_PERIOD_TX = 'substr(payment_date, 1, 7) NOT IN (SELECT period_month FROM closed_periods WHERE is_closed = 1)';
+const OPEN_PERIOD_FTX = 'substr(COALESCE(value_date, transaction_date), 1, 7) NOT IN (SELECT period_month FROM closed_periods WHERE is_closed = 1)';
+const PROPAGATE_TX_LEVEL_SQL = `UPDATE transactions SET student_level = ? WHERE student_id = ? AND student_level IS NOT ? AND (payment_date IS NULL OR ${OPEN_PERIOD_TX})`;
+const PROPAGATE_FTX_LEVEL_SQL = `UPDATE foreign_transactions SET student_level = ? WHERE student_id = ? AND student_level IS NOT ? AND (COALESCE(value_date, transaction_date) IS NULL OR ${OPEN_PERIOD_FTX})`;
+
+/**
+ * An upsert can overwrite an EXISTING row, so the stored row's period must be open too
+ * (checkPeriodLockForRows only sees the incoming values).
+ */
+async function checkPeriodLockForConflictTargets(db, table, conflictCols, rows) {
+  const dateExpr = table === 'transactions'
+    ? 'payment_date'
+    : table === 'foreign_transactions' ? 'COALESCE(value_date, transaction_date)' : null;
+  if (!dateExpr || conflictCols.length === 0) return;
+  const keyed = rows.filter(r => conflictCols.every(c => r[c] !== undefined));
+  for (let i = 0; i < keyed.length; i += 100) {
+    const slice = keyed.slice(i, i + 100);
+    const args = [];
+    const terms = slice.map(r => {
+      for (const c of conflictCols) args.push(serializeValue(table, c, r[c]));
+      return `(${conflictCols.map(c => `${quoteIdent(c)} IS ?`).join(' AND ')})`;
+    });
+    const res = await withDbRetry(() => db.execute({
+      sql: `SELECT DISTINCT ${dateExpr} AS d FROM ${quoteIdent(table)} WHERE ${terms.join(' OR ')}`,
+      args
+    }));
+    await assertPeriodsUnlocked(db, res.rows.map(r => r.d));
+  }
+}
+
+/** Errors raised by the database guard triggers are permission errors, not server errors. */
+export function statusForDbError(err) {
+  if (err?.status) return err.status;
+  const msg = String(err?.message || '');
+  if (/Accounting period is closed|cannot be (deleted|changed)/i.test(msg)) return 403;
+  return 500;
+}
+
 async function checkPeriodLockForFilter(db, table, whereSql, args) {
   if (table === 'transactions') {
     const res = await db.execute({ sql: `SELECT DISTINCT payment_date FROM transactions ${whereSql}`, args });
@@ -290,11 +330,14 @@ async function checkPeriodLockForFilter(db, table, whereSql, args) {
     const res = await db.execute({ sql: `SELECT DISTINCT COALESCE(value_date, transaction_date) AS d FROM foreign_transactions ${whereSql}`, args });
     await assertPeriodsUnlocked(db, res.rows.map(r => r.d));
   } else if (table === 'manual_fixes') {
-    const res = await db.execute({
-      sql: `SELECT DISTINCT t.payment_date FROM transactions t INNER JOIN manual_fixes mf ON mf.reference_number = t.reference_number ${whereSql.replace(/\bWHERE\b/, 'WHERE')}`,
-      args
-    });
-    await assertPeriodsUnlocked(db, res.rows.map(r => r.payment_date));
+    // Sub-select so the filter columns refer to manual_fixes only (a JOIN made "reference_number",
+    // "id", "item_name", "mapping" ambiguous and every update/delete failed with a 500).
+    const sub = `SELECT reference_number FROM manual_fixes ${whereSql}`;
+    const res = await db.batch([
+      { sql: `SELECT DISTINCT payment_date AS d FROM transactions WHERE reference_number IN (${sub})`, args },
+      { sql: `SELECT DISTINCT COALESCE(value_date, transaction_date) AS d FROM foreign_transactions WHERE reference_number IN (${sub})`, args }
+    ], 'read');
+    await assertPeriodsUnlocked(db, [...res[0].rows, ...res[1].rows].map(r => r.d));
   }
 }
 
@@ -425,6 +468,9 @@ export default async function handler(req, res) {
       for (const c of onConflictCols) {
         assertValidColumn(table, c);
       }
+      if (operation === 'upsert' && !body.ignoreDuplicates) {
+        await checkPeriodLockForConflictTargets(db, table, onConflictCols, processedRows);
+      }
 
       const writeStmts = [];
       const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
@@ -466,17 +512,18 @@ export default async function handler(req, res) {
             if (/^9\d{6}$/.test(sid)) lvl = 'PG';
             else if (/^\d{9}$/.test(sid)) lvl = 'UG';
           }
-          writeStmts.push({ stmt: { sql: 'UPDATE transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] }, collectReturn: false });
-          writeStmts.push({ stmt: { sql: 'UPDATE foreign_transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] }, collectReturn: false });
+          writeStmts.push({ stmt: { sql: PROPAGATE_TX_LEVEL_SQL, args: [lvl, sid, lvl] }, collectReturn: false });
+          writeStmts.push({ stmt: { sql: PROPAGATE_FTX_LEVEL_SQL, args: [lvl, sid, lvl] }, collectReturn: false });
         }
       }
 
-      const BATCH_SIZE = 200;
-      for (let i = 0; i < writeStmts.length; i += BATCH_SIZE) {
-        const chunk = writeStmts.slice(i, i + BATCH_SIZE);
-        const results = await withDbRetry(() => db.batch(chunk.map(item => item.stmt), 'write'));
-        for (let j = 0; j < chunk.length; j++) {
-          if (chunk[j].collectReturn && results[j]?.rows?.length > 0) {
+      // One batch = one transaction: the whole request is saved, or nothing is. (It used to be
+      // split into 200-statement batches, so a failure could leave an import half-written
+      // while the UI reported the whole chunk as failed.)
+      if (writeStmts.length > 0) {
+        const results = await withDbWriteRetry(() => db.batch(writeStmts.map(item => item.stmt), 'write'));
+        for (let j = 0; j < writeStmts.length; j++) {
+          if (writeStmts[j].collectReturn && results[j]?.rows?.length > 0) {
             insertedRows.push(...results[j].rows.map(r => normalizeRow(table, r)));
           }
         }
@@ -526,7 +573,7 @@ export default async function handler(req, res) {
       const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
 
       const sql = `UPDATE ${quoteIdent(table)} SET ${setSql} ${whereSql} ${returningClause}`;
-      const result = await withDbRetry(() => db.execute({ sql, args: [...setArgs, ...whereArgs] }));
+      const result = await withDbWriteRetry(() => db.execute({ sql, args: [...setArgs, ...whereArgs] }));
       const rows = result.rows ? result.rows.map(r => normalizeRow(table, r)) : [];
 
       if (table === 'user_roles') {
@@ -547,12 +594,12 @@ export default async function handler(req, res) {
             if (/^9\d{6}$/.test(sid)) lvl = 'PG';
             else if (/^\d{9}$/.test(sid)) lvl = 'UG';
           }
-          propStmts.push({ sql: 'UPDATE transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
-          propStmts.push({ sql: 'UPDATE foreign_transactions SET student_level = ? WHERE student_id = ?', args: [lvl, sid] });
+          propStmts.push({ sql: PROPAGATE_TX_LEVEL_SQL, args: [lvl, sid, lvl] });
+          propStmts.push({ sql: PROPAGATE_FTX_LEVEL_SQL, args: [lvl, sid, lvl] });
         }
         for (let i = 0; i < propStmts.length; i += 200) {
           const slice = propStmts.slice(i, i + 200);
-          await withDbRetry(() => db.batch(slice, 'write'));
+          await withDbWriteRetry(() => db.batch(slice, 'write'));
         }
       }
 
@@ -572,7 +619,7 @@ export default async function handler(req, res) {
 
       const returningClause = body.returning ? `RETURNING ${parseColumns(table, body.returning)}` : '';
       const sql = `DELETE FROM ${quoteIdent(table)} ${whereSql} ${returningClause}`;
-      const result = await withDbRetry(() => db.execute({ sql, args: whereArgs }));
+      const result = await withDbWriteRetry(() => db.execute({ sql, args: whereArgs }));
       const rows = result.rows ? result.rows.map(r => normalizeRow(table, r)) : [];
 
       if (table === 'user_roles') {
@@ -584,6 +631,6 @@ export default async function handler(req, res) {
 
     return sendJson(res, 400, { error: `Unsupported operation: ${operation}` });
   } catch (err) {
-    return sendJson(res, err.status || 500, { error: err.message || 'Database query error' });
+    return sendJson(res, statusForDbError(err), { error: err.message || 'Database query error' });
   }
 }

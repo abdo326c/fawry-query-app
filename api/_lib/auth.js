@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 
-const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
+export const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 const ROLE_CACHE_TTL_MS = 30_000;
 const roleCache = new Map();
