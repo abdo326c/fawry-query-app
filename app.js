@@ -2706,21 +2706,33 @@ class App {
                 btn.disabled = true;
                 if (window.lucide) lucide.createIcons();
                 
+                let deleted = 0;
                 try {
-                    let deleted = 0;
+                    // The id list was built when duplicates were detected; re-check at delete time
+                    // that the row is still unsettled and not recorded in ERP, and count only the
+                    // rows the server actually deleted.
                     for (let i = 0; i < ids.length; i += 200) {
                         const chunk = ids.slice(i, i + 200);
-                        const { error } = await supabase.from('transactions').delete().in('id', chunk);
+                        const { data, error } = await supabase.from('transactions')
+                            .delete()
+                            .in('id', chunk)
+                            .or('is_settled.is.null,is_settled.eq.false')
+                            .is('erp_batch_number', null)
+                            .select('id');
                         if (error) throw error;
-                        deleted += chunk.length;
+                        deleted += Array.isArray(data) ? data.length : 0;
                     }
                     this.invalidateDistinctCache();
-                    Toast.show(`Successfully deleted ${deleted} duplicate transactions.`, 'success');
+                    const skipped = ids.length - deleted;
+                    Toast.show(skipped > 0
+                        ? `Deleted ${deleted} duplicate transaction(s); ${skipped} kept because they are settled, recorded in ERP or already gone.`
+                        : `Successfully deleted ${deleted} duplicate transactions.`, skipped > 0 ? 'warning' : 'success');
                     document.getElementById('modal-detect-duplicates').classList.add('hidden');
                     window.duplicateIdsToDelete = [];
                     if (this.loadTransactions) this.loadTransactions();
                 } catch(err) {
-                    Toast.show('Error deleting: ' + err.message, 'error');
+                    Toast.show(`Error deleting: ${err.message}${deleted > 0 ? ` (${deleted} duplicate(s) were already deleted before the error)` : ''}`, 'error');
+                    if (deleted > 0) this.invalidateDistinctCache();
                 } finally {
                     btn.innerHTML = originalText;
                     btn.disabled = false;

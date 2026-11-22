@@ -236,15 +236,24 @@ export async function assertPeriodsUnlocked(db, dates) {
 }
 
 /**
- * Classifies a student program string as 'PG' or 'UG' (mirrors schema.sql).
+ * Classifies a student program string as 'PG' or 'UG', or null when the program text does not
+ * say (callers then fall back to the student-ID pattern: 9xxxxxx = PG, 9 digits = UG).
+ * Same keyword rule as rules.js classifyProgramLevelKeywords() -- keep the two in sync
+ * (tests/money-erp-dashboard.test.js checks they agree). An unknown program is NOT guessed:
+ * the old code silently called every unrecognised program UG while the UI called it PG.
  */
 export function classifyProgramStudentLevel(program) {
-  if (!program || !String(program).trim()) return null;
-  const p = String(program);
-  if (/(^|[^a-z])(pg|post\s*grad|graduate|master|msc|mba|phd|doctorate|diploma)([^a-z]|$)/i.test(p)) {
-    return 'PG';
-  }
-  return 'UG';
+  const prog = String(program ?? '').trim();
+  if (!prog) return null;
+  if (prog === 'UG' || prog === '(UG)' || /^\(UG\)(?![a-z0-9_])/i.test(prog)) return 'UG';
+  if (prog === 'PG' || prog === '(PG)' || /^\(PG\)(?![a-z0-9_])/i.test(prog)) return 'PG';
+  const cleanProg = prog.replace(/^\((?:UG|PG)\)\s*/i, '');
+  const primarySegment = cleanProg.split('/')[0].trim();
+  if (/^(graduate|postgraduate|post\s*grad|diploma|phd|doctorate|master|msc|mba|pg)\b/i.test(primarySegment)) return 'PG';
+  if (/^(undergraduate|undergrad|bachelor|ug)\b/i.test(primarySegment)) return 'UG';
+  if (/\b(undergraduate|undergrad|bachelor|ug)\b/i.test(cleanProg)) return 'UG';
+  if (/\b(postgraduate|post\s*grad|graduate|masters?|msc|mba|phd|doctorate|diploma|pg)\b/i.test(cleanProg)) return 'PG';
+  return null;
 }
 
 /**

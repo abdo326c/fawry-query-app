@@ -26,20 +26,129 @@ function isIsoDate(value) {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
 
-const EXEMPT_MAPPING_SQL = `(
-  LOWER(TRIM(COALESCE(mapping, ''))) = 'dip'
-  OR LOWER(COALESCE(mapping, '')) LIKE 'dip %'
-  OR LOWER(COALESCE(mapping, '')) LIKE '% dip'
-  OR LOWER(COALESCE(mapping, '')) LIKE '% dip %'
-  OR LOWER(COALESCE(mapping, '')) LIKE '%diploma%'
-  OR LOWER(COALESCE(mapping, '')) LIKE '%workshop%'
-  OR LOWER(TRIM(COALESCE(second_mapping, ''))) = 'dip'
-  OR LOWER(COALESCE(second_mapping, '')) LIKE 'dip %'
-  OR LOWER(COALESCE(second_mapping, '')) LIKE '% dip'
-  OR LOWER(COALESCE(second_mapping, '')) LIKE '% dip %'
-  OR LOWER(COALESCE(second_mapping, '')) LIKE '%diploma%'
-  OR LOWER(COALESCE(second_mapping, '')) LIKE '%workshop%'
+// Same rule as rules.js isIdValidationExempt(): the label contains the WORD dip / diploma /
+// workshop / workshops (JS /\b(dip|diploma|workshops?)\b/). SQLite has no regex, so the word
+// boundary is expressed with GLOB character classes: the token must be preceded and followed by
+// the string edge or a non-word character ([^a-z0-9_], which -- like JS \b -- also treats
+// non-ASCII characters as non-word). Kept in sync with app-utils.js SUPABASE_EXEMPT_OR_FILTER
+// by tests/money-erp-dashboard.test.js.
+const EXEMPT_LABEL_TOKENS = ['dip', 'diploma', 'workshop', 'workshops'];
+function exemptWordMatchSql(col) {
+  const v = `LOWER(COALESCE(${col}, ''))`;
+  const nw = '[^a-z0-9_]';
+  return EXEMPT_LABEL_TOKENS.map(t =>
+    `${v} = '${t}' OR ${v} GLOB '${t}${nw}*' OR ${v} GLOB '*${nw}${t}' OR ${v} GLOB '*${nw}${t}${nw}*'`
+  ).join('\n  OR ');
+}
+export const EXEMPT_MAPPING_SQL = `(
+  ${exemptWordMatchSql('mapping')}
+  OR ${exemptWordMatchSql('second_mapping')}
 )`;
+
+/**
+ * Statements that undo an "ERP References Recorded" audit entry. Only the ids / references the
+ * entry recorded are cleared (new entries: revert_data.stamped_ids / stamped_refs; older entries:
+ * previous_rows), and -- when the entry names its batch -- only while they still carry that batch,
+ * so rows another recording stamped with the same batch number are left alone.
+ * countIndices are the statements whose rowsAffected make up the restored count.
+ */
+export function buildErpRevertStatements(tbl, revertData = {}) {
+  const table = tbl === 'foreign_transactions_erp' ? 'foreign_transactions' : 'transactions';
+  const batchNum = String(revertData.batch_number || '').trim();
+  const stmts = [];
+  const countIndices = [];
+  const guard = batchNum ? ' AND erp_batch_number = ?' : '';
+  const guardArgs = batchNum ? [batchNum] : [];
+  const pushInChunks = (column, keys, setSql, setArgs) => {
+    for (let i = 0; i < keys.length; i += 400) {
+      const slice = keys.slice(i, i + 400);
+      countIndices.push(stmts.length);
+      stmts.push({
+        sql: `UPDATE ${table} SET ${setSql} WHERE ${column} IN (${slice.map(() => '?').join(', ')})${guard}`,
+        args: [...setArgs, ...slice, ...guardArgs]
+      });
+    }
+  };
+
+  const stampedIds = Array.isArray(revertData.stamped_ids) ? revertData.stamped_ids : null;
+  const stampedRefs = Array.isArray(revertData.stamped_refs) ? revertData.stamped_refs : null;
+  if (stampedIds && table === 'transactions') {
+    const ids = stampedIds.map(Number).filter(Number.isFinite);
+    pushInChunks('id', ids, 'erp_batch_number = NULL, erp_voucher = NULL', []);
+    return { stmts, countIndices };
+  }
+  if (stampedRefs || (stampedIds && table === 'foreign_transactions')) {
+    const refs = (stampedRefs || stampedIds).map(r => String(r ?? '').trim()).filter(Boolean);
+    pushInChunks('reference_number', refs, 'erp_batch_number = NULL, erp_voucher = NULL', []);
+    return { stmts, countIndices };
+  }
+
+  // Legacy entries: restore each recorded row to its previous values.
+  for (const prev of (revertData.previous_rows || [])) {
+    const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
+    const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
+    if (table === 'transactions' && prev.id !== undefined && prev.id !== null) {
+      countIndices.push(stmts.length);
+      stmts.push({
+        sql: `UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE id = ?${guard}`,
+        args: [batchVal, voucherVal, Number(prev.id), ...guardArgs]
+      });
+    } else if (prev.reference_number) {
+      countIndices.push(stmts.length);
+      stmts.push({
+        sql: `UPDATE ${table} SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?${guard}`,
+        args: [batchVal, voucherVal, prev.reference_number, ...guardArgs]
+      });
+    }
+  }
+  return { stmts, countIndices };
+}
+
+/**
+ * Splits one student/item/price group into clusters of payments whose CONSECUTIVE payment
+ * dates are at most `daysWindow` days apart (rows sorted by date ascending).
+ */
+export function clusterDoublePaymentRows(rows, daysWindow) {
+  const dayMs = 86400000;
+  const toDay = d => Math.floor(new Date(String(d).slice(0, 10) + 'T00:00:00Z').getTime() / dayMs);
+  const sorted = [...rows].sort((a, b) => String(a.payment_date).localeCompare(String(b.payment_date)));
+  const clusters = [];
+  let current = [];
+  let prevDay = null;
+  for (const r of sorted) {
+    const day = toDay(r.payment_date);
+    if (current.length > 0 && (!Number.isFinite(day) || !Number.isFinite(prevDay) || day - prevDay > daysWindow)) {
+      clusters.push(current);
+      current = [];
+    }
+    current.push(r);
+    prevDay = day;
+  }
+  if (current.length > 0) clusters.push(current);
+  return clusters;
+}
+
+/**
+ * The period of equal length immediately before [startDate, endDate] (inclusive, YYYY-MM-DD),
+ * or null when the dates are not valid.
+ */
+export function previousPeriodRange(startDate, endDate) {
+  const parse = d => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ''));
+    if (!m) return null;
+    const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return Number.isFinite(t) ? t : null;
+  };
+  const s = parse(startDate);
+  const e = parse(endDate);
+  if (s === null || e === null || e < s) return null;
+  const dayMs = 86400000;
+  const lengthDays = Math.round((e - s) / dayMs) + 1;
+  const prevEnd = s - dayMs;
+  const prevStart = prevEnd - (lengthDays - 1) * dayMs;
+  const fmt = t => new Date(t).toISOString().slice(0, 10);
+  return { start_date: fmt(prevStart), end_date: fmt(prevEnd) };
+}
 
 function requireRole(user, minRole, actionDesc) {
   if (!user) {
@@ -185,7 +294,7 @@ export default async function handler(req, res) {
         requireRole(user, 'viewer', 'view dashboard pivot');
         const { start_date, end_date } = args;
         const result = await withDbRetry(() => db.execute({
-          sql: `SELECT payment_date, bank, COALESCE(SUM(item_price), 0) AS daily_total
+          sql: `SELECT payment_date, bank, ROUND(COALESCE(SUM(item_price), 0), 2) AS daily_total
                 FROM transactions
                 WHERE payment_date >= ? AND payment_date <= ?
                 GROUP BY payment_date, bank
@@ -208,7 +317,7 @@ export default async function handler(req, res) {
         }
 
         const result = await withDbRetry(() => db.execute({
-          sql: `SELECT ${groupExpr} AS group_key, bank, COALESCE(SUM(item_price), 0) AS total_amount
+          sql: `SELECT ${groupExpr} AS group_key, bank, ROUND(COALESCE(SUM(item_price), 0), 2) AS total_amount
                 FROM transactions
                 WHERE payment_date >= ? AND payment_date <= ?
                 GROUP BY 1, bank
@@ -235,32 +344,43 @@ export default async function handler(req, res) {
           return sendJson(res, 400, { error: `Invalid group_col for dashboard summary: ${groupCol}` });
         }
 
-        const whereClauses = ['payment_date >= ?', 'payment_date <= ?'];
-        const whereArgs = [startDate, endDate];
+        // Filters other than the date range, shared by the current and the prior period.
+        const filterClauses = [];
+        const filterArgs = [];
         if (banks) {
-          whereClauses.push(`bank IN (${banks.map(() => '?').join(', ')})`);
-          whereArgs.push(...banks);
+          filterClauses.push(`bank IN (${banks.map(() => '?').join(', ')})`);
+          filterArgs.push(...banks);
         }
         if (statusFilter === 'valid') {
-          whereClauses.push(`(id_status IN ('Valid', 'Exempt') OR ${EXEMPT_MAPPING_SQL})`);
+          filterClauses.push(`(id_status IN ('Valid', 'Exempt') OR ${EXEMPT_MAPPING_SQL})`);
         } else if (statusFilter === 'invalid') {
-          whereClauses.push(`(COALESCE(id_status, '') NOT IN ('Valid', 'Exempt') AND NOT (${EXEMPT_MAPPING_SQL}))`);
+          filterClauses.push(`(COALESCE(id_status, '') NOT IN ('Valid', 'Exempt') AND NOT (${EXEMPT_MAPPING_SQL}))`);
         } else if (statusFilter === 'settled') {
-          whereClauses.push('COALESCE(is_settled, 0) = 1');
+          filterClauses.push('COALESCE(is_settled, 0) = 1');
         } else if (statusFilter === 'unsettled') {
-          whereClauses.push('COALESCE(is_settled, 0) = 0');
+          filterClauses.push('COALESCE(is_settled, 0) = 0');
         } else if (statusFilter === 'erp_recorded') {
-          whereClauses.push("TRIM(COALESCE(erp_batch_number, '')) != ''");
+          filterClauses.push("TRIM(COALESCE(erp_batch_number, '')) != ''");
         } else if (statusFilter === 'erp_unposted') {
-          whereClauses.push("TRIM(COALESCE(erp_batch_number, '')) = ''");
+          filterClauses.push("TRIM(COALESCE(erp_batch_number, '')) = ''");
         }
+        const buildWhere = (from, to) => ({
+          sql: `WHERE ${['payment_date >= ?', 'payment_date <= ?', ...filterClauses].join(' AND ')}`,
+          args: [from, to, ...filterArgs]
+        });
+        const cur = buildWhere(startDate, endDate);
+        const whereSql = cur.sql;
+        const whereArgs = cur.args;
+        const prevRange = previousPeriodRange(startDate, endDate);
 
-        const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
-        const [kpiRes, pivotRes, catRes] = await withDbRetry(() => db.batch([
+        const stmts = [
           {
+            // Exempt = not Valid, but id_status 'Exempt' or a Dip/Diploma/Workshop mapping
+            // (same precedence as rules.js getEffectiveIdStatus: Valid wins).
             sql: `SELECT
                     COUNT(*) AS total_count,
                     SUM(CASE WHEN id_status = 'Valid' THEN 1 ELSE 0 END) AS valid_count,
+                    SUM(CASE WHEN COALESCE(id_status, '') != 'Valid' AND (id_status = 'Exempt' OR ${EXEMPT_MAPPING_SQL}) THEN 1 ELSE 0 END) AS exempt_count,
                     SUM(CASE WHEN COALESCE(is_settled, 0) = 1 THEN 1 ELSE 0 END) AS settled_count,
                     SUM(CASE WHEN TRIM(COALESCE(erp_batch_number, '')) != '' THEN 1 ELSE 0 END) AS erp_count,
                     SUM(CASE WHEN TRIM(COALESCE(mapping, '')) = '' THEN 1 ELSE 0 END) AS unmapped_count
@@ -268,27 +388,50 @@ export default async function handler(req, res) {
             args: whereArgs
           },
           {
-            sql: `SELECT ${groupExpr} AS group_key, bank, COALESCE(SUM(item_price), 0) AS total_amount
+            sql: `SELECT ${groupExpr} AS group_key, bank, ROUND(COALESCE(SUM(item_price), 0), 2) AS total_amount
                   FROM transactions ${whereSql}
                   GROUP BY 1, bank
                   ORDER BY 1, bank`,
             args: whereArgs
           },
           {
-            sql: `SELECT COALESCE(NULLIF(TRIM(mapping), ''), 'Unmapped') AS group_key, COALESCE(SUM(item_price), 0) AS total_amount
+            sql: `SELECT COALESCE(NULLIF(TRIM(mapping), ''), 'Unmapped') AS group_key, ROUND(COALESCE(SUM(item_price), 0), 2) AS total_amount
                   FROM transactions ${whereSql}
                   GROUP BY 1
                   ORDER BY 2 DESC`,
             args: whereArgs
+          },
+          {
+            sql: `SELECT
+                    SUM(CASE WHEN student_level = 'UG' THEN 1 ELSE 0 END) AS ug_count,
+                    ROUND(COALESCE(SUM(CASE WHEN student_level = 'UG' THEN item_price END), 0), 2) AS ug_total,
+                    SUM(CASE WHEN student_level = 'PG' THEN 1 ELSE 0 END) AS pg_count,
+                    ROUND(COALESCE(SUM(CASE WHEN student_level = 'PG' THEN item_price END), 0), 2) AS pg_total,
+                    SUM(CASE WHEN COALESCE(student_level, '') NOT IN ('UG', 'PG') THEN 1 ELSE 0 END) AS unknown_count,
+                    ROUND(COALESCE(SUM(CASE WHEN COALESCE(student_level, '') NOT IN ('UG', 'PG') THEN item_price END), 0), 2) AS unknown_total
+                  FROM transactions ${whereSql}`,
+            args: whereArgs
           }
-        ], 'read'));
+        ];
+        if (prevRange) {
+          const prev = buildWhere(prevRange.start_date, prevRange.end_date);
+          stmts.push({
+            sql: `SELECT COUNT(*) AS total_count, ROUND(COALESCE(SUM(item_price), 0), 2) AS total_egp
+                  FROM transactions ${prev.sql}`,
+            args: prev.args
+          });
+        }
+        const [kpiRes, pivotRes, catRes, levelRes, prevRes] = await withDbRetry(() => db.batch(stmts, 'read'));
 
         const kpiRow = kpiRes.rows[0] || {};
+        const lvlRow = levelRes.rows[0] || {};
+        const prevRow = prevRes?.rows?.[0] || null;
         return sendJson(res, 200, {
           data: {
             kpis: {
               total_count: Number(kpiRow.total_count || 0),
               valid_count: Number(kpiRow.valid_count || 0),
+              exempt_count: Number(kpiRow.exempt_count || 0),
               settled_count: Number(kpiRow.settled_count || 0),
               erp_count: Number(kpiRow.erp_count || 0),
               unmapped_count: Number(kpiRow.unmapped_count || 0)
@@ -301,7 +444,21 @@ export default async function handler(req, res) {
             categories: catRes.rows.map(r => ({
               group_key: String(r.group_key ?? 'Unmapped'),
               total_amount: Number(r.total_amount || 0)
-            }))
+            })),
+            levels: {
+              ug_count: Number(lvlRow.ug_count || 0),
+              ug_total: Number(lvlRow.ug_total || 0),
+              pg_count: Number(lvlRow.pg_count || 0),
+              pg_total: Number(lvlRow.pg_total || 0),
+              unknown_count: Number(lvlRow.unknown_count || 0),
+              unknown_total: Number(lvlRow.unknown_total || 0)
+            },
+            prev_period: prevRange && prevRow ? {
+              start_date: prevRange.start_date,
+              end_date: prevRange.end_date,
+              total_count: Number(prevRow.total_count || 0),
+              total_egp: Number(prevRow.total_egp || 0)
+            } : null
           }
         });
       }
@@ -448,9 +605,12 @@ export default async function handler(req, res) {
           if (!item || item.id === undefined || item.id === null) continue;
           const sid = item.student_id ? String(item.student_id).trim() : '';
           const lvl = sid ? (levelMap.get(sid) ?? null) : null;
+          // Same student: keep the stored level if the new lookup finds none. A DIFFERENT
+          // student: take the new student's level, or NULL -- never the previous student's level.
           stmts.push({
             sql: `UPDATE transactions
-                  SET student_id = ?, item_name = ?, mapping = ?, second_mapping = ?, id_status = ?, student_level = COALESCE(?, student_level)
+                  SET student_id = ?, item_name = ?, mapping = ?, second_mapping = ?, id_status = ?,
+                      student_level = CASE WHEN TRIM(COALESCE(student_id, '')) = ? THEN COALESCE(?, student_level) ELSE ? END
                   WHERE id = ?`,
             args: [
               item.student_id ?? null,
@@ -458,6 +618,8 @@ export default async function handler(req, res) {
               item.mapping ?? null,
               item.second_mapping ?? null,
               item.id_status ?? null,
+              sid,
+              lvl,
               lvl,
               Number(item.id)
             ]
@@ -754,7 +916,9 @@ export default async function handler(req, res) {
 
       case 'detect_double_payments': {
         requireRole(user, 'viewer', 'detect double payments');
-        const daysWindow = Math.max(0, Number(args.p_days_window ?? 3));
+        // NaN / Infinity / negative used to disable or break the filter: clamp to 0..365 days.
+        const rawWindow = Number(args.p_days_window ?? 3);
+        const daysWindow = Number.isFinite(rawWindow) ? Math.min(365, Math.max(0, Math.floor(rawWindow))) : 3;
         const rowsRes = await withDbRetry(() => db.execute({
           sql: `SELECT
                   t.id, t.student_id, t.item_name, t.mapping, t.item_price,
@@ -793,31 +957,31 @@ export default async function handler(req, res) {
 
         const results = [];
         for (const g of groups.values()) {
-          const distinctRefs = new Set(g.rows.map(r => r.reference_number));
-          if (distinctRefs.size <= 1) continue;
-
-          const dates = g.rows.map(r => String(r.payment_date)).sort();
-          const firstDate = dates[0];
-          const lastDate = dates[dates.length - 1];
-          const daysApart = Math.round((new Date(lastDate).getTime() - new Date(firstDate).getTime()) / 86400000);
-          if (daysApart > daysWindow) continue;
-
-          const totalAmount = g.rows.reduce((sum, r) => sum + Number(r.item_price || 0), 0);
-          results.push({
-            student_id: g.student_id,
-            student_name: g.student_name,
-            faculty: g.faculty,
-            item_name: g.item_name,
-            mapping: g.mapping,
-            item_price: g.item_price,
-            occurrences: distinctRefs.size,
-            total_amount: totalAmount,
-            first_date: firstDate,
-            last_date: lastDate,
-            reference_numbers: g.rows.map(r => String(r.reference_number)),
-            banks: g.rows.map(r => String(r.bank || '')),
-            settled_flags: g.rows.map(r => Boolean(r.is_settled))
-          });
+          if (new Set(g.rows.map(r => r.reference_number)).size <= 1) continue;
+          // Compare CONSECUTIVE payment dates: a group spanning longer than the window (e.g. a
+          // student paying the same fee every term) can still contain a real double payment
+          // made a day apart, and payments far apart must not be chained into one cluster.
+          for (const cluster of clusterDoublePaymentRows(g.rows, daysWindow)) {
+            const distinctRefs = new Set(cluster.map(r => r.reference_number));
+            if (distinctRefs.size <= 1) continue;
+            const totalAmount = cluster.reduce((sum, r) => sum + Number(r.item_price || 0), 0);
+            results.push({
+              student_id: g.student_id,
+              student_name: g.student_name,
+              faculty: g.faculty,
+              item_name: g.item_name,
+              mapping: g.mapping,
+              item_price: g.item_price,
+              occurrences: distinctRefs.size,
+              total_amount: Math.round(totalAmount * 100) / 100,
+              first_date: String(cluster[0].payment_date),
+              last_date: String(cluster[cluster.length - 1].payment_date),
+              // Newest first, as before
+              reference_numbers: [...cluster].reverse().map(r => String(r.reference_number)),
+              banks: [...cluster].reverse().map(r => String(r.bank || '')),
+              settled_flags: [...cluster].reverse().map(r => Boolean(r.is_settled))
+            });
+          }
         }
 
         results.sort((a, b) => b.last_date.localeCompare(a.last_date) || b.total_amount - a.total_amount);
@@ -1083,54 +1247,12 @@ export default async function handler(req, res) {
               restored++;
             }
           }
-        } else if (tbl === 'transactions_erp') {
-          for (const prev of (revertData.previous_rows || [])) {
-            const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
-            const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
-            if (prev.id !== undefined && prev.id !== null) {
-              stmts.push({
-                sql: 'UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE id = ?',
-                args: [batchVal, voucherVal, Number(prev.id)]
-              });
-            } else if (prev.reference_number) {
-              stmts.push({
-                sql: 'UPDATE transactions SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?',
-                args: [batchVal, voucherVal, prev.reference_number]
-              });
-            }
-            restored++;
-          }
-          const batchNum = String(revertData.batch_number || '').trim();
-          if (batchNum) {
-            batchClearIndices.push(stmts.length);
-            stmts.push({
-              sql: 'UPDATE transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
-              args: [batchNum]
-            });
-            batchClearIndices.push(stmts.length);
-            stmts.push({
-              sql: 'UPDATE foreign_transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
-              args: [batchNum]
-            });
-          }
-        } else if (tbl === 'foreign_transactions_erp') {
-          for (const prev of (revertData.previous_rows || [])) {
-            const batchVal = prev.erp_batch_number ? String(prev.erp_batch_number) : null;
-            const voucherVal = prev.erp_voucher ? String(prev.erp_voucher) : null;
-            stmts.push({
-              sql: 'UPDATE foreign_transactions SET erp_batch_number = ?, erp_voucher = ? WHERE reference_number = ?',
-              args: [batchVal, voucherVal, prev.reference_number]
-            });
-            restored++;
-          }
-          const batchNum = String(revertData.batch_number || '').trim();
-          if (batchNum) {
-            batchClearIndices.push(stmts.length);
-            stmts.push({
-              sql: 'UPDATE foreign_transactions SET erp_batch_number = NULL, erp_voucher = NULL WHERE erp_batch_number = ?',
-              args: [batchNum]
-            });
-          }
+        } else if (tbl === 'transactions_erp' || tbl === 'foreign_transactions_erp') {
+          // Revert ONLY the rows this audit entry stamped (never every row carrying the batch
+          // number: another recording may share it), and only while they still carry this batch.
+          const built = buildErpRevertStatements(tbl, revertData);
+          stmts.push(...built.stmts);
+          batchClearIndices.push(...built.countIndices);
         } else {
           return sendJson(res, 200, {
             data: {

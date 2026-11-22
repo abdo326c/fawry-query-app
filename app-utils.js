@@ -69,7 +69,34 @@ export function renderIcons(root = null) {
     }
 }
 
-export const SUPABASE_EXEMPT_OR_FILTER = 'id_status.eq.Exempt,mapping.ilike.Dip,mapping.ilike.Dip *,mapping.ilike.Diploma*,mapping.ilike.*Workshop*,second_mapping.ilike.Dip,second_mapping.ilike.Dip *,second_mapping.ilike.Diploma*,second_mapping.ilike.*Workshop*';
+/**
+ * Server-side (PostgREST-style .or()) twin of rules.js isIdValidationExempt():
+ * a mapping / second_mapping is exempt when it contains the WORD dip, diploma, workshop or
+ * workshops (rules.js uses /\b(dip|diploma|workshops?)\b/). The filter syntax has no word
+ * boundaries, so every "token delimited by a separator or the string edge" form is enumerated
+ * for the separators below. api/rpc.js EXEMPT_MAPPING_SQL implements the same rule in SQL; a test
+ * (tests/money-erp-dashboard.test.js) keeps the three definitions in agreement.
+ * ("PG Diploma" and "Dip-Workshop" are exempt; "Diplomacy" and "Workshop2026" are not.)
+ */
+export const EXEMPT_LABEL_TOKENS = Object.freeze(['dip', 'diploma', 'workshop', 'workshops']);
+export const EXEMPT_FILTER_SEPARATORS = Object.freeze([' ', '-', '/', '.', '&']);
+
+export function buildExemptOrFilter(columns = ['mapping', 'second_mapping']) {
+    const terms = ['id_status.eq.Exempt'];
+    for (const col of columns) {
+        for (const t of EXEMPT_LABEL_TOKENS) {
+            terms.push(`${col}.ilike.${t}`);
+            for (const s of EXEMPT_FILTER_SEPARATORS) terms.push(`${col}.ilike.${t}${s}*`);
+            for (const s of EXEMPT_FILTER_SEPARATORS) terms.push(`${col}.ilike.*${s}${t}`);
+            for (const a of EXEMPT_FILTER_SEPARATORS) {
+                for (const b of EXEMPT_FILTER_SEPARATORS) terms.push(`${col}.ilike.*${a}${t}${b}*`);
+            }
+        }
+    }
+    return terms.join(',');
+}
+
+export const SUPABASE_EXEMPT_OR_FILTER = buildExemptOrFilter();
 
 /**
  * Returns normalized display metadata for a transaction's Student ID status badge.

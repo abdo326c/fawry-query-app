@@ -798,16 +798,22 @@ class MappingsFixesUiMixin {
         // Save Fix (with live ID validation, duplicate protection, reference rename cleanup, and Save & Next Issue)
         const btnSaveFix = document.getElementById('btn-save-fix');
         const btnSaveFixNext = document.getElementById('btn-save-fix-next');
+        // References already handled by "Save & Next Issue" in this session (fixed, or left
+        // unchanged because settled / ERP-recorded). Never offered again by Save & Next, so the
+        // queue cannot loop back to a locked or skipped row. ("Fix" buttons still open them.)
+        if (!(this.fixNextVisitedRefs instanceof Set)) this.fixNextVisitedRefs = new Set();
         const findNextUnresolvedRef = (excludeRef) => {
             const excl = String(excludeRef || '').trim();
+            const visited = this.fixNextVisitedRefs;
+            const isCandidate = (ref, tx) => ref && ref !== excl && !visited.has(ref) && !(tx && isNonInvalidTransaction(tx));
             if (this.unresolvedTxByRef instanceof Map && this.unresolvedTxByRef.size > 0) {
-                for (const [candidateRef] of this.unresolvedTxByRef.entries()) {
-                    if (candidateRef && candidateRef !== excl) return candidateRef;
+                for (const [candidateRef, tx] of this.unresolvedTxByRef.entries()) {
+                    if (isCandidate(candidateRef, tx)) return candidateRef;
                 }
             }
             for (const tx of (this.currentPageTransactions || [])) {
                 const r = String(tx?.reference_number || '').trim();
-                if (r && r !== excl && !isNonInvalidTransaction(tx)) return r;
+                if (isCandidate(r, tx)) return r;
             }
             return null;
         };
@@ -949,7 +955,7 @@ class MappingsFixesUiMixin {
                 if (lockedSkipped > 0) summaryMsg += ` ${lockedSkipped} settled/ERP-recorded transaction(s) left unchanged.`;
 
                 Toast.show(`Manual fix saved. ${summaryMsg}`, 'success');
-                const nextUnresolvedRef = openNext ? findNextUnresolvedRef(ref) : null;
+                if (openNext) this.fixNextVisitedRefs.add(ref);
                 document.getElementById('modal-fix').classList.add('hidden');
                 this.resetFixModal();
 
@@ -971,6 +977,9 @@ class MappingsFixesUiMixin {
                 }
 
                 if (openNext) {
+                    // Picked AFTER the unresolved list was synced, so rows that just became
+                    // Valid / Exempt are gone and the saved (or skipped) reference is excluded.
+                    const nextUnresolvedRef = findNextUnresolvedRef(ref);
                     if (nextUnresolvedRef) {
                         await this.openQuickFixForRef(nextUnresolvedRef);
                     } else {
@@ -2061,19 +2070,13 @@ class MappingsFixesUiMixin {
             if (!tx || !tx.reference_number) continue;
             const refKey = String(tx.reference_number).trim();
             const updatedFields = changeById.get(tx.id);
-            const newStatus = updatedFields ? updatedFields.id_status : tx.id_status;
-            const newStudentId = updatedFields ? updatedFields.student_id : tx.student_id;
-            const newItemName = updatedFields ? updatedFields.item_name : tx.item_name;
+            const merged = { ...tx, ...(updatedFields || {}) };
 
-            if (newStatus === 'Valid') {
+            // Valid OR Exempt (e.g. a fix that maps the item to Dip / Workshop) is resolved.
+            if (isNonInvalidTransaction(merged)) {
                 if (this.unresolvedTxByRef.delete(refKey)) mutated = true;
             } else {
-                this.unresolvedTxByRef.set(refKey, {
-                    ...tx,
-                    student_id: newStudentId,
-                    item_name: newItemName,
-                    id_status: newStatus
-                });
+                this.unresolvedTxByRef.set(refKey, merged);
                 mutated = true;
             }
         }
