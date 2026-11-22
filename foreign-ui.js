@@ -17,6 +17,8 @@ import {
     parseBankStatementGrid,
     parseBanqueMisrPdfText,
     reconstructBanqueMisrPdfLinesFromPages,
+    analyzeBanqueMisrPdfLayout,
+    pairStatementFiles,
     matchForeignDepositsToStudents,
     normalizePersonName,
     DEFAULT_FOREIGN_BANK,
@@ -674,14 +676,17 @@ class ForeignUiMixin {
             pagesItems.push(items);
         }
 
-        return reconstructBanqueMisrPdfLinesFromPages(pagesItems);
+        return {
+            text: reconstructBanqueMisrPdfLinesFromPages(pagesItems),
+            layout: analyzeBanqueMisrPdfLayout(pagesItems)
+        };
     }
 
     async parseSingleForeignStatementFile(file) {
         const name = String(file.name || '').toLowerCase();
         if (name.endsWith('.pdf')) {
-            const pdfText = await this.extractTextFromPdfFile(file);
-            return parseBanqueMisrPdfText(pdfText);
+            const { text, layout } = await this.extractTextFromPdfFile(file);
+            return parseBanqueMisrPdfText(text, layout);
         }
         if (name.endsWith('.csv')) {
             return new Promise((resolve, reject) => {
@@ -712,12 +717,20 @@ class ForeignUiMixin {
             let combinedTreasury = [];
             let lastMeta = {};
 
+            const parsedFiles = [];
             for (const file of files) {
                 const parsed = await this.parseSingleForeignStatementFile(file);
-                lastMeta = parsed.metadata || lastMeta;
-                combinedDeposits.push(...(parsed.deposits || []));
-                combinedReversals.push(...(parsed.excludedReversals || []));
-                combinedTreasury.push(...(parsed.excludedTreasury || []));
+                parsedFiles.push({ name: file.name, isPdf: /\.pdf$/i.test(file.name), parsed });
+            }
+
+            // The Excel/CSV statement is the data (exact cells). A PDF of the same account and period
+            // is only used to cross-check it; a PDF without its Excel is imported with a warning.
+            const { statements, integrity } = pairStatementFiles(parsedFiles);
+            for (const st of statements) {
+                lastMeta = st.parsed.metadata || lastMeta;
+                combinedDeposits.push(...(st.parsed.deposits || []));
+                combinedReversals.push(...(st.parsed.excludedReversals || []));
+                combinedTreasury.push(...(st.parsed.excludedTreasury || []));
             }
 
             // Try every automatic fix first: Student Directory name matching + Manual Fixes + previous manual assignments
@@ -744,20 +757,28 @@ class ForeignUiMixin {
                 metadata: lastMeta,
                 deposits: matchedDeposits,
                 excludedReversals: combinedReversals,
-                excludedTreasury: combinedTreasury
+                excludedTreasury: combinedTreasury,
+                integrity
             };
 
             this.foreignPreviewTab = 'deposits';
             document.getElementById('foreign-import-preview-panel')?.classList.remove('hidden');
             const btnConfirm = document.getElementById('btn-confirm-foreign-import');
             if (btnConfirm) {
-                btnConfirm.disabled = matchedDeposits.length === 0;
-                btnConfirm.innerHTML = `<i data-lucide="check-circle"></i> Import ${matchedDeposits.length.toLocaleString()} Student Deposit${matchedDeposits.length === 1 ? '' : 's'}`;
+                const blocked = integrity.errors.length > 0;
+                btnConfirm.disabled = matchedDeposits.length === 0 || blocked;
+                btnConfirm.innerHTML = blocked
+                    ? '<i data-lucide="shield-alert"></i> Import blocked: fix the statement problems above'
+                    : `<i data-lucide="check-circle"></i> Import ${matchedDeposits.length.toLocaleString()} Student Deposit${matchedDeposits.length === 1 ? '' : 's'}`;
             }
 
             this.renderForeignImportPreview();
             if (window.lucide) lucide.createIcons({ root: document.getElementById('modal-foreign-import') });
-            Toast.show(`Extracted ${matchedDeposits.length} student deposits (${combinedReversals.length} reversal rows & ${combinedTreasury.length} bank ops excluded)`, 'success');
+            if (integrity.errors.length > 0) {
+                Toast.show(`Statement checks failed (${integrity.errors.length} problem(s)). The import is blocked until they are resolved.`, 'error');
+            } else {
+                Toast.show(`Extracted ${matchedDeposits.length} student deposits (${combinedReversals.length} reversal rows & ${combinedTreasury.length} bank ops excluded)`, 'success');
+            }
         } catch (err) {
             console.error('Error parsing bank statement:', err);
             Toast.show('Failed to parse statement: ' + (err.message || err), 'error');
@@ -769,6 +790,7 @@ class ForeignUiMixin {
         if (!ext) return;
 
         const metaBanner = document.getElementById('foreign-import-meta-banner');
+        this.renderForeignIntegrityPanel(metaBanner, ext.integrity);
         const currency = ext.metadata?.currency || 'USD';
         const totalDepositAmt = (ext.deposits || []).reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
         const exactIds = (ext.deposits || []).filter(d => d.match_source === 'statement_id').length;
@@ -875,9 +897,34 @@ class ForeignUiMixin {
         }).join('');
     }
 
+    renderForeignIntegrityPanel(afterEl, integrity) {
+        if (!afterEl) return;
+        let panel = document.getElementById('foreign-import-integrity');
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = 'foreign-import-integrity';
+            afterEl.insertAdjacentElement('afterend', panel);
+        }
+        const errors = integrity?.errors || [];
+        const warnings = integrity?.warnings || [];
+        const passed = integrity?.passed || [];
+        const list = (items) => `<ul style="margin: 0.35rem 0 0 1.1rem; padding: 0;">${items.map(t => `<li style="margin: 0.2rem 0;">${escapeHTML(t)}</li>`).join('')}</ul>`;
+        const box = (bg, border, color, title, items) => `<div style="padding: 0.65rem 0.9rem; border-radius: 8px; background: ${bg}; border: 1px solid ${border}; color: ${color}; font-size: 0.8rem; line-height: 1.45;"><strong>${title}</strong>${list(items)}</div>`;
+        panel.style.cssText = 'display: flex; flex-direction: column; gap: 0.5rem;';
+        panel.innerHTML = [
+            errors.length ? box('rgba(239,68,68,0.10)', 'rgba(239,68,68,0.45)', 'var(--danger)', `Import blocked: ${errors.length} problem(s) with the statement`, errors) : '',
+            warnings.length ? box('rgba(245,158,11,0.10)', 'rgba(245,158,11,0.45)', 'var(--warning, #f59e0b)', `Check before importing: ${warnings.length} warning(s)`, warnings) : '',
+            !errors.length && passed.length ? box('rgba(16,185,129,0.10)', 'rgba(16,185,129,0.40)', 'var(--success)', 'Statement checks passed', passed) : ''
+        ].join('');
+    }
+
     async savePendingForeignDeposits() {
         const ext = this.pendingForeignExtraction;
         if (!ext || !Array.isArray(ext.deposits) || ext.deposits.length === 0) return;
+        if (ext.integrity?.errors?.length) {
+            Toast.show('This statement failed its checks, so it cannot be imported. See the problems listed above the preview.', 'error');
+            return;
+        }
 
         const baseIdx = (this.foreignTransactions || []).length;
         const incomingRows = ext.deposits.map((d, i) => {

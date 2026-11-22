@@ -1808,3 +1808,48 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
         }
     }
 });
+
+test('BM import: Excel + PDF that disagree block the import; a matching pair can be imported', async () => {
+    await import('../app.js');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    const app = window.app;
+    const meta = { accountNumber: '7700120000000999', dateFrom: '2026-09-01', dateTo: '2026-09-30' };
+    const dep = (amount) => ({
+        reference_number: 'FJB0000000001', amount, item_price: amount, value_date: '2026-09-03',
+        payment_date: '2026-09-03', description: 'Cash Deposit TEST ONE 261009991', student_id: '261009991',
+        id_status: 'Valid', match_source: 'statement_id', currency: 'USD', bank: 'NuMisrUsd5', mapping: 'Tuition'
+    });
+    const parsed = (amount) => ({ metadata: meta, deposits: [dep(amount)], excludedReversals: [], excludedTreasury: [], integrity: { errors: [], warnings: [] } });
+
+    const origParse = app.parseSingleForeignStatementFile;
+    const origStudents = app.ensureStudentsLoadedForForeign;
+    const origSave = app.syncForeignTransactionsToSupabase;
+    const saveSpy = vi.fn().mockResolvedValue({ synced: 1, error: null });
+    app.ensureStudentsLoadedForForeign = vi.fn().mockResolvedValue([]);
+    app.syncForeignTransactionsToSupabase = saveSpy;
+    try {
+        // Excel says 600, the bank PDF says 500 -> blocked
+        app.parseSingleForeignStatementFile = vi.fn(async (f) => parsed(f.name.endsWith('.pdf') ? 500 : 600));
+        await app.handleForeignStatementFiles([{ name: 'Misr 557.xls' }, { name: 'Misr 557.pdf' }]);
+        const btn = document.getElementById('btn-confirm-foreign-import');
+        const panel = document.getElementById('foreign-import-integrity');
+        expect(btn.disabled).toBe(true);
+        expect(panel.textContent).toMatch(/Import blocked/);
+        expect(panel.textContent).toMatch(/amount 600\.00 in Excel vs 500\.00 in PDF/);
+        expect(app.pendingForeignExtraction.deposits).toHaveLength(1);   // only the Excel's rows, never both
+        await app.savePendingForeignDeposits();                         // even if called directly
+        expect(saveSpy).not.toHaveBeenCalled();
+
+        // matching pair -> importable, panel says the checks passed
+        app.parseSingleForeignStatementFile = vi.fn(async () => parsed(500));
+        await app.handleForeignStatementFiles([{ name: 'Misr 557.xls' }, { name: 'Misr 557.pdf' }]);
+        expect(btn.disabled).toBe(false);
+        expect(panel.textContent).toMatch(/Statement checks passed/);
+        expect(panel.textContent).toMatch(/matches the bank's PDF/);
+        expect(panel.textContent).not.toMatch(/Import blocked/);
+    } finally {
+        app.parseSingleForeignStatementFile = origParse;
+        app.ensureStudentsLoadedForForeign = origStudents;
+        app.syncForeignTransactionsToSupabase = origSave;
+    }
+});

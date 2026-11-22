@@ -905,8 +905,8 @@
                     <div class="modal-body" style="overflow-y: auto; flex: 1; padding: 1.25rem 1.5rem;">
                         <div class="upload-zone" id="foreign-drop-zone" style="padding: 1.6rem 1rem; margin-bottom: 1rem;">
                             <i data-lucide="file-Spreadsheet" class="upload-icon" style="width: 36px; height: 36px;"></i>
-                            <h3 style="margin: 0.4rem 0 0.2rem 0; font-size: 1rem;">Drag &amp; Drop Bank Statement (PDF, Excel .xlsx, or CSV)</h3>
-                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Supports both Arabic (كشف حساب) and English (Statement of Account) Banque Misr files</p>
+                            <h3 style="margin: 0.4rem 0 0.2rem 0; font-size: 1rem;">Drag &amp; Drop the Excel statement, plus its PDF to cross-check it</h3>
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">The Excel (.xls/.xlsx) is read exactly; the bank's PDF of the same month is compared with it deposit by deposit. Arabic (كشف حساب) and English (Statement of Account) Banque Misr files.</p>
                             <input type="file" id="foreign-file-input" multiple accept=".pdf,.csv,.xlsx,.xls" class="hidden-input">
                             <button type="button" class="btn btn-primary mt-4" onclick="document.getElementById('foreign-file-input').click()">
                                 <i data-lucide="folder-open"></i> Browse Statement Files
