@@ -327,8 +327,14 @@ class ForeignUiMixin {
         // Open Statement Import Modal
         document.getElementById('btn-show-foreign-import')?.addEventListener('click', () => {
             if (!this.requireRole('operator', 'import bank statements')) return;
+            // Always start empty, however the window was closed last time (Esc / backdrop included).
+            this.resetForeignImportModal();
             document.getElementById('modal-foreign-import')?.classList.remove('hidden');
             if (window.lucide) lucide.createIcons({ root: document.getElementById('modal-foreign-import') });
+        });
+        // Cancel and the × button discard the extracted statement.
+        document.getElementById('modal-foreign-import')?.addEventListener('click', (e) => {
+            if (e.target.closest('.btn-close, .modal-footer .btn-outline')) this.resetForeignImportModal();
         });
 
         // Drag & Drop + File Input for PDF / Excel / CSV Statements
@@ -905,6 +911,29 @@ class ForeignUiMixin {
         }).join('');
     }
 
+    /** Clears the statement import window back to its empty "drop files here" state. */
+    resetForeignImportModal() {
+        this.pendingForeignExtraction = null;
+        this.foreignPreviewTab = 'deposits';
+        document.getElementById('foreign-import-preview-panel')?.classList.add('hidden');
+        for (const id of ['foreign-import-meta-banner', 'foreign-import-preview-body', 'foreign-preview-total-label']) {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = '';
+        }
+        document.getElementById('foreign-import-integrity')?.remove();
+        for (const id of ['foreign-preview-deposits-count', 'foreign-preview-excluded-count']) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '0';
+        }
+        const input = document.getElementById('foreign-file-input');
+        if (input) input.value = '';
+        const btn = document.getElementById('btn-confirm-foreign-import');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="check-circle"></i> Save Student Deposits';
+        }
+    }
+
     renderForeignIntegrityPanel(afterEl, integrity) {
         if (!afterEl) return;
         let panel = document.getElementById('foreign-import-integrity');
@@ -957,7 +986,7 @@ class ForeignUiMixin {
         }
 
         document.getElementById('modal-foreign-import')?.classList.add('hidden');
-        this.pendingForeignExtraction = null;
+        this.resetForeignImportModal();
         this.erpBaseKey = null;
         this.applyForeignFilters();
         if (syncRes.error) {

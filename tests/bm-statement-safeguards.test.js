@@ -208,3 +208,9 @@ test('after the delete script empties the table, an old cached copy uploads noth
     expect(pendingUpload).toEqual([]);
     expect(droppedCount).toBe(50);
 });
+
+test('Excel header labels written with a colon ("Account Number:") are read', () => {
+    const parsed = parseBankStatementGrid(grid({ rows: goodRows }));
+    expect(parsed.metadata.accountNumber).toBe('7700120000000999');
+    expect(parsed.metadata.branch).toBe('770');
+});
