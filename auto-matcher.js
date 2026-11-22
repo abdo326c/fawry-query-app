@@ -97,6 +97,11 @@ class AutoMatcherMixin {
     }
 
     async runAutoMatcher() {
+        // Request token: a newer run (date change, Run click) supersedes any run still in flight,
+        // so an older, slower run can never render its stale proposals over the newer ones.
+        const runToken = (this._automatchRunToken = (this._automatchRunToken || 0) + 1);
+        const isStale = () => runToken !== this._automatchRunToken;
+        this._automatchRunInFlight = true;
         const btn = document.getElementById('btn-run-automatcher');
         const tbody = document.getElementById('automatcher-table-body');
         const btnApply = document.getElementById('btn-apply-automatch-fixes');
@@ -130,6 +135,7 @@ class AutoMatcherMixin {
                 fetchAll('transactions', matcherCols, queryFn),
                 this.ensureFullStudentMaster()
             ]);
+            if (isStale()) return;
             let invalidTx = rawInvalidTx;
             
             // If the targeted match list was very large and bypassed the .in(), filter locally
@@ -175,6 +181,7 @@ class AutoMatcherMixin {
                 'payment_reference_number',
                 400
             );
+            if (isStale()) return;
 
             const students = loadedStudents || [];
 
@@ -206,7 +213,8 @@ class AutoMatcherMixin {
                 if (sigSet.size >= 3) sharedMobileSet.add(pk);
             }
 
-            this.automatchProposals = [];
+            // Build into a local array; only publish to this.automatchProposals if still current.
+            let proposals = [];
 
             let workerUsed = false;
             if (typeof Worker !== 'undefined' && filteredTx.length >= 250) {
@@ -223,7 +231,7 @@ class AutoMatcherMixin {
                         }
                     });
                     if (Array.isArray(workerProposals)) {
-                        this.automatchProposals = workerProposals;
+                        proposals = workerProposals;
                         workerUsed = true;
                     }
                 } catch (workerErr) {
@@ -252,6 +260,7 @@ class AutoMatcherMixin {
                         if (now - lastYield > 50) {
                             btn.innerHTML = `<i data-lucide="loader" class="spin"></i> Matching... ${loopCount}/${filteredTx.length}`;
                             await new Promise(r => setTimeout(r, 0));
+                            if (isStale()) return;
                             lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
                         }
                     }
@@ -287,19 +296,20 @@ class AutoMatcherMixin {
                         selected: false
                     };
 
-                    this.automatchProposals.push(proposalTx);
+                    proposals.push(proposalTx);
                 }
             }
 
             // Second-pass sibling propagation: if one line item of a multi-item reference matched,
             // propagate that match to any unmatched sibling line item sharing the same reference_number
             const matchedByRef = new Map();
-            for (const p of this.automatchProposals) {
+            if (isStale()) return;
+            for (const p of proposals) {
                 if (p.proposedStudent && p.original_ref && !matchedByRef.has(p.original_ref)) {
                     matchedByRef.set(p.original_ref, p);
                 }
             }
-            for (const p of this.automatchProposals) {
+            for (const p of proposals) {
                 if (!p.proposedStudent && p.original_ref && matchedByRef.has(p.original_ref)) {
                     const sib = matchedByRef.get(p.original_ref);
                     p.proposedStudent = sib.proposedStudent;
@@ -310,12 +320,13 @@ class AutoMatcherMixin {
 
             // Sort proposals by confidence tier priority: high -> phone -> name -> unmatched
             const tierPriority = { high: 1, phone: 2, name: 3, unmatched: 4 };
-            this.automatchProposals.sort((a, b) => {
+            proposals.sort((a, b) => {
                 const pa = tierPriority[a.confidenceTier] || 4;
                 const pb = tierPriority[b.confidenceTier] || 4;
                 return pa - pb;
             });
 
+            this.automatchProposals = proposals;
             this.automatchPage = 1;
             this.renderAutoMatcherPage();
             
@@ -323,11 +334,15 @@ class AutoMatcherMixin {
             if (selectAllMatcher) selectAllMatcher.checked = false;
 
         } catch (err) {
-            Toast.show('Matcher Error: ' + err.message, 'error');
+            if (!isStale()) Toast.show('Matcher Error: ' + err.message, 'error');
         } finally {
-            btn.innerHTML = `<i data-lucide="zap"></i> Run Auto-Match`;
-            btn.disabled = false;
-            if (window.lucide) lucide.createIcons();
+            // Only the current run owns the button state; a superseded run leaves it alone.
+            if (!isStale()) {
+                this._automatchRunInFlight = false;
+                btn.innerHTML = `<i data-lucide="zap"></i> Run Auto-Match`;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            }
         }
     }
 

@@ -1,3 +1,5 @@
+import { formatDateTime } from './app-utils.js';
+
 const settlementEsc = (v) => (window.escapeHTML ? window.escapeHTML(v) : String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c])));
 
 const formatStlMoney = (num) => {
@@ -1081,7 +1083,7 @@ class SettlementProcessor {
         const esc = settlementEsc;
 
         tbody.innerHTML = rows.map(r => {
-            const createdStr = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
+            const createdStr = formatDateTime(r.created_at);
             const dateRange = (r.settlement_date_from || r.settlement_date_to)
                 ? `${esc(r.settlement_date_from || '?')} &rarr; ${esc(r.settlement_date_to || '?')}`
                 : '-';
