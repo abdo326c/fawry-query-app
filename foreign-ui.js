@@ -19,6 +19,7 @@ import {
     reconstructBanqueMisrPdfLinesFromPages,
     analyzeBanqueMisrPdfLayout,
     pairStatementFiles,
+    mergeForeignCloudAndLocal,
     matchForeignDepositsToStudents,
     normalizePersonName,
     DEFAULT_FOREIGN_BANK,
@@ -207,6 +208,16 @@ class ForeignUiMixin {
                     return { synced: 0, error };
                 }
             }
+            // Saved: these rows are no longer "pending" in this browser's cache.
+            const savedRefs = new Set(dbRows.map(r => r.reference_number));
+            let cleared = false;
+            (this.foreignTransactions || []).forEach(r => {
+                if (r && r._pendingSync && savedRefs.has(r.reference_number)) {
+                    delete r._pendingSync;
+                    cleared = true;
+                }
+            });
+            if (cleared) this.persistForeignTransactionsLocal();
             if (!silent) {
                 Toast.show(`Synced ${dbRows.length} foreign transaction(s) to Supabase`, 'success');
             }
@@ -593,13 +604,10 @@ class ForeignUiMixin {
             if (requestId !== this._fxLoadRequestId) return;
 
             if (Array.isArray(data)) {
-                const cloudRefs = new Set(data.map(r => r.reference_number).filter(Boolean));
-                const unsyncedLocal = (this.foreignTransactions || []).filter(r => r.reference_number && !cloudRefs.has(r.reference_number));
-
-                const byRef = new Map();
-                (this.foreignTransactions || []).forEach(r => byRef.set(r.reference_number, r));
-                data.forEach(r => byRef.set(r.reference_number, r));
-                this.foreignTransactions = [...byRef.values()].map((r, i) => this.normalizeForeignTransactionRow(r, i));
+                // Database rows win; cached rows missing from the database are re-uploaded only when
+                // they are unsaved imports (_pendingSync). Others were deleted and must not come back.
+                const { merged, pendingUpload: unsyncedLocal } = mergeForeignCloudAndLocal(this.foreignTransactions, data);
+                this.foreignTransactions = merged.map((r, i) => this.normalizeForeignTransactionRow(r, i));
 
                 // Resolve student_level only for rows missing a persisted DB student_level
                 const legacyForeignRows = this.foreignTransactions.filter(
@@ -930,6 +938,9 @@ class ForeignUiMixin {
         const incomingRows = ext.deposits.map((d, i) => {
             const norm = this.normalizeForeignTransactionRow(d, baseIdx + i);
             norm._uid = `${norm.reference_number}_${Date.now()}_${baseIdx + i}`;
+            // Marked until the database confirms the save; only marked rows are ever re-uploaded
+            // from this browser's cache.
+            norm._pendingSync = true;
             return norm;
         });
 
@@ -1594,6 +1605,9 @@ class ForeignUiMixin {
                 'Re-applying rules & loading student directory...',
                 async (progressToast) => {
                     try {
+                        // Start from the database's current rows: this saves every row back, so a
+                        // page left open since before a delete must not resurrect deleted deposits.
+                        await this.loadForeignTransactions();
                         const students = await this.ensureStudentsLoadedForForeign();
                         const totalCount = this.foreignTransactions.length;
                         progressToast.update(`Matching ${totalCount.toLocaleString()} foreign deposit(s)...`);
