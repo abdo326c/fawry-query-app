@@ -419,7 +419,7 @@ class StudentsUiMixin {
                     Toast.show(existing ? `Updated student ${normSid}` : `Added student ${normSid}`, 'success');
                     document.getElementById('modal-student')?.classList.add('hidden');
 
-                    await this.loadStudents({ forceReload: true, skipAutoProfile: true });
+                    await this.loadStudents({ forceReload: true });
                     if (this.currentProfileSid && String(this.normalizeStudentId(this.currentProfileSid)) === String(normSid)) {
                         this.loadStudentProfile(normSid);
                     }
@@ -541,6 +541,7 @@ class StudentsUiMixin {
                 clearTimeout(searchDebounce);
                 searchDebounce = setTimeout(() => {
                     this.studentsCurrentPage = 1;
+                    // Typing only filters the list; it never opens a profile on its own.
                     this.loadStudents();
                 }, 220);
             });
@@ -549,26 +550,27 @@ class StudentsUiMixin {
                     e.preventDefault();
                     clearTimeout(searchDebounce);
                     this.studentsCurrentPage = 1;
-                    this.loadStudents();
+                    // Enter = "show me this student": open the profile if exactly one matches.
+                    this.loadStudents({ openSingleMatch: true });
                 }
             });
         }
         if (btnSearch) {
             btnSearch.addEventListener('click', () => {
                 this.studentsCurrentPage = 1;
-                this.loadStudents();
+                this.loadStudents({ openSingleMatch: true });
             });
         }
         if (collegeSelect) {
             collegeSelect.addEventListener('change', () => {
                 this.studentsCurrentPage = 1;
-                this.loadStudents({ skipAutoProfile: true });
+                this.loadStudents();
             });
         }
         if (sourceSelect) {
             sourceSelect.addEventListener('change', () => {
                 this.studentsCurrentPage = 1;
-                this.loadStudents({ skipAutoProfile: true });
+                this.loadStudents();
             });
         }
         if (btnClear) {
@@ -580,7 +582,7 @@ class StudentsUiMixin {
                 document.getElementById('student-directory-view')?.classList.remove('hidden');
                 this.currentProfileSid = null;
                 this.studentsCurrentPage = 1;
-                this.loadStudents({ skipAutoProfile: true });
+                this.loadStudents();
             });
         }
 
@@ -1384,7 +1386,7 @@ class StudentsUiMixin {
         return s;
     }
 
-    async loadStudents({ forceReload = false, skipAutoProfile = false } = {}) {
+    async loadStudents({ forceReload = false, openSingleMatch = false } = {}) {
         const tbody = document.getElementById('students-table-body');
         try {
             if (!Array.isArray(this.allStudentsData) || this.allStudentsData.length === 0 || forceReload) {
@@ -1451,7 +1453,9 @@ class StudentsUiMixin {
             });
             this.renderStudentsPage();
 
-            if (!skipAutoProfile && term && this.filteredStudentsData.length === 1) {
+            // Only on an explicit search (Enter / Search button). Opening it from the live, as-you-type
+            // filter jumped into a profile while the name was still being typed.
+            if (openSingleMatch && term && this.filteredStudentsData.length === 1) {
                 this.loadStudentProfile(this.filteredStudentsData[0].student_id);
             }
         } catch (err) {
