@@ -2,6 +2,8 @@ import { toDateOnly } from './rules.js';
 
 export const FX_STORAGE_KEY = 'fawry_app_fx_rates_v1';
 export const DEFAULT_FX_MODE = 'historical'; // 'historical' | 'latest' | 'custom'
+// Historical constant kept for imports only: resolveUsdToEgpRate() no longer falls back to it
+// (an unknown rate is reported as rate 0 / missing: true).
 export const DEFAULT_USD_EGP_FALLBACK_RATE = 49.5;
 export const EGYPT_TIMEZONE = 'Africa/Cairo';
 export const EGYPT_DAILY_FX_HOUR = 12;
@@ -344,11 +346,14 @@ export function resolveUsdToEgpRate(dateStr, store, { mode = null, customRate = 
         };
     }
 
+    // No rate known at all: say so (rate 0, missing: true) instead of silently converting with a
+    // hard-coded guess -- the dashboard shows "No FX rate synced" and leaves USD out of EGP totals.
     return {
-        rate: DEFAULT_USD_EGP_FALLBACK_RATE,
-        source: 'fallback',
+        rate: 0,
+        source: 'none',
         rateDate: '',
-        fallback: true
+        fallback: true,
+        missing: true
     };
 }
 
@@ -365,7 +370,10 @@ export function convertUsdToEgp(amountUsd, dateStr, store, opts = {}) {
         rate: resolved.rate,
         source: resolved.source,
         rateDate: resolved.rateDate,
-        fallback: resolved.fallback
+        fallback: resolved.fallback,
+        // true when no USD->EGP rate is known: egpAmount is 0 because it could not be converted,
+        // NOT because the deposit is worth nothing. Callers must exclude/flag it, not add USD as EGP.
+        missing: !(resolved.rate > 0)
     };
 }
 

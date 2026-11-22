@@ -5,7 +5,18 @@ const formatStlMoney = (num) => {
     return (isNaN(n) ? 0 : n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+// A reference is "Matched" only when settlement and system amounts agree to the piastre
+// (the same 0.01 threshold the variance column uses to show a non-zero variance).
+const SETTLEMENT_MATCH_TOLERANCE = 0.01;
+
 class SettlementProcessor {
+    static get MATCH_TOLERANCE() { return SETTLEMENT_MATCH_TOLERANCE; }
+
+    /** True when the (2-decimal rounded) variance is below the match tolerance. */
+    static isAmountMatched(variance) {
+        return Math.abs(Math.round(Number(variance || 0) * 100) / 100) < SETTLEMENT_MATCH_TOLERANCE;
+    }
+
     constructor(supabaseClient) {
         this.supabase = supabaseClient;
         this.settlementData = [];
@@ -488,7 +499,7 @@ class SettlementProcessor {
                 const sysAmt = dData.item_price;
                 const stlAmt = sData.NETAMOUNT;
                 const variance = Math.round((stlAmt - sysAmt) * 100) / 100;
-                const isMatched = Math.abs(variance) < 0.1;
+                const isMatched = SettlementProcessor.isAmountMatched(variance);
 
                 this.reconciliationResults.push({
                     reference: ref,
@@ -746,7 +757,7 @@ class SettlementProcessor {
             const variance = Number(r.variance ?? (Number(r.stl_amount || 0) - Number(r.sys_amount || 0)));
             const absVar = Math.abs(variance);
             let varianceHtml = `<span style="color: var(--text-muted);">0.00</span>`;
-            if (absVar >= 0.01) {
+            if (absVar >= SETTLEMENT_MATCH_TOLERANCE) {
                 const sign = variance > 0 ? '+' : '';
                 const varColor = r.status === 'Amount Mismatch' ? '#eab308' : 'var(--danger)';
                 varianceHtml = `<strong style="color: ${varColor}; font-family: monospace;">${sign}${formatStlMoney(variance)}</strong>`;
