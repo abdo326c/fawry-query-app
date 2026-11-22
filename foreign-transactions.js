@@ -195,6 +195,176 @@ export function isTreasuryOrNonStudentRow(row) {
     return false;
 }
 
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const money = (n) => round2(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Integrity checks on a parsed statement. Returns { errors, warnings } (arrays of strings).
+ * Errors mean the reading is provably wrong or incomplete and the import must not go ahead.
+ *  - running balance: every row's Balance After = previous balance + credit - debit
+ *    (catches a missing, duplicated or misread amount)
+ *  - totals: credits - debits = last balance - opening balance
+ *  - descriptions: text that looks glued from two rows (warnings, shown in the preview)
+ */
+export function checkStatementIntegrity(rows, deposits, metadata = {}) {
+    const errors = [...(metadata.formatErrors || [])];
+    const warnings = [...(metadata.formatWarnings || [])];
+    const chain = (rows || []).filter(r => Number.isFinite(r.balance_after) && (r.credit > 0 || r.debit > 0));
+
+    if (chain.length > 0) {
+        const opening = Number.isFinite(metadata.openingBalance) ? metadata.openingBalance : null;
+        const breaks = [];
+        let prev = opening;
+        chain.forEach((r, i) => {
+            if (prev !== null) {
+                const expected = round2(prev + r.credit - r.debit);
+                if (Math.abs(expected - r.balance_after) > 0.01) {
+                    breaks.push(`row ${r._rowIndex}${r.external_ref || r.transaction_ref ? ` (${r.external_ref || r.transaction_ref})` : ''}: expected balance ${money(expected)}, statement shows ${money(r.balance_after)}`);
+                }
+            } else if (i === 0) {
+                warnings.push('Opening balance not found in the statement header; the first row\'s balance could not be checked.');
+            }
+            prev = r.balance_after;
+        });
+        if (breaks.length > 0) {
+            errors.push(`Running balance does not add up at ${breaks.length} row(s), so a row is missing, duplicated or misread: ${breaks.slice(0, 5).join('; ')}${breaks.length > 5 ? '; …' : ''}`);
+        }
+
+        if (opening !== null) {
+            const credits = round2(chain.reduce((s, r) => s + r.credit, 0));
+            const debits = round2(chain.reduce((s, r) => s + r.debit, 0));
+            const last = chain[chain.length - 1].balance_after;
+            if (Math.abs(round2(credits - debits) - round2(last - opening)) > 0.01) {
+                errors.push(`Totals do not reconcile: credits ${money(credits)} - debits ${money(debits)} ≠ closing ${money(last)} - opening ${money(opening)}.`);
+            }
+            if (Number.isFinite(metadata.closingBalance) && metadata.closingBalanceIsPeriodEnd && Math.abs(metadata.closingBalance - last) > 0.01) {
+                errors.push(`Last row balance ${money(last)} does not match the statement closing balance ${money(metadata.closingBalance)}.`);
+            }
+        }
+    }
+
+    const suspicious = [];
+    for (const d of deposits || []) {
+        const desc = String(d.description || '');
+        const reasons = [];
+        if ((desc.match(/cash deposit/gi) || []).length > 1) reasons.push('contains "Cash Deposit" twice');
+        if (/^\d{3}\s/.test(desc)) reasons.push('starts with a branch code');
+        if (d.transaction_code === 'CHF' && desc && !/^cash deposit/i.test(desc)) reasons.push('cash deposit text does not start with "Cash Deposit"');
+        if (/INCOMING SWIFT|CREDIT IRS/i.test(desc) && /cash deposit/i.test(desc)) reasons.push('mixes a transfer and a cash deposit');
+        if (reasons.length) suspicious.push(`${d.reference_number}: ${reasons.join(', ')}`);
+    }
+    if (suspicious.length > 0) {
+        warnings.push(`${suspicious.length} description(s) look like text from two rows; check them before importing: ${suspicious.slice(0, 5).join('; ')}${suspicious.length > 5 ? '; …' : ''}`);
+    }
+
+    return { errors, warnings };
+}
+
+/**
+ * Compares the Excel and PDF versions of the same statement deposit by deposit.
+ * The Excel file is read exactly (named cells) but can be edited by anyone; the PDF is the bank's
+ * official copy but its reading is reconstructed from page layout. Any difference means one of
+ * them is wrong, so the import is blocked. Returns { errors, warnings, compared }.
+ */
+export function crossCheckStatements(excelParsed, pdfParsed) {
+    const errors = [];
+    const warnings = [];
+    const em = excelParsed?.metadata || {};
+    const pm = pdfParsed?.metadata || {};
+    if (em.accountNumber && pm.accountNumber && em.accountNumber !== pm.accountNumber) {
+        errors.push(`The Excel and PDF are for different accounts (${em.accountNumber} vs ${pm.accountNumber}).`);
+        return { errors, warnings, compared: 0 };
+    }
+    if (em.dateFrom && pm.dateFrom && (em.dateFrom !== pm.dateFrom || em.dateTo !== pm.dateTo)) {
+        errors.push(`The Excel and PDF cover different periods (${em.dateFrom} → ${em.dateTo} vs ${pm.dateFrom} → ${pm.dateTo}).`);
+        return { errors, warnings, compared: 0 };
+    }
+
+    // letters and digits only: the PDF spaces punctuation differently and has no "|" separator
+    const text = (s) => String(s || '').normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+    const pdfByRef = new Map((pdfParsed?.deposits || []).map(d => [d.reference_number, d]));
+    const excelRefs = new Set();
+    const diffs = [];
+    for (const x of excelParsed?.deposits || []) {
+        excelRefs.add(x.reference_number);
+        const p = pdfByRef.get(x.reference_number);
+        if (!p) { diffs.push(`${x.reference_number}: in the Excel (${money(x.amount)}) but not in the PDF`); continue; }
+        if (Math.abs(Number(x.amount) - Number(p.amount)) > 0.005) diffs.push(`${x.reference_number}: amount ${money(x.amount)} in Excel vs ${money(p.amount)} in PDF`);
+        if (x.value_date !== p.value_date) diffs.push(`${x.reference_number}: date ${x.value_date} in Excel vs ${p.value_date} in PDF`);
+        if (text(x.description) !== text(p.description)) diffs.push(`${x.reference_number}: description differs ("${x.description}" vs "${p.description}")`);
+    }
+    for (const p of pdfParsed?.deposits || []) {
+        if (!excelRefs.has(p.reference_number)) diffs.push(`${p.reference_number}: in the PDF (${money(p.amount)}) but not in the Excel`);
+    }
+    if (diffs.length > 0) {
+        errors.push(`The Excel and PDF statements differ on ${diffs.length} deposit(s): ${diffs.slice(0, 5).join('; ')}${diffs.length > 5 ? '; …' : ''}`);
+    }
+    const er = (excelParsed?.excludedReversals || []).length;
+    const pr = (pdfParsed?.excludedReversals || []).length;
+    if (er !== pr) errors.push(`Reversed entries differ: ${er} in the Excel vs ${pr} in the PDF.`);
+    const et = (excelParsed?.excludedTreasury || []).length;
+    const pt = (pdfParsed?.excludedTreasury || []).length;
+    if (et !== pt) warnings.push(`Bank operation rows differ: ${et} in the Excel vs ${pt} in the PDF.`);
+    return { errors, warnings, compared: (excelParsed?.deposits || []).length };
+}
+
+/**
+ * Decides which uploaded files are imported and runs every check.
+ * files: [{ name, isPdf, parsed }] where parsed is a parse*Statement result.
+ *  - Excel/CSV statements are the data (exact cells).
+ *  - A PDF of the same account + period is NOT imported; it cross-checks its Excel.
+ *  - A PDF with no matching Excel is imported, with a warning (the reading depends on page layout).
+ * Returns { statements: files to import, integrity: { errors, warnings, passed } }.
+ */
+export function pairStatementFiles(files) {
+    const errors = [];
+    const warnings = [];
+    const passed = [];
+    const add = (out, prefix, items) => (items || []).forEach(t => out.push(`${prefix}: ${t}`));
+    const key = (m = {}) => `${m.accountNumber || ''}|${m.dateFrom || ''}|${m.dateTo || ''}`;
+    const sheets = (files || []).filter(f => !f.isPdf);
+    const pdfs = (files || []).filter(f => f.isPdf);
+    const usedPdfs = new Set();
+    const statements = [];
+
+    for (const x of sheets) {
+        add(errors, x.name, x.parsed.integrity?.errors);
+        add(warnings, x.name, x.parsed.integrity?.warnings);
+        if (!x.parsed.integrity?.errors?.length) {
+            passed.push(`${x.name}: columns recognised, running balance and totals add up (${(x.parsed.deposits || []).length} deposits).`);
+        }
+        let pdf = pdfs.find(p => !usedPdfs.has(p) && key(p.parsed.metadata) === key(x.parsed.metadata));
+        // one Excel + one PDF uploaded together are meant as a pair; a mismatch is reported by the cross-check
+        if (!pdf && sheets.length === 1 && pdfs.length === 1) pdf = pdfs[0];
+        if (pdf) {
+            usedPdfs.add(pdf);
+            add(errors, pdf.name, pdf.parsed.integrity?.errors);
+            const cross = crossCheckStatements(x.parsed, pdf.parsed);
+            add(errors, `${x.name} vs ${pdf.name}`, cross.errors);
+            add(warnings, `${x.name} vs ${pdf.name}`, cross.warnings);
+            if (!cross.errors.length && !pdf.parsed.integrity?.errors?.length) {
+                passed.push(`${x.name} matches the bank's PDF ${pdf.name} on all ${cross.compared} deposits.`);
+            }
+        } else {
+            warnings.push(`${x.name}: no PDF of this statement was uploaded, so it was not cross-checked against the bank's official copy.`);
+        }
+        statements.push(x);
+    }
+
+    for (const p of pdfs) {
+        if (usedPdfs.has(p)) continue;
+        add(errors, p.name, p.parsed.integrity?.errors);
+        add(warnings, p.name, p.parsed.integrity?.warnings);
+        warnings.push(`${p.name}: imported from the PDF only. Reading a PDF depends on its page layout; upload the Excel statement of the same account and period for an exact reading.`);
+        if (!p.parsed.integrity?.errors?.length) {
+            passed.push(`${p.name}: table layout recognised, running balance and totals add up (${(p.parsed.deposits || []).length} deposits).`);
+        }
+        statements.push(p);
+    }
+
+    return { statements, integrity: { errors, warnings, passed } };
+}
+
 /**
  * Given raw statement rows (from CSV, Excel, or PDF), performs:
  * 1. Reversal pair detection (`INIT` + `REVR` sharing External Ref No or Transaction Reference)
@@ -208,7 +378,10 @@ export function processBankStatementRows(rawRows, metadata = {}) {
     const normalized = (rawRows || []).map((r, idx) => {
         const credit = parseStatementAmount(r.credit);
         const debit = parseStatementAmount(r.debit);
-        const balanceAfter = parseStatementAmount(r.balance_after);
+        // NaN when the cell is empty, so the running-balance check skips it instead of reading 0
+        const balanceAfter = r.balance_after === null || r.balance_after === undefined || String(r.balance_after).trim() === ''
+            ? NaN
+            : parseStatementAmount(r.balance_after);
         const txDateParsed = parseStatementDate(r.transaction_date);
         const valDateParsed = parseStatementDate(r.value_date);
         const extRef = String(r.external_ref || '').trim();
@@ -323,11 +496,14 @@ export function processBankStatementRows(rawRows, metadata = {}) {
             currency: metadata.currency || 'USD',
             branch: metadata.branch || '',
             dateFrom: metadata.dateFrom || '',
-            dateTo: metadata.dateTo || ''
+            dateTo: metadata.dateTo || '',
+            openingBalance: Number.isFinite(metadata.openingBalance) ? metadata.openingBalance : null,
+            sourceType: metadata.sourceType || ''
         },
         deposits,
         excludedReversals,
-        excludedTreasury
+        excludedTreasury,
+        integrity: checkStatementIntegrity(normalized, deposits, metadata)
     };
 }
 
@@ -343,7 +519,11 @@ export function parseBankStatementGrid(gridRows) {
         currency: 'USD',
         branch: '',
         dateFrom: '',
-        dateTo: ''
+        dateTo: '',
+        openingBalance: null,
+        sourceType: 'excel',
+        formatErrors: [],
+        formatWarnings: []
     };
 
     if (!Array.isArray(gridRows) || gridRows.length === 0) {
@@ -367,6 +547,7 @@ export function parseBankStatementGrid(gridRows) {
             else if (/رقم الحساب الدولي|IBAN/i.test(label)) metadata.iban = nextVal;
             else if (/تاريخ البداية|Date From/i.test(label)) metadata.dateFrom = parseStatementDate(nextVal).dateOnly || nextVal;
             else if (/تاريخ النهاية|Date To/i.test(label)) metadata.dateTo = parseStatementDate(nextVal).dateOnly || nextVal;
+            else if (/الرصيد الافتتاحي|Opening Balance/i.test(label) && /\d/.test(nextVal)) metadata.openingBalance = parseStatementAmount(nextVal);
         }
 
         const hasArabicHeaders = row.some(c => /البيان/.test(c)) && row.some(c => /دائن/.test(c));
@@ -387,11 +568,24 @@ export function parseBankStatementGrid(gridRows) {
                 else if (/رقم الحركة|transaction reference/.test(clean)) colMap.transaction_ref = idx;
                 else if (/^الحدث$|^event$/.test(clean)) colMap.event = idx;
             });
+            // Columns are read by name here, so a NEW column is harmless (warning only); a MISSING
+            // required column means the reading would be wrong (error).
+            const unknown = row.filter(c => c && !isKnownStatementHeader(c));
+            if (unknown.length > 0) {
+                metadata.formatWarnings.push(`New column(s) in the Excel statement: "${unknown.join('", "')}". They are ignored; tell the developer if they matter.`);
+            }
+            const required = { balance_after: 'Balance After', credit: 'Credit', debit: 'Debit', transaction_date: 'Transaction Date/Time', value_date: 'Value Date', description: 'Description', event: 'Event' };
+            const missing = Object.entries(required).filter(([k]) => colMap[k] === undefined).map(([, label]) => label);
+            if (colMap.external_ref === undefined && colMap.transaction_ref === undefined) missing.push('External Ref / Transaction Reference');
+            if (missing.length > 0) {
+                metadata.formatErrors.push(`Required column(s) missing from the Excel statement: ${missing.join(', ')}. The bank changed the format.`);
+            }
             break;
         }
     }
 
     if (headerRowIdx === -1) {
+        metadata.formatErrors.push('The statement table header (Balance After, Credit, Debit, ... Description) was not found, so columns cannot be identified.');
         colMap = {
             balance_after: 0,
             credit: 1,
@@ -560,34 +754,81 @@ export function assignCenteredDescriptionLines(anchors, lines) {
     }
 }
 
+/** Groups one page's pdf.js text items into horizontal lines (top to bottom), each in reading order. */
+function groupPdfPageLines(pageItems) {
+    const cleanItems = (pageItems || [])
+        .map(it => ({
+            str: normalizeArabicPresentation(it.str).trim(),
+            x: Number(it.x) || 0,
+            y: Number(it.y) || 0
+        }))
+        .filter(it => it.str.length > 0);
+
+    // Group items that share approximately the same Y coordinate (within 3pt) into horizontal lines
+    const sortedByY = [...cleanItems].sort((a, b) => b.y - a.y || a.x - b.x);
+    const hLines = [];
+    for (const item of sortedByY) {
+        const last = hLines[hLines.length - 1];
+        if (last && Math.abs(last.y - item.y) <= 3.2) {
+            last.items.push(item);
+        } else {
+            hLines.push({ y: item.y, items: [item] });
+        }
+    }
+    hLines.forEach(line => {
+        line.items = orderBidiPdfLineItems(line.items);
+    });
+    return hLines;
+}
+
+// Every column header the Banque Misr statement is known to use (PDF and Excel, English and Arabic).
+// A header outside this list means the bank changed the format: the PDF reader refuses to guess.
+const KNOWN_STATEMENT_HEADERS = [
+    // (the bank spells it both "Transaction" and "Transcation")
+    /^balance after( txn)?$/, /^credit$/, /^debit$/, /^trans(action|cation) date\/time$/, /^value date$/,
+    /^description$/, /^instrument code$/, /^external\.? ref(erence)?( no| number)?$/, /^trans(action|cation) code$/,
+    /^transaction reference$/, /^event$/, /^executed branch code$/, /^executed branch name$/,
+    /^الرصيد بعد المعاملة$/, /^دائن$/, /^مدين$/, /^تاريخ و وقت المعاملة$/, /^تاريخ الحق$/, /^البيان$/,
+    /^رقم المستند$/, /^الرقم المرجعي/, /^كود الحركة$/, /^رقم الحركة$/, /^الحدث$/, /^كود الفرع/, /^اسم الفرع/
+];
+export function isKnownStatementHeader(label) {
+    const clean = String(label || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    return !clean || KNOWN_STATEMENT_HEADERS.some(re => re.test(clean));
+}
+
+/**
+ * Checks that every page of a Banque Misr PDF still has the table layout the reader understands.
+ * Returns { errors, warnings }. An error means the PDF must not be trusted on its own.
+ */
+export function analyzeBanqueMisrPdfLayout(pagesItems) {
+    const errors = [];
+    const warnings = [];
+    (pagesItems || []).forEach((pageItems, p) => {
+        const hLines = groupPdfPageLines(pageItems);
+        const hasRows = hLines.some(l => /\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}/.test(l.items.map(i => i.str).join(' ')));
+        if (!hasRows) return;
+        const headerLine = hLines.find(l => {
+            const t = l.items.map(i => i.str).join(' ');
+            return /Description/i.test(t) && /Credit/i.test(t);
+        });
+        if (!headerLine || !detectBanqueMisrColumns([headerLine])) {
+            errors.push(`PDF page ${p + 1}: the statement table header was not found, so its columns cannot be read reliably.`);
+            return;
+        }
+        const unknown = headerLine.items.map(i => i.str).filter(s => !isKnownStatementHeader(s));
+        if (unknown.length > 0) {
+            errors.push(`PDF page ${p + 1}: unknown column(s) "${unknown.join('", "')}". The bank changed the statement format; the PDF reader needs updating.`);
+        }
+    });
+    return { errors, warnings };
+}
+
 export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
     const outputLines = [];
 
     for (const pageItems of pagesItems || []) {
-        const cleanItems = (pageItems || [])
-            .map(it => ({
-                str: normalizeArabicPresentation(it.str).trim(),
-                x: Number(it.x) || 0,
-                y: Number(it.y) || 0
-            }))
-            .filter(it => it.str.length > 0);
-
-        if (cleanItems.length === 0) continue;
-
-        // Group items that share approximately the same Y coordinate (within 3pt) into horizontal lines
-        const sortedByY = [...cleanItems].sort((a, b) => b.y - a.y || a.x - b.x);
-        const hLines = [];
-        for (const item of sortedByY) {
-            const last = hLines[hLines.length - 1];
-            if (last && Math.abs(last.y - item.y) <= 3.2) {
-                last.items.push(item);
-            } else {
-                hLines.push({ y: item.y, items: [item] });
-            }
-        }
-        hLines.forEach(line => {
-            line.items = orderBidiPdfLineItems(line.items);
-        });
+        const hLines = groupPdfPageLines(pageItems);
+        if (hLines.length === 0) continue;
 
         // Column boundaries from this page's table header ("Balance After | Credit | Debit | ...").
         // Reading cells by X position keeps wrapped text in its own column: the bank added
@@ -735,7 +976,7 @@ export function reconstructBanqueMisrPdfLinesFromPages(pagesItems) {
  * Parses extracted text from a Banque Misr Statement of Account PDF (single or multi-page)
  * into metadata and transaction rows, then runs processBankStatementRows.
  */
-export function parseBanqueMisrPdfText(fullText) {
+export function parseBanqueMisrPdfText(fullText, layout = null) {
     const text = normalizeArabicPresentation(fullText || '');
     const metadata = {
         customerName: 'جامعة النيل الاهلية',
@@ -744,8 +985,16 @@ export function parseBanqueMisrPdfText(fullText) {
         currency: 'USD',
         branch: '',
         dateFrom: '',
-        dateTo: ''
+        dateTo: '',
+        openingBalance: null,
+        sourceType: 'pdf',
+        formatErrors: [...(layout?.errors || [])],
+        formatWarnings: [...(layout?.warnings || [])]
     };
+
+    // Header block: "Customer Name  Customer Id  Opening Balance" then the values line.
+    const openMatch = text.match(/Opening Balance[^\n]*\n[^\n]*?(-?[\d,]+\.\d{2})[ \t]*$/m);
+    if (openMatch) metadata.openingBalance = parseStatementAmount(openMatch[1]);
 
     const accMatch = text.match(/\b(7\d{15})\b/) || text.match(/Account\s+Number\s+([0-9]{10,20})/i) || text.match(/رقم الحساب\s+([0-9]{10,20})/);
     if (accMatch) metadata.accountNumber = accMatch[1];
