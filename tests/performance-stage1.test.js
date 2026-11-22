@@ -16,8 +16,8 @@ const rootDir = path.resolve(__dirname, '..');
 
 describe('Stage 1 Multi-User Performance Optimizations & DB Storage Meter', () => {
   test('migration 2.11.6 and schema.sql define partial index, badge RPC, student version RPC, and storage meter RPC', () => {
-    const migSql = fs.readFileSync(path.join(rootDir, 'migrations/2.11.6_multiuser_performance_and_storage_meter.sql'), 'utf8');
-    const schemaSql = fs.readFileSync(path.join(rootDir, 'schema.sql'), 'utf8');
+    const migSql = fs.readFileSync(path.join(rootDir, 'legacy/supabase/migrations/2.11.6_multiuser_performance_and_storage_meter.sql'), 'utf8');
+    const schemaSql = fs.readFileSync(path.join(rootDir, 'legacy/supabase/schema.sql'), 'utf8');
 
     const tokens = [
       'CREATE INDEX IF NOT EXISTS idx_transactions_nonvalid_id_status',

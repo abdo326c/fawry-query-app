@@ -6,26 +6,38 @@ on:
     - cron: '0 16 * * 5'
   workflow_dispatch: # Allows manual trigger from GitHub Actions dashboard anytime
 
+concurrency:
+  group: weekly-backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   cloud-backup:
     name: Full Database Backup to Google Drive
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+      - name: Setup Node.js (version from .nvmrc)
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
+      # The hygiene audit must never stop the backup: if it fails the backup still runs,
+      # and the last step fails the job when either of them failed.
       - name: Pre-Backup Database Hygiene Audit (inspection only)
+        id: hygiene
+        continue-on-error: true
         env:
           GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
@@ -33,8 +45,35 @@ jobs:
         run: node scripts/database_hygiene.js
 
       - name: Execute Direct-to-Drive Backup
+        id: backup
+        if: always()
+        continue-on-error: true
         env:
           GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          BACKUP_RETENTION: ${{ vars.BACKUP_RETENTION || '12' }}
         run: node scripts/backup_to_drive.js
+
+      - name: Fail the job if hygiene or backup failed
+        if: always()
+        run: |
+          echo "hygiene: ${{ steps.hygiene.outcome }} | backup: ${{ steps.backup.outcome }}"
+          if [ "${{ steps.hygiene.outcome }}" != "success" ] || [ "${{ steps.backup.outcome }}" != "success" ]; then
+            exit 1
+          fi
+
+      - name: Open or update a failure issue (scheduled runs)
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Scheduled job failed: Weekly backup'
+          DETAIL: 'hygiene: ${{ steps.hygiene.outcome }}, backup: ${{ steps.backup.outcome }}'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "Failed again ($DETAIL): $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The scheduled run failed ($DETAIL): $RUN_URL"
+          fi

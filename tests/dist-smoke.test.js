@@ -74,8 +74,8 @@ describe('Production dist/ Bundle, Governance & Disaster Recovery Smoke Tests', 
   });
 
   test('v2.11.3 migration and schema.sql define table-driven primary admin, executive analytics, and cold-storage archive', () => {
-    const migSql = fs.readFileSync(path.join(rootDir, 'migrations/2.11.3_governance_and_analytics.sql'), 'utf8');
-    const schemaSql = fs.readFileSync(path.join(rootDir, 'schema.sql'), 'utf8');
+    const migSql = fs.readFileSync(path.join(rootDir, 'legacy/supabase/migrations/2.11.3_governance_and_analytics.sql'), 'utf8');
+    const schemaSql = fs.readFileSync(path.join(rootDir, 'legacy/supabase/schema.sql'), 'utf8');
 
     expect(migSql).toContain('is_primary_admin BOOLEAN NOT NULL DEFAULT FALSE');
     expect(migSql).toContain('CREATE TABLE IF NOT EXISTS public.transactions_archive');
