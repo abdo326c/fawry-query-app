@@ -810,7 +810,7 @@ class App {
                     document.getElementById('inline-student-profile')?.classList.add('hidden');
                     document.getElementById('student-directory-view')?.classList.remove('hidden');
                     if (this.shouldReloadTab('student-master', 300000)) {
-                        this.loadStudents({ skipAutoProfile: true });
+                        this.loadStudents();
                     }
                 }
                 if (tabId === 'users' && this.shouldReloadTab('users')) {
@@ -3206,7 +3206,7 @@ class App {
                                 if (searchInp) searchInp.value = sid;
                                 const smNav = document.querySelector('.nav-link[data-tab="student-master"]') || document.querySelector('.nav-item[data-view="student-master"]');
                                 if (smNav) smNav.click();
-                                this.loadStudents({ skipAutoProfile: true });
+                                this.loadStudents();
                                 this.loadStudentProfile(sid);
                             }
                         });

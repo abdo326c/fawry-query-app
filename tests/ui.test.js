@@ -1884,3 +1884,42 @@ test('BM page load: an old cached copy does not re-upload deposits deleted from 
         app.hasRole = origRole;
     }
 });
+
+test('Student search: typing never opens a profile; Enter or Search opens it when exactly one matches', async () => {
+    {
+        await import('../app.js');
+        document.dispatchEvent(new Event('DOMContentLoaded'));
+        const app = window.app;
+        const origProfile = app.loadStudentProfile;
+        const profileSpy = vi.fn();
+        app.loadStudentProfile = profileSpy;
+        app.allStudentsData = [
+            { student_id: '261009991', full_name: 'Test Student One', college: 'Engineering' },
+            { student_id: '261009992', full_name: 'Another Person', college: 'Business' }
+        ].map(s => app.indexStudentRecord(s));
+        const input = document.getElementById('student-search-input');
+        try {
+            // typing narrows to a single student -> list filtered, profile NOT opened
+            input.value = 'Test Stu';
+            input.dispatchEvent(new Event('input'));
+            await new Promise(r => setTimeout(r, 300));
+            expect(app.filteredStudentsData.map(s => s.student_id)).toEqual(['261009991']);
+            expect(profileSpy).not.toHaveBeenCalled();
+
+            // Enter with exactly one match -> opens it
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+            await new Promise(r => setTimeout(r, 20));
+            expect(profileSpy).toHaveBeenCalledWith('261009991');
+
+            // Search button with two matches -> nothing opens
+            profileSpy.mockClear();
+            input.value = 'o';
+            document.getElementById('btn-search-students').click();
+            await new Promise(r => setTimeout(r, 20));
+            expect(app.filteredStudentsData.length).toBe(2);
+            expect(profileSpy).not.toHaveBeenCalled();
+        } finally {
+            app.loadStudentProfile = origProfile;
+        }
+    }
+});
