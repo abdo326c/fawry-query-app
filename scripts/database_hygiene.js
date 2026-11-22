@@ -4,7 +4,7 @@
  *
  * Inspects and cleans:
  * 1. Duplicate item mapping rules (case/space variations).
- * 2. Duplicate manual fix entries.
+ * 2. Manual fixes whose reference_number differs only by case / whitespace (report only).
  * 3. Identical transaction duplicates.
  * 4. Unmapped transactions.
  * 5. Invalid / Missing student IDs.
@@ -109,46 +109,32 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
         if (tuples.size > 1) conflictingMappings++;
     }
 
-    const seenFixes = new Set();
-    const dupFixIds = [];
-    const deletedFixes = [];
+    // manual_fixes.reference_number is UNIQUE, so exact duplicates cannot exist. What CAN exist are
+    // case / whitespace variants of one reference (" 123ABC" vs "123abc"): the importer matches
+    // fixes by exact reference, so only one of them ever applies and the other is dead weight or
+    // silently conflicting. They are reported for manual review and never deleted automatically
+    // (the two rows may carry different corrections).
+    const fixesByNormalizedRef = new Map();
     for (const f of fixesRes.rows) {
-        if (seenFixes.has(f.reference_number)) {
-            dupFixIds.push(f.id);
-            deletedFixes.push({
-                reference_number: f.reference_number,
-                correct_id: f.correct_id,
-                item_name: f.item_name,
-                mapping: f.mapping,
-                second_mapping: f.second_mapping
-            });
-        } else {
-            seenFixes.add(f.reference_number);
-        }
+        const key = String(f.reference_number || '').trim().toLowerCase();
+        if (!fixesByNormalizedRef.has(key)) fixesByNormalizedRef.set(key, []);
+        fixesByNormalizedRef.get(key).push(f);
     }
+    const variantFixGroups = [...fixesByNormalizedRef.values()].filter(group => group.length > 1);
+    const variantFixExamples = variantFixGroups.slice(0, 20).map(group => group.map(f => f.reference_number));
+    const deletedFixes = [];
 
     const dupMappingsCount = dupMappingIds.length;
-    const dupFixesCount = dupFixIds.length;
+    const dupFixesCount = variantFixGroups.reduce((sum, group) => sum + group.length - 1, 0);
     let cleanedMappings = 0;
-    let cleanedFixes = 0;
+    const cleanedFixes = 0;
 
-    if (applyFixes && (dupMappingIds.length > 0 || dupFixIds.length > 0)) {
-        const delStmts = [];
-        let mapIdx = -1;
-        let fixIdx = -1;
-        if (dupMappingIds.length > 0) {
-            const ph = dupMappingIds.map(() => '?').join(', ');
-            mapIdx = delStmts.length;
-            delStmts.push({ sql: `DELETE FROM item_mappings WHERE id IN (${ph})`, args: dupMappingIds });
-        }
-        if (dupFixIds.length > 0) {
-            const ph = dupFixIds.map(() => '?').join(', ');
-            fixIdx = delStmts.length;
-            delStmts.push({ sql: `DELETE FROM manual_fixes WHERE id IN (${ph})`, args: dupFixIds });
-        }
-        const delRes = await withDbRetry(() => db.batch(delStmts, 'write'));
-        if (mapIdx >= 0) cleanedMappings = delRes[mapIdx]?.rowsAffected || 0;
-        if (fixIdx >= 0) cleanedFixes = delRes[fixIdx]?.rowsAffected || 0;
+    if (applyFixes && dupMappingIds.length > 0) {
+        const ph = dupMappingIds.map(() => '?').join(', ');
+        const delRes = await withDbRetry(() => db.batch([
+            { sql: `DELETE FROM item_mappings WHERE id IN (${ph})`, args: dupMappingIds }
+        ], 'write'));
+        cleanedMappings = delRes[0]?.rowsAffected || 0;
     }
 
     const healthScore = totalTx === 0
@@ -165,6 +151,7 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
         duplicate_mappings: dupMappingsCount,
         conflicting_case_mappings: conflictingMappings,
         duplicate_fixes: dupFixesCount,
+        manual_fix_reference_variants: variantFixExamples,
         cleaned_mappings: cleanedMappings,
         cleaned_fixes: cleanedFixes,
         auto_cleaned: applyFixes,
@@ -196,6 +183,7 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
         duplicate_mappings: dupMappingsCount,
         conflicting_case_mappings: conflictingMappings,
         duplicate_fixes: dupFixesCount,
+        manual_fix_reference_variants: variantFixExamples,
         cleaned_mappings: cleanedMappings,
         cleaned_fixes: cleanedFixes,
         auto_cleaned: applyFixes
@@ -211,7 +199,7 @@ export async function runDatabaseHygiene({ applyFixes = false, uploadToDrive = t
     console.log(`  • Identical Duplicate Tx:        ${data.identical_tx_duplicates || 0}`);
     console.log(`  • Duplicate Mapping Rules:       ${data.duplicate_mappings || 0} (Cleaned: ${data.cleaned_mappings || 0})`);
     console.log(`  • Conflicting Case Mappings:     ${data.conflicting_case_mappings || 0} (Manual review)`);
-    console.log(`  • Duplicate Manual Fixes:        ${data.duplicate_fixes || 0} (Cleaned: ${data.cleaned_fixes || 0})`);
+    console.log(`  • Manual Fix Ref Variants:       ${data.duplicate_fixes || 0} (Manual review)`);
     console.log(`  • Transactions Missing Mapping:  ${data.unmapped_items || 0}`);
     console.log(`  • Missing / Invalid Student IDs: ${data.invalid_ids || 0}`);
     console.log('='.repeat(70));
@@ -292,7 +280,7 @@ ${driveReportUrl ? `- **Drive Report**: [Open in Google Drive](${driveReportUrl}
 | **Identical Duplicate Transactions** | ${data.identical_tx_duplicates || 0} | — |
 | **Duplicate Mapping Rules** | ${data.duplicate_mappings || 0} | ${data.cleaned_mappings || 0} |
 | **Conflicting Case Mappings** | ${data.conflicting_case_mappings || 0} | Manual review |
-| **Duplicate Manual Fixes** | ${data.duplicate_fixes || 0} | ${data.cleaned_fixes || 0} |
+| **Manual Fix Reference Variants (case/space)** | ${data.duplicate_fixes || 0} | Manual review |
 | **Transactions Missing Mapping** | ${data.unmapped_items || 0} | — |
 | **Invalid / Unmatched Student IDs** | ${data.invalid_ids || 0} | — |
 `;

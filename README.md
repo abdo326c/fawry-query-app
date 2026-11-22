@@ -2,7 +2,7 @@
 
 Internal web app for NU Finance. It imports Fawry payment exports, matches payments to students, reconciles bank settlement files, and produces the Dynamics 365 (ERP) journal file.
 
-It's a static site (HTML + JavaScript modules). All data lives in Supabase.
+The front end is built with Vite and served by Vercel. Data lives in a Turso (libSQL / SQLite) database, reached only through the Vercel functions in `api/` (`auth.js`, `query.js`, `rpc.js`), which check the signed-in user's role on every request.
 
 ## Features
 
@@ -27,7 +27,7 @@ It's a static site (HTML + JavaScript modules). All data lives in Supabase.
 | `index.html` | Page layout, modals, CDN libraries (with SRI hashes), Content-Security-Policy |
 | `styles.css` | Styling (dark and light themes) |
 | `ui-chrome.js` | Service Worker registration, sidebar rail collapse, auth password toggle, and dropdown popovers |
-| `supabase.js` | Supabase client (project URL and **public** anon key) |
+| `supabase.js` | Supabase-compatible client wrapper that calls the `/api/*` functions |
 | `rules.js` | Shared business rules (ID validation, link → fix → mapping order), Excel compression/date formatting, and paginated data helpers |
 | `app-utils.js` | Shared UI helpers (`Toast`, progress wrappers, currency/status formatting, script loader) |
 | `csv-processor.js` | Importer for Fawry order and link files (CSV / Excel) |
@@ -39,16 +39,76 @@ It's a static site (HTML + JavaScript modules). All data lives in Supabase.
 | `erp-export.js` | Dynamics 365 (ERP) journal preview, Excel export, and batch/voucher recording |
 | `admin-audit.js` | Users & Roles RBAC admin panel, Audit Log viewer/undo, Double-Payment detector, and Database Hygiene modal |
 | `app.js` | Core application controller, authentication, transactions, mappings, fixes, students, and foreign deposits UI |
-| `schema.sql` | Consolidated baseline PostgreSQL schema, RLS policies, triggers, and RPCs (through v2.11.0) |
+| `api/` | Vercel functions: sign-in (JWT), table queries and RPCs with role checks |
+| `turso/schema.sql` | Live database schema (tables, period-lock and append-only triggers) |
+| `scripts/` | Setup, backup/restore, hygiene, FX rate and maintenance scripts (see Operations) |
+| `legacy/supabase/` | Old PostgreSQL schema and migrations. History only: never apply them |
 
-## Running it
+## Setup and deploy (Turso + Vercel)
 
-ES modules don't load from `file://`, so the app has to be served over HTTP(S).
+1. **Database:** create a Turso database (`turso db create fawry`), then get its URL
+   (`turso db show fawry --url`) and a token (`turso db tokens create fawry`).
+2. **Schema and first admin:** with the variables from `.env.example` set, run
+   `node scripts/turso_setup.mjs`. It applies `turso/schema.sql` (safe to re-run; it changes no
+   data) and, when `ADMIN_INITIAL_PASSWORD` is set, creates/resets the `ADMIN_EMAIL` login.
+   Run it again (without `ADMIN_INITIAL_PASSWORD`) after any release that changes the schema.
+3. **Vercel:** set `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `JWT_SECRET` (a long random
+   string) in Project Settings -> Environment Variables. The build is `npm run build` (output
+   `dist/`). Node 22+ (`.nvmrc` = 24).
+4. **Local:** `npm ci`, then `npm run dev`. Tests: `npm test`; lint: `npm run lint`.
 
-- **Locally:** run `npx serve .` or `python -m http.server 8080` in this folder, then open http://localhost:8080
-- **Hosting:** any static host works (GitHub Pages, Netlify, Vercel, Cloudflare Pages, or an internal web server). There's no build step.
+Users are created by an admin in **Users & Roles**; there is no public sign-up.
 
-After deploying a new version, do a hard refresh (Ctrl+F5) so browsers don't keep old cached JavaScript.
+## Operations
+
+| Job / script | What it does |
+|---|---|
+| `weekly_backup.yml` (Fri 16:00 UTC) | Hygiene audit (inspection only), then `scripts/backup_to_drive.js`. The backup runs even if the audit fails; the job turns red if either failed. |
+| `database_hygiene.yml` (daily 00:00 UTC) | Inspection; a manual run with "apply fixes" deletes exact duplicate mapping rules. |
+| `daily_fx_rate.yml` (09-12 UTC) | Saves today's USD->EGP rate at 12:00 Cairo time, or later if GitHub ran late and no rate exists yet. Never overwrites a manual rate. |
+
+A failed scheduled run opens (or comments on) a GitHub issue named "Scheduled job failed: ...".
+
+**Repository secrets** (Settings -> Secrets -> Actions): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`,
+`GDRIVE_TOKEN_JSON`. Optional variable `BACKUP_RETENTION` (default 12).
+
+### Backups
+
+`scripts/backup_to_drive.js` exports every table of `turso/schema.sql` (except the transient
+`period_lock_bypass`) to `fawry_backup_YYYYMMDD_HHmmss.zip` with a manifest of row counts and
+SHA-256 checksums, uploads it to Drive (Fawry Payments Backup > Year > Month > Week) and moves
+backups older than the newest `BACKUP_RETENTION` to the Drive trash.
+`node scripts/backup_to_drive.js --local-only [--out dir]` writes the zip locally instead.
+
+**The backup contains `app_users` (password hashes) and student personal data. Share the Drive
+folder with nobody except the finance admins.**
+
+### Restore
+
+Only into a new, empty database:
+
+1. Create a database and run `node scripts/turso_setup.mjs` against it.
+2. `node scripts/restore_from_backup.mjs <zip> --manifest <zip name>_manifest.json` (dry run:
+   checks zip, checksums, row counts and that the target is empty).
+3. Same command with `--confirm` to restore; it verifies the row counts afterwards.
+4. Point Vercel's `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` at the new database.
+
+Restoring over existing data is refused (audit log and archive are append-only by trigger).
+
+### Maintenance scripts
+
+- `scripts/delete_foreign_transactions.mjs` deletes all BM (USD) deposits: dry run by default,
+  `--confirm` to delete; saves a JSON backup to `backups/` first.
+- `scripts/load_test_10_users.mjs` needs `LOAD_TEST_ALLOW=1`, `LOAD_TEST_EMAIL` and
+  `--target <url>` equal to `TURSO_DATABASE_URL`. Never run it against production.
+
+### Rotating the Turso token
+
+1. `turso db tokens create <db>` (new token).
+2. Update `TURSO_AUTH_TOKEN` in Vercel (then redeploy) and in the GitHub repository secrets.
+3. Check the app and run a workflow manually (e.g. the FX job).
+4. Invalidate old tokens: `turso db tokens invalidate <db>` (this invalidates **all** tokens of
+   the database, so do it only after step 2 everywhere, then create one fresh token if needed).
 
 ## Business rules (order of precedence)
 
@@ -61,42 +121,13 @@ The importer, saving or deleting a fix or mapping, and **Re-apply Rules** all go
 
 ERP credit per line = `item_price`. For NUADCB136 the importer already stores Net Amount there. For NUADIB64 it's the item's own price, so multi-item orders aren't over-credited.
 
-## Database requirements
+## Security
 
-**Upgrading to 2.1.0:** run `migrations/2.1.0_original_student_id.sql` in the Supabase SQL editor **before** deploying the new files. Imports fail until the `original_student_id` column exists.
-
-Upserts rely on these unique constraints:
-
-| Table | Unique key |
-|---|---|
-| `transactions` | `(reference_number, item_price, check_column)` |
-| `links` | `payment_reference_number` |
-| `item_mappings` | `item_name` |
-| `manual_fixes` | `reference_number` |
-| `payment_links` | `invoice_number` (recommended; the import still works without it, just slower) |
-| `student_master` | `student_id` (primary key) |
-
-Columns used on `transactions`: `id, reference_number, payment_date (date), student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, merchant_name, bank, check_column, file_name, batch_id, mapping, second_mapping, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher`.
-
-Other tables used: `import_batches`, `audit_logs`.
-
-Optional RPC: `get_dashboard_pivot(start_date, end_date)` speeds up the dashboard. Without it, the app falls back to a normal query.
-
-## Security checklist (important)
-
-The key in `supabase.js` is the public **anon** key, which every visitor can see. That's normal for Supabase. Student data is protected **only** by Row Level Security (RLS), so before publishing:
-
-1. Enable RLS on **every** table listed above.
-2. Allow access only to signed-in users. Example (adapt per table):
-   ```sql
-   alter table public.transactions enable row level security;
-   create policy "staff only" on public.transactions
-     for all to authenticated using (true) with check (true);
-   ```
-3. In Supabase → Authentication → Providers, **disable public sign-ups**, so only accounts you create can log in.
-4. Never commit the `service_role` key to this repository.
-
-If the GitHub repository is public, anyone can read this code and the anon key. With RLS set up as above, that doesn't expose any data. A **private** repository is still recommended.
+- Every read and write goes through `api/`, which checks the JWT and the user's role
+  (`viewer < operator < accountant < admin`). The browser never holds a database token.
+- `JWT_SECRET`, `TURSO_AUTH_TOKEN` and the Drive token are secrets: keep them in Vercel / GitHub
+  settings, never in the repository.
+- Closed accounting periods, the audit log and the archive are protected by database triggers.
 
 ## Changelog
 

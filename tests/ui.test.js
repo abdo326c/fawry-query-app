@@ -725,7 +725,7 @@ test('Double-Payment Detector, Settlement History, and Universal Audit Log Undo 
     expect(window.app.filteredForeignTransactions.map(r => r.reference_number)).toEqual(['Q_ERR']);
 
     // Verify schema.sql consolidates all required tables & RPCs including foreign ERP revert
-    const schemaSql = fs.readFileSync(path.resolve(process.cwd(), 'schema.sql'), 'utf-8');
+    const schemaSql = fs.readFileSync(path.resolve(process.cwd(), 'legacy/supabase/schema.sql'), 'utf-8');
     expect(schemaSql).toContain('CREATE TABLE IF NOT EXISTS public.settlement_batches');
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.run_database_hygiene_audit');
     expect(schemaSql).toContain('CREATE OR REPLACE FUNCTION public.rollback_database_hygiene_audit');
@@ -1083,7 +1083,7 @@ test('Studio production layout, ui-chrome, all 11 views, 18 modals, toasts, them
 
     // 16. Admin user deactivation, reactivation, and deletion + sign-in enforcement
     {
-        const mig260 = fs.readFileSync(path.join(appDir, 'migrations/2.6.0_user_deactivation_and_delete.sql'), 'utf8');
+        const mig260 = fs.readFileSync(path.join(appDir, 'legacy/supabase/migrations/2.6.0_user_deactivation_and_delete.sql'), 'utf8');
         expect(mig260).toContain('CREATE OR REPLACE FUNCTION public.admin_set_user_active');
         expect(mig260).toContain('CREATE OR REPLACE FUNCTION public.admin_delete_user');
 

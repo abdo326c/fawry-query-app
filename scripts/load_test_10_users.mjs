@@ -1,6 +1,43 @@
-import authHandler from '../api/auth.js';
-import queryHandler from '../api/query.js';
-import rpcHandler from '../api/rpc.js';
+// 10-user read-only load test against a Turso database through the real API handlers.
+//
+// It signs in as an admin and fires ~70 concurrent API calls, so it must never be pointed at the
+// production database by accident. It refuses to run unless ALL of these hold:
+//   - LOAD_TEST_ALLOW=1
+//   - --target <url> is given and equals TURSO_DATABASE_URL (you name the database explicitly)
+//   - the target is not the production URL (LOAD_TEST_PRODUCTION_URL, if set, is refused)
+//   - LOAD_TEST_EMAIL (or ADMIN_EMAIL) and ADMIN_INITIAL_PASSWORD are set
+//
+// Usage (PowerShell):
+//   $env:TURSO_DATABASE_URL = "libsql://fawry-staging-....turso.io"; $env:TURSO_AUTH_TOKEN = "..."
+//   $env:LOAD_TEST_ALLOW = "1"; $env:LOAD_TEST_EMAIL = "admin@example.edu"; $env:ADMIN_INITIAL_PASSWORD = "..."
+//   node scripts/load_test_10_users.mjs --target $env:TURSO_DATABASE_URL
+
+function checkLoadTestTarget({ env = process.env, argv = process.argv.slice(2) } = {}) {
+  if (env.LOAD_TEST_ALLOW !== '1') {
+    return 'Refusing to run: set LOAD_TEST_ALLOW=1 to confirm this is a load test on a non-production database.';
+  }
+  const idx = argv.indexOf('--target');
+  const target = idx >= 0 ? String(argv[idx + 1] || '').trim() : '';
+  const dbUrl = String(env.TURSO_DATABASE_URL || '').trim();
+  if (!target) return 'Refusing to run: pass --target <database url> (must equal TURSO_DATABASE_URL).';
+  if (!dbUrl) return 'Refusing to run: TURSO_DATABASE_URL is not set.';
+  if (target !== dbUrl) return 'Refusing to run: --target does not match TURSO_DATABASE_URL.';
+  const prod = String(env.LOAD_TEST_PRODUCTION_URL || '').trim();
+  if (prod && prod === dbUrl) return 'Refusing to run: TURSO_DATABASE_URL is the production database (LOAD_TEST_PRODUCTION_URL).';
+  if (!(env.LOAD_TEST_EMAIL || env.ADMIN_EMAIL)) return 'Refusing to run: set LOAD_TEST_EMAIL (or ADMIN_EMAIL) to the admin account to sign in with.';
+  if (!env.ADMIN_INITIAL_PASSWORD) return 'Refusing to run: ADMIN_INITIAL_PASSWORD is required.';
+  return null;
+}
+
+const refusal = checkLoadTestTarget();
+if (refusal) {
+  console.error(refusal);
+  process.exit(1);
+}
+
+const { default: authHandler } = await import('../api/auth.js');
+const { default: queryHandler } = await import('../api/query.js');
+const { default: rpcHandler } = await import('../api/rpc.js');
 
 const CONCURRENT_USERS = 10;
 
@@ -26,14 +63,11 @@ function percentile(sorted, p) {
 }
 
 const password = process.env.ADMIN_INITIAL_PASSWORD;
-if (!password) {
-  console.error('ADMIN_INITIAL_PASSWORD is required in environment / .env');
-  process.exit(1);
-}
+const loginEmail = String(process.env.LOAD_TEST_EMAIL || process.env.ADMIN_EMAIL).trim().toLowerCase();
 
 const loginRes = await callApi(authHandler, {
   action: 'login',
-  email: 'ammahmoud@nu.edu.eg',
+  email: loginEmail,
   password
 });
 if (loginRes.status !== 200 || !loginRes.body.session?.access_token) {
@@ -110,14 +144,14 @@ async function simulateUserSession() {
   ]);
 }
 
-console.log(`Starting ${CONCURRENT_USERS}-user read-only concurrency load test against live Turso...`);
+console.log(`Starting ${CONCURRENT_USERS}-user read-only concurrency load test against the --target Turso database...`);
 const wallStart = performance.now();
 
 await Promise.all(Array.from({ length: CONCURRENT_USERS }, () => simulateUserSession()));
 
 const wallMs = Math.round(performance.now() - wallStart);
 
-console.log('\n--- 10-User Live Turso Load Test Summary ---');
+console.log('\n--- 10-User Turso Load Test Summary ---');
 console.log(`Concurrent users: ${CONCURRENT_USERS} | Total requests: ${totalRequests} | Errors: ${totalErrors} | Wall time: ${wallMs}ms`);
 for (const [label, list] of timings.entries()) {
   const sorted = [...list].sort((a, b) => a - b);

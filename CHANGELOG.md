@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.12.2 – 2026-11-22
+
+### BM (USD) deposits and students (merged today)
+- **BM statement PDFs are read by column.** The bank added two branch columns, which shifted every description (student name and ID) onto the previous deposit. Wrapped lines, tall rows, page footers and incoming IRS transfers are also handled.
+- **Statement import safeguards.** Column, running-balance and totals checks on every statement; with Excel + PDF of the same period only the Excel is imported and the PDF cross-checks it deposit by deposit; blocking problems stop the import.
+- **Deleted deposits no longer come back.** The BM page re-uploaded every cached deposit missing from the database; now only unsaved imports are re-sent. New `scripts/delete_foreign_transactions.mjs` (dry run by default, backup first).
+- **Students search** no longer opens a profile while you type; only Enter / Search with one match does.
+- **The statement import window is cleared** after Import / Cancel, and the Excel account number (labels ending in ":") is read.
+
+### Operations
+- **Backups cover every table**, including `app_users` (password hashes: restrict the Drive folder) and `import_batches`; tables are read with keyset paging, `transactions` before `transactions_archive` so rows archived during a backup are kept exactly once; AUTOINCREMENT counters are saved. Large files use Drive resumable upload. Only the newest `BACKUP_RETENTION` (12) backups are kept (older go to the Drive trash). `--local-only` writes the zip locally.
+- **The backup no longer deletes the local `backups/` folder** (where the delete script keeps its pre-delete backups).
+- **New `scripts/restore_from_backup.mjs`**: dry run by default (zip, checksums, row counts, empty target); `--confirm` restores into a new empty database made by `turso_setup.mjs`.
+- **Weekly backup runs even if the hygiene audit fails**; the job still turns red. Failed scheduled jobs open a GitHub issue. All workflows: Node from `.nvmrc`, `actions/checkout@v5` / `setup-node@v5`, `npm ci`, timeouts and concurrency groups.
+- **FX job catches up when GitHub cron is late** (saves after 12:00 Cairo if no rate exists yet) and the upsert can no longer overwrite a manual rate.
+- Hygiene: the impossible "duplicate manual fixes" check is replaced by a report of reference numbers that differ only by case/spaces (never auto-deleted).
+- Supabase-to-Turso copy: no separate `PRAGMA foreign_keys`; orphan `batch_id`s become NULL. Load test refuses to run without `LOAD_TEST_ALLOW=1` and `--target`.
+- Old Supabase `schema.sql` and `migrations/` moved to `legacy/supabase/` (Postgres only, never apply). `package.json` requires Node 22+.
+
 ## 2.12.1 – 2026-11-22
 
 Security and data-safety fixes for the new Turso / Vercel API (critical and high findings from the review).
@@ -33,8 +52,8 @@ Security and data-safety fixes for the new Turso / Vercel API (critical and high
 Fixes for the critical and high-severity issues found in a full code review.
 
 **Before deploying:**
-1. Supabase → Authentication → turn **off** "Allow new users to sign up".
-2. Run `migrations/2.11.0_security_and_hygiene_fixes.sql` in the SQL editor.
+1. Supabase → Authentication → turn **off** "Allow new users to sign up". *(Obsolete since the move to Turso: there is no public sign-up; admins create users in Users & Roles.)*
+2. Run `legacy/supabase/migrations/2.11.0_security_and_hygiene_fixes.sql` in the SQL editor.
 3. Make sure the `SUPABASE_SERVICE_ROLE_KEY` repository secret is set (backup and hygiene jobs now fail without it instead of silently "succeeding").
 
 **After deploying:** signed-in accounts with no `user_roles` row no longer see any data, and non-`@nu.edu.eg` accounts start inactive. Add or activate staff in the Users & Roles admin page.

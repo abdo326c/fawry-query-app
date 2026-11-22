@@ -26,6 +26,9 @@
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "bugs": {
     "url": "https://github.com/abdo326c/fawry-query-app/issues"
   },
