@@ -282,11 +282,24 @@ function parseOrTerm(table, term, args) {
   return buildSingleFilter(table, col, op, val, args);
 }
 
+/**
+ * Joins SQL terms with AND/OR as a shallow tree: a flat chain of n terms is n levels deep, and
+ * Turso's SQLite rejects expressions deeper than 100. Groups of 32, nested, keep any realistic
+ * number of terms far below that.
+ */
+export function joinShallow(parts, joiner) {
+  const GROUP = 32;
+  if (parts.length <= GROUP) return `(${parts.join(` ${joiner} `)})`;
+  const groups = [];
+  for (let i = 0; i < parts.length; i += GROUP) groups.push(`(${parts.slice(i, i + GROUP).join(` ${joiner} `)})`);
+  return joinShallow(groups, joiner);
+}
+
 function parseLogicalExpr(table, expr, joiner, args) {
   const terms = splitTopLevelCommas(String(expr || ''));
   if (terms.length === 0) return '1 = 1';
   const parts = terms.map(t => parseOrTerm(table, t, args));
-  return `(${parts.join(` ${joiner} `)})`;
+  return joinShallow(parts, joiner);
 }
 
 function buildWhereClause(table, filters = [], extraClauses = []) {
@@ -362,15 +375,22 @@ async function checkPeriodLockForConflictTargets(db, table, conflictCols, rows) 
     : table === 'foreign_transactions' ? 'COALESCE(value_date, transaction_date)' : null;
   if (!dateExpr || conflictCols.length === 0) return;
   const keyed = rows.filter(r => conflictCols.every(c => r[c] !== undefined));
-  for (let i = 0; i < keyed.length; i += 100) {
-    const slice = keyed.slice(i, i + 100);
+  // Join against a VALUES list instead of "(a IS ? AND ...) OR (...) OR ..." : a long OR chain is a
+  // deep expression tree, and Turso's SQLite rejects depth > 100 ("Expression tree is too large"),
+  // which failed every import that overwrote 100 existing rows. A VALUES join has constant depth.
+  // (Bound parameters per statement stay well under SQLite's limit: 200 rows x 3 keys.)
+  const CHUNK = 200;
+  const on = conflictCols.map((c, i) => `t.${quoteIdent(c)} IS v.column${i + 1}`).join(' AND ');
+  for (let i = 0; i < keyed.length; i += CHUNK) {
+    const slice = keyed.slice(i, i + CHUNK);
     const args = [];
-    const terms = slice.map(r => {
+    const tuples = slice.map(r => {
       for (const c of conflictCols) args.push(serializeValue(table, c, r[c]));
-      return `(${conflictCols.map(c => `${quoteIdent(c)} IS ?`).join(' AND ')})`;
+      return `(${conflictCols.map(() => '?').join(', ')})`;
     });
+    const tDateExpr = dateExpr.replace(/\b(payment_date|value_date|transaction_date)\b/g, 't.$1');
     const res = await withDbRetry(() => db.execute({
-      sql: `SELECT DISTINCT ${dateExpr} AS d FROM ${quoteIdent(table)} WHERE ${terms.join(' OR ')}`,
+      sql: `SELECT DISTINCT ${tDateExpr} AS d FROM ${quoteIdent(table)} t JOIN (VALUES ${tuples.join(', ')}) v ON ${on}`,
       args
     }));
     await assertPeriodsUnlocked(db, res.rows.map(r => r.d));
