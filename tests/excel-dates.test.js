@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest';
 
 vi.mock('../supabase.js', () => ({ supabase: {} }));
 
-import { applyIsoDateFormats, formatExcelDateText, EXCEL_DATE_FORMAT, EXCEL_DATETIME_FORMAT } from '../rules.js';
+import { applyIsoDateFormats, formatExcelDateText, isoTextToExcelSerial, EXCEL_DATE_FORMAT, EXCEL_DATETIME_FORMAT } from '../rules.js';
 
 const s = (v) => ({ t: 's', v });
 const n = (v, z) => (z ? { t: 'n', v, z } : { t: 'n', v });
@@ -48,7 +48,7 @@ test('real Excel date cells get the yyyy-mm-dd format', () => {
     expect(ws.A3.v).toBe(46343);                 // 2026-11-17
 });
 
-test('text in date columns is rewritten; other columns and non-dates are not', () => {
+test('date text in date columns becomes a real Excel date shown as yyyy-mm-dd; other columns and non-dates are not', () => {
     const wb = {
         SheetNames: ['S'],
         Sheets: {
@@ -62,12 +62,15 @@ test('text in date columns is rewritten; other columns and non-dates are not', (
     };
     applyIsoDateFormats(wb);
     const ws = wb.Sheets.S;
-    expect(ws.A2).toEqual({ t: 's', v: '2026-11-17' });
-    expect(ws.B2.v).toBe('17/11/2026');          // not a date column
-    expect(ws.C2.v).toBe('2025-12-31 23:59:59');
-    expect(ws.D2.v).toBe('2026-01-25 10:15:00');
-    expect(ws.A3.v).toBe('N/A');
-    expect(ws.D3.v).toBe('2026-01-02');
+    expect(ws.A2).toEqual({ t: 'n', v: 46343, z: EXCEL_DATE_FORMAT });            // 2026-11-17
+    expect(ws.B2).toEqual({ t: 's', v: '17/11/2026' });                             // not a date column
+    expect(ws.C2.t).toBe('n');
+    expect(ws.C2.z).toBe(EXCEL_DATETIME_FORMAT);
+    expect(ws.C2.v).toBeCloseTo(isoTextToExcelSerial('2025-12-31 23:59:59'), 8);
+    expect(ws.D2.t).toBe('n');
+    expect(ws.D2.v).toBeCloseTo(isoTextToExcelSerial('2026-01-25 10:15:00'), 8);
+    expect(ws.A3).toEqual({ t: 's', v: 'N/A' });                                    // non-date text untouched
+    expect(ws.D3).toEqual({ t: 'n', v: isoTextToExcelSerial('2026-01-02'), z: EXCEL_DATE_FORMAT });
     expect(ws.A1.v).toBe('Payment Date');        // header untouched
 });
 
@@ -85,5 +88,31 @@ test('titled pivot sheets: header on row 2, title on row 1 is left alone', () =>
     };
     applyIsoDateFormats(wb);
     expect(wb.Sheets.P.A1.v).toBe('Collection Report 1/11/2026');
-    expect(wb.Sheets.P.A3.v).toBe('2026-11-17');
+    expect(wb.Sheets.P.A3).toEqual({ t: 'n', v: 46343, z: EXCEL_DATE_FORMAT });
+});
+
+test('isoTextToExcelSerial uses the wall-clock date (no time-zone shift)', () => {
+    expect(isoTextToExcelSerial('2026-11-17')).toBe(46343);
+    expect(isoTextToExcelSerial('1900-03-01')).toBe(61);
+    expect(isoTextToExcelSerial('2026-11-17 12:00:00')).toBe(46343.5);
+    expect(isoTextToExcelSerial('17/11/2026')).toBeNull();
+});
+
+test('raw bank column names and bare serial numbers in date columns become dates', () => {
+    const wb = {
+        SheetNames: ['S'],
+        Sheets: {
+            S: {
+                '!ref': 'A1:D2',
+                A1: s('TRXDATE'), B1: s('SETTLEMENT_DATE'), C1: s('Value Date'), D1: s('NETAMOUNT'),
+                A2: s('2026-11-17'), B2: s('18/11/2026'), C2: n(46343), D2: n(46343)
+            }
+        }
+    };
+    applyIsoDateFormats(wb);
+    const ws = wb.Sheets.S;
+    expect(ws.A2).toEqual({ t: 'n', v: 46343, z: EXCEL_DATE_FORMAT });
+    expect(ws.B2).toEqual({ t: 'n', v: 46344, z: EXCEL_DATE_FORMAT });
+    expect(ws.C2.z).toBe(EXCEL_DATE_FORMAT);       // bare serial in a date column
+    expect(ws.D2.z).toBeUndefined();               // same number in a money column stays a number
 });

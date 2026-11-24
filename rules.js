@@ -973,6 +973,17 @@ export function formatExcelDateText(raw) {
     return null;
 }
 
+/**
+ * "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" (wall-clock, as returned by formatExcelDateText) → Excel
+ * serial date number (days since 1899-12-30). Computed from the parts, so no time-zone shift.
+ */
+export function isoTextToExcelSerial(iso) {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}):(\d{2}))?$/);
+    if (!m) return null;
+    const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
+    return ms / 86400000 + 25569;
+}
+
 function decodeColumnLetters(letters) {
     let n = 0;
     for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
@@ -982,9 +993,9 @@ function decodeColumnLetters(letters) {
 /**
  * Makes every date in a workbook display as yyyy-mm-dd (yyyy-mm-dd hh:mm:ss when it has a time):
  *  - real Excel date cells (numbers with a date format, or Date cells) get the yyyy-mm-dd format;
- *  - text in date columns (header contains "Date", "Time", "Created", "Expiry", ...) is rewritten
- *    as "YYYY-MM-DD" text. Text stays text, so re-importing an exported file behaves as before.
- * Non-date text in those columns is left untouched.
+ *  - text in date columns (header contains "Date", "Time", "Created", "Expiry", ...) that is a date
+ *    is turned into a real Excel date value with that format (the app's importers all accept Excel
+ *    date numbers). Non-date text in those columns ("N/A", "-") is left untouched.
  */
 export function applyIsoDateFormats(workbook) {
     if (!workbook || !Array.isArray(workbook.SheetNames) || !workbook.Sheets) return workbook;
@@ -1014,7 +1025,10 @@ export function applyIsoDateFormats(workbook) {
                 headerRow = r;
                 for (const { addr, c } of strCells) {
                     const text = String(ws[addr].v).trim();
-                    if (text.length <= 60 && DATE_HEADER_RE.test(text)) dateCols.add(c);
+                    // also raw bank column names: "SETTLEMENT_DATE", "TRXDATE", "VALUE_DATE"
+                    const isDateHeader = DATE_HEADER_RE.test(text.replace(/_/g, ' '))
+                        || /^(trx|txn|value|settlement|payment|posting|creation|expiry)date$/i.test(text.replace(/[_\s]/g, ''));
+                    if (text.length <= 60 && isDateHeader) dateCols.add(c);
                 }
                 break;
             }
@@ -1036,13 +1050,20 @@ export function applyIsoDateFormats(workbook) {
                     delete cell.w;
                     continue;
                 }
+                // A bare Excel serial number in a date column (no format) → show it as a date.
+                // Range 1982-02-17 .. 2119-01-08 so ordinary numbers are never mistaken for dates.
+                if (cell.t === 'n' && !cell.z && r > headerRow && dateCols.has(c)
+                    && typeof cell.v === 'number' && cell.v >= 30000 && cell.v < 80000) {
+                    cell.z = cell.v % 1 ? EXCEL_DATETIME_FORMAT : EXCEL_DATE_FORMAT;
+                    delete cell.w;
+                    continue;
+                }
                 if (cell.t === 's' && r > headerRow && dateCols.has(c)) {
+                    // Date text becomes a real Excel date (sortable/filterable), shown as yyyy-mm-dd.
                     const iso = formatExcelDateText(cell.v);
-                    if (iso && iso !== cell.v) {
-                        cell.v = iso;
-                        delete cell.w;
-                        delete cell.h;
-                        delete cell.r;
+                    const serial = iso ? isoTextToExcelSerial(iso) : null;
+                    if (serial !== null) {
+                        ws[addr] = { t: 'n', v: serial, z: iso.length > 10 ? EXCEL_DATETIME_FORMAT : EXCEL_DATE_FORMAT };
                     }
                 }
             }
