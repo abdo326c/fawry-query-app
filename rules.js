@@ -2511,3 +2511,33 @@ export function buildImportIssuesCsv(issues) {
     }
     return lines.join('\r\n');
 }
+
+// Safety review for "Apply Student ID" on several selected transactions. One payment should belong to
+// one student, so a selection that would overwrite several different valid students who also paid from
+// different mobile numbers is almost certainly a mis-click and is blocked.
+const normalizeMobileForCompare = (m) => String(m || '').replace(/\D/g, '').slice(-10);
+export function analyzeBulkIdAssignment(rows, newId) {
+    const target = String(newId || '').trim();
+    const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    const sameKey = (v) => String(v || '').trim().toLowerCase();
+    const changing = list.filter(tx => sameKey(tx.student_id) !== sameKey(target));
+    const unchanged = list.length - changing.length;
+    const overwrittenIds = [...new Set(changing.map(tx => String(tx.student_id || '').trim()).filter(Boolean))];
+    const overwrittenValidIds = [...new Set(changing
+        .filter(tx => String(tx.student_id || '').trim() && validateID(String(tx.student_id).trim()) === 'Valid')
+        .map(tx => String(tx.student_id).trim()))];
+    const mobiles = [...new Set(list.map(tx => normalizeMobileForCompare(tx.customer_mobile)).filter(Boolean))];
+    const reasons = [];
+    let blocked = false;
+    if (overwrittenValidIds.length > 1 && mobiles.length > 1) {
+        blocked = true;
+        reasons.push(`The selected rows belong to ${overwrittenValidIds.length} different students with valid IDs, paid from ${mobiles.length} different mobile numbers. Assign IDs one student at a time.`);
+    } else {
+        if (overwrittenValidIds.length > 1) reasons.push(`This replaces ${overwrittenValidIds.length} different valid Student IDs.`);
+        if (mobiles.length > 1) reasons.push(`The rows were paid from ${mobiles.length} different mobile numbers.`);
+        if (changing.length > 10) reasons.push(`${changing.length} transactions will change.`);
+        if (overwrittenValidIds.length === 1 && overwrittenValidIds[0]) reasons.push(`Valid Student ID ${overwrittenValidIds[0]} will be replaced.`);
+    }
+    const requiresTypedConfirm = !blocked && (overwrittenValidIds.length > 1 || mobiles.length > 1 || changing.length > 10);
+    return { target, changing, unchanged, overwrittenIds, overwrittenValidIds, mobiles, blocked, requiresTypedConfirm, reasons };
+}

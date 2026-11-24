@@ -17,6 +17,7 @@ import {
     toDateOnly,
     toPeriodMonth,
     isDateInClosedPeriods,
+    analyzeBulkIdAssignment,
     dateToExcelSerial,
     isSameDaySettlementBank,
     getStudentProgramLevel,
@@ -2339,6 +2340,81 @@ class App {
         }
     }
 
+    // Shows every row that will change (current ID -> new ID) before a bulk Student ID assignment.
+    // Blocked selections only offer Close; risky ones need the new ID typed again.
+    reviewBulkIdAssignment(review, { newId, idStatus, closedCount = 0 } = {}) {
+        if (typeof window._activeBulkReviewCancel === 'function') window._activeBulkReviewCancel();
+        return new Promise((resolve) => {
+            const esc = (v) => escapeHTML(String(v ?? ''));
+            const student = this.studentMasterByIdMap?.get(String(newId).toLowerCase()) || null;
+            const rowsHtml = review.changing.map(tx => `
+                <tr>
+                    <td>${esc(tx.reference_number)}</td>
+                    <td>${esc(toDateOnly(tx.payment_date) || tx.payment_date || '')}</td>
+                    <td>${esc(tx.student_id || '-')} &rarr; <strong>${esc(newId)}</strong></td>
+                    <td>${esc(tx.customer_mobile || '-')}</td>
+                    <td>${esc(tx.item_name || '')}</td>
+                    <td style="text-align:right;">${esc(formatMoney(tx.item_price))}</td>
+                </tr>`).join('');
+            const notes = [];
+            if (idStatus !== 'Valid') notes.push(`New ID validation: ${idStatus}.`);
+            if (review.unchanged > 0) notes.push(`${review.unchanged} selected row(s) already have this ID and are left as they are.`);
+            if (closedCount > 0) notes.push(`${closedCount} row(s) in closed accounting periods are skipped.`);
+            const locked = review.changing.filter(t => isLockedTransaction(t)).length;
+            if (locked > 0) notes.push(`${locked} row(s) are settled or already posted to ERP (ERP batch stays unchanged).`);
+
+            const overlay = document.createElement('div');
+            overlay.id = 'modal-bulk-id-review';
+            overlay.className = 'modal';
+            overlay.style.zIndex = '99998';
+            overlay.setAttribute('role', 'alertdialog');
+            overlay.setAttribute('aria-modal', 'true');
+            const boxBg = review.blocked ? 'var(--danger-bg, rgba(239,68,68,0.12))' : 'var(--warning-bg, rgba(245,158,11,0.12))';
+            const boxFg = review.blocked ? 'var(--danger, #ef4444)' : 'var(--warning, #f59e0b)';
+            overlay.innerHTML = `
+                <div class="modal-content glass-card" style="max-width: 900px; width: 95%;">
+                    <div class="modal-header"><h2 style="font-size:1.2rem;">${review.blocked ? 'Bulk assignment blocked' : 'Review Student ID change'}</h2></div>
+                    <div class="modal-body" style="max-height: 65vh; overflow:auto;">
+                        <p style="margin:0 0 0.6rem;">Assign <strong>${esc(newId)}</strong>${student?.full_name ? ` (${esc(student.full_name)})` : ''} to <strong>${review.changing.length}</strong> transaction(s):</p>
+                        ${review.reasons.length ? `<div data-bulk-review-reasons style="padding:0.6rem 0.8rem;border-radius:6px;margin-bottom:0.6rem;background:${boxBg};color:${boxFg};">${review.reasons.map(esc).join('<br>')}</div>` : ''}
+                        ${notes.length ? `<p style="color:var(--text-muted);font-size:0.82rem;margin:0 0 0.6rem;">${notes.map(esc).join('<br>')}</p>` : ''}
+                        <table class="data-table" style="width:100%;font-size:0.8rem;">
+                            <thead><tr><th>Ref</th><th>Date</th><th>Student ID</th><th>Mobile</th><th>Item</th><th style="text-align:right;">Price</th></tr></thead>
+                            <tbody>${rowsHtml}</tbody>
+                        </table>
+                        ${review.requiresTypedConfirm ? `<label style="display:block;margin-top:0.8rem;font-size:0.85rem;">Type the new Student ID <strong>${esc(newId)}</strong> to confirm:
+                            <input type="text" data-bulk-review-confirm class="input-text" autocomplete="off" style="margin-top:0.3rem;width:220px;"></label>` : ''}
+                    </div>
+                    <div class="modal-footer" style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                        <button type="button" class="btn btn-outline" data-bulk-review-cancel>${review.blocked ? 'Close' : 'Cancel'}</button>
+                        ${review.blocked ? '' : `<button type="button" class="btn btn-primary" data-bulk-review-ok ${review.requiresTypedConfirm ? 'disabled' : ''}>Apply to ${review.changing.length} transaction(s)</button>`}
+                    </div>
+                </div>`;
+            document.body.appendChild(overlay);
+
+            const btnOk = overlay.querySelector('[data-bulk-review-ok]');
+            const btnCancel = overlay.querySelector('[data-bulk-review-cancel]');
+            const confirmInput = overlay.querySelector('[data-bulk-review-confirm]');
+            let onKey = null;
+            const finish = (result) => {
+                if (window._activeBulkReviewCancel === onCancel) window._activeBulkReviewCancel = null;
+                window.removeEventListener('keydown', onKey);
+                overlay.remove();
+                resolve(result);
+            };
+            const onCancel = () => finish(false);
+            onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } };
+            window._activeBulkReviewCancel = onCancel;
+            window.addEventListener('keydown', onKey);
+            btnCancel.addEventListener('click', onCancel);
+            confirmInput?.addEventListener('input', () => {
+                if (btnOk) btnOk.disabled = confirmInput.value.trim().toLowerCase() !== String(newId).trim().toLowerCase();
+            });
+            btnOk?.addEventListener('click', () => { if (!btnOk.disabled) finish(true); });
+            (confirmInput || btnCancel).focus();
+        });
+    }
+
     async applyBulkStudentIdToSelected() {
         if (!this.requireRole('accountant', 'bulk-assign Student IDs')) return;
         const idInput = document.getElementById('tx-bulk-student-id');
@@ -2372,22 +2448,16 @@ class App {
         }
 
         const idStatus = validateID(newId);
-        const uniqueRefs = [...new Set(openRows.map(t => String(t.reference_number || '').trim()).filter(Boolean))];
-        const lockedCount = openRows.filter(t => isLockedTransaction(t)).length;
-
-        let msg = `Assign Student ID "${newId}" (${idStatus}) to ${openRows.length} row(s) across ${uniqueRefs.length} reference number(s)?`;
-        if (idStatus !== 'Valid') {
-            msg += ` Warning: ID validation returned "${idStatus}".`;
+        const review = analyzeBulkIdAssignment(openRows, newId);
+        if (review.changing.length === 0) {
+            Toast.show(`All selected row(s) already have Student ID ${newId}.`, 'info');
+            return;
         }
-        if (closedRows.length > 0) {
-            msg += ` ${closedRows.length} selected row(s) in closed accounting period(s) will be skipped.`;
-        }
-        if (lockedCount > 0) {
-            msg += ` ${lockedCount} row(s) are settled or already posted to ERP (ERP batch will remain unchanged).`;
-        }
-
-        const ok = await window.customConfirm(msg, 'Apply Student ID', 'Cancel');
+        const ok = await this.reviewBulkIdAssignment(review, { newId, idStatus, closedCount: closedRows.length });
         if (!ok) return;
+        // only rows whose ID actually changes are written
+        const rowsToChange = review.changing;
+        const uniqueRefs = [...new Set(rowsToChange.map(t => String(t.reference_number || '').trim()).filter(Boolean))];
 
         const origHtml = btnApply ? btnApply.innerHTML : '';
         if (btnApply) {
@@ -2429,7 +2499,7 @@ class App {
             }
 
             const fixesMap = new Map(fixesToUpsert.map(f => [f.reference_number, f]));
-            const changes = await recomputeTransactions(openRows, {
+            const changes = await recomputeTransactions(rowsToChange, {
                 includeLocked: true,
                 fixes: fixesMap,
                 mappings: this.allMappingsData || undefined
@@ -2443,7 +2513,7 @@ class App {
                     assigned_student_id: newId,
                     id_status: idStatus,
                     reference_count: uniqueRefs.length,
-                    rows_selected: openRows.length,
+                    rows_selected: rowsToChange.length,
                     transactions_updated: updatedCount,
                     closed_period_skipped: closedRows.length,
                     revert_data: existingFixes.length > 0
@@ -2464,7 +2534,7 @@ class App {
             await this.loadTransactions();
             this.updateSidebarBadges({ force: true });
 
-            Toast.show(`Assigned Student ID ${newId} to ${updatedCount || openRows.length} transaction(s).`, 'success');
+            Toast.show(`Assigned Student ID ${newId} to ${updatedCount || rowsToChange.length} transaction(s).`, 'success');
         } catch (err) {
             Toast.show('Bulk assign failed: ' + err.message, 'error');
         } finally {
