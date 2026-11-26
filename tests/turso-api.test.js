@@ -537,6 +537,32 @@ describe('Turso / Vercel API Backend (Auth, RBAC Query, RPCs)', () => {
     }, viewerToken);
     expect(restoredMap.body.data).toHaveLength(1);
 
+    // Bulk manual-fix entry (Auto-Match / Bulk Assign): one fix existed before, one was new
+    await db.execute("DELETE FROM manual_fixes WHERE reference_number IN ('AM-OLD','AM-NEW')");
+    await db.execute("INSERT INTO manual_fixes (reference_number, correct_id) VALUES ('AM-OLD', '241009999'), ('AM-NEW', '241001111')");
+    const logBulk = await callApi(queryHandler, {
+      table: 'audit_logs',
+      operation: 'insert',
+      returning: '*',
+      values: {
+        action: 'Applied Auto-Matches',
+        affected_references: 'AM-OLD, AM-NEW',
+        details: {
+          revert_data: {
+            table_name: 'manual_fixes',
+            operation: 'update',
+            previous_rows: [{ reference_number: 'AM-OLD', correct_id: '241000001' }],
+            inserted_keys: ['AM-NEW']
+          }
+        }
+      }
+    }, accountantToken);
+    expect(logBulk.status).toBe(200);
+    const revBulk = await callApi(rpcHandler, { fn: 'revert_audit_log_entry', args: { p_audit_id: logBulk.body.data[0].id } }, adminToken);
+    expect(revBulk.body.data.success).toBe(true);
+    const afterBulk = await db.execute("SELECT reference_number, correct_id FROM manual_fixes WHERE reference_number IN ('AM-OLD','AM-NEW')");
+    expect(afterBulk.rows.map(r => [r.reference_number, r.correct_id])).toEqual([['AM-OLD', '241000001']]);
+
     // ERP batch revert
     await callApi(queryHandler, {
       table: 'transactions',

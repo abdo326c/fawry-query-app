@@ -1,6 +1,6 @@
 import { supabase } from './supabase.js';
 import {
-    fetchAll,
+    fetchByIn,
     escapeHTML,
     sanitizeExcelRows,
     toDateOnly,
@@ -1100,9 +1100,15 @@ class AdminAuditMixin {
                 this.mappingSuggestCache = null;
                 this.loadMappings();
             } else if (tableName === 'manual_fixes') {
-                const ref = log.affected_references;
-                if (ref) {
-                    const rows = await fetchAll('transactions', '*', q => q.eq('reference_number', ref), 'id');
+                // Re-derive every reference the undo touched (bulk entries list many).
+                const rd = log.details?.revert_data || {};
+                const refs = [...new Set([
+                    ...(rd.previous_rows || []).map(r => r?.reference_number),
+                    ...(rd.inserted_keys || [])
+                ].map(r => String(r ?? '').trim()).filter(Boolean))];
+                if (refs.length === 0 && log.affected_references) refs.push(String(log.affected_references).trim());
+                if (refs.length > 0) {
+                    const rows = await fetchByIn('transactions', '*', 'reference_number', refs, 'reference_number');
                     await this.reapplyRulesTo(rows);
                 }
                 this.loadFixes();
