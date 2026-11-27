@@ -17,6 +17,8 @@ import {
 } from './rules.js';
 import {
     runConcurrent,
+    ensureXlsx,
+    ensureFuse,
     renderIcons,
     formatIdStatusMeta,
     formatMoney,
@@ -570,6 +572,7 @@ class MappingsFixesUiMixin {
         document.getElementById('btn-add-mapping').addEventListener('click', () => {
             this.resetMappingModal('Add Mapping');
             document.getElementById('modal-mapping').classList.remove('hidden');
+            ensureFuse().catch(() => {});
         });
 
         // Smart Mapping Auto-Suggest & Live Duplicate Detection
@@ -623,7 +626,14 @@ class MappingsFixesUiMixin {
 
                 // 2. Smart Fuzzy Suggestion
                 if (!suggestDiv) return;
-                if (query.length < 3 || typeof Fuse === 'undefined') {
+                if (query.length < 3) {
+                    suggestDiv.style.display = 'none';
+                    return;
+                }
+                if (typeof Fuse === 'undefined') {
+                    await ensureFuse().catch(() => {});
+                }
+                if (typeof Fuse === 'undefined') {
                     suggestDiv.style.display = 'none';
                     return;
                 }
@@ -1028,6 +1038,7 @@ class MappingsFixesUiMixin {
             let inserted = 0;
 
             try {
+                await ensureXlsx();
                 const buffer = await file.arrayBuffer();
                 const workbook = XLSX.read(buffer, { type: 'array' });
                 const worksheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -1271,7 +1282,8 @@ class MappingsFixesUiMixin {
         document.getElementById('file-upload-fixes').addEventListener('change', (e) => handleUpload(e, 'fixes'));
 
         // Templates
-        document.getElementById('btn-template-mappings').addEventListener('click', () => {
+        document.getElementById('btn-template-mappings').addEventListener('click', async () => {
+            await ensureXlsx();
             const worksheet = XLSX.utils.json_to_sheet([{
                 "Item Name": "",
                 "Adjusted Item Name": "",
@@ -1283,7 +1295,8 @@ class MappingsFixesUiMixin {
             writeCompressedExcel(workbook, "Item_Mappings_Template.xlsx");
         });
 
-        document.getElementById('btn-template-fixes').addEventListener('click', () => {
+        document.getElementById('btn-template-fixes').addEventListener('click', async () => {
+            await ensureXlsx();
             const worksheet = XLSX.utils.json_to_sheet([{
                 "Reference Number": "",
                 "Correct ID": "",

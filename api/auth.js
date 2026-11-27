@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { getDb, readJsonBody, sendJson, sendServerError, withDbRetry } from './_lib/db.js';
 import {
+  buildSessionCookie,
   bumpTokenVersion,
   createJwt,
   getAuthUser,
@@ -83,11 +84,20 @@ export default async function handler(req, res) {
     const db = getDb();
     const body = await readJsonBody(req);
     const action = String(body.action || '').trim().toLowerCase();
+    const cookieOnly = String(req.headers?.['x-fawry-cookie-auth'] || req.headers?.['X-Fawry-Cookie-Auth'] || '') === '1';
 
     if (action === 'session') {
       const user = await getAuthUser(req, db);
       if (!user || !user.isActive || user.role === 'none') {
         return sendJson(res, 200, { session: null });
+      }
+      if (cookieOnly) {
+        return sendJson(res, 200, {
+          session: {
+            cookie_auth: true,
+            user: { id: user.id, email: user.email, role: user.role }
+          }
+        });
       }
       const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
       const token = String(authHeader).replace(/^Bearer\s+/i, '').trim();
@@ -103,6 +113,7 @@ export default async function handler(req, res) {
       // Revokes every outstanding token of this login (all devices), not just this one.
       const user = await getAuthUser(req, db);
       if (user) await bumpTokenVersion(db, user.email);
+      res.setHeader('Set-Cookie', buildSessionCookie('', req, { clear: true }));
       return sendJson(res, 200, { ok: true });
     }
 
@@ -197,11 +208,11 @@ export default async function handler(req, res) {
 
       const tv = await withDbRetry(() => getTokenVersion(db, email));
       const token = createJwt({ sub: dbUser.id, email, tv: tv || 0 });
+      res.setHeader('Set-Cookie', buildSessionCookie(token, req));
       return sendJson(res, 200, {
-        session: {
-          access_token: token,
-          user: { id: dbUser.id, email, role }
-        }
+        session: cookieOnly
+          ? { cookie_auth: true, user: { id: dbUser.id, email, role } }
+          : { access_token: token, user: { id: dbUser.id, email, role } }
       });
     }
 
@@ -233,9 +244,12 @@ export default async function handler(req, res) {
       await bumpTokenVersion(db, user.email);
       const tv = await getTokenVersion(db, user.email);
       const token = createJwt({ sub: userRes.rows[0].id, email: user.email, tv: tv || 0 });
+      res.setHeader('Set-Cookie', buildSessionCookie(token, req));
       return sendJson(res, 200, {
         ok: true,
-        session: { access_token: token, user: { id: userRes.rows[0].id, email: user.email, role: user.role } }
+        session: cookieOnly
+          ? { cookie_auth: true, user: { id: userRes.rows[0].id, email: user.email, role: user.role } }
+          : { access_token: token, user: { id: userRes.rows[0].id, email: user.email, role: user.role } }
       });
     }
 

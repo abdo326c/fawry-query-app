@@ -799,4 +799,48 @@ describe('Turso / Vercel API Backend (Auth, RBAC Query, RPCs)', () => {
     });
     expect(inactiveRow.rows[0].password_hash).toBe(legacyHash);
   });
+
+  test('get_operational_checklist, get_period_close_readiness, and detect_fawry_duplicates RPCs compute accurate summaries', async () => {
+    await db.batch([
+      {
+        sql: `INSERT INTO transactions (reference_number, payment_date, student_id, item_name, item_price, mapping, bank, check_column, id_status, is_settled, erp_batch_number)
+              VALUES
+              ('OK-1', '2026-10-05', '231000101', 'Tuition', 1000, 'Tuition', 'NUADIB64', 'OK-1-Tuition', 'Valid', 1, 'ERP-1'),
+              ('BAD-1', '2026-10-06', 'BAD', 'Bus', 250, '', 'NUADCB136', 'BAD-1-Bus', 'Error: Text/Name detected', 0, NULL),
+              ('DUP-1', '2026-10-07', '231000102', 'Tuition', 500, 'Tuition', 'NUADIB64', 'DUP-1-Tuition', 'Valid', 0, NULL),
+              ('DUP-1', '2026-10-07', '231000102', 'Tuition', 500, 'Tuition', 'NUADIB64', 'DUP-1-Tuition ', 'Valid', 0, NULL)`,
+        args: []
+      },
+      {
+        sql: `INSERT INTO foreign_transactions (reference_number, value_date, amount, currency, student_id, id_status, erp_batch_number)
+              VALUES
+              ('FX-1', '2026-10-10', 200, 'USD', NULL, 'Missing ID', NULL),
+              ('FX-2', '2026-10-12', 300, 'USD', '231000101', 'Valid', NULL)`,
+        args: []
+      }
+    ], 'write');
+
+    const checklist = await callApi(rpcHandler, { fn: 'get_operational_checklist', args: {} }, viewerToken);
+    expect(checklist.status).toBe(200);
+    expect(checklist.body.data.unresolved_fawry_count).toBe(1);
+    expect(checklist.body.data.unresolved_foreign_count).toBe(1);
+    expect(checklist.body.data.unmapped_fawry_count).toBe(1);
+    expect(checklist.body.data.unsettled_fawry_count).toBe(3);
+    expect(checklist.body.data.erp_ready_count).toBe(3); // 2 Fawry DUP-1 + 1 FX-2
+
+    const readiness = await callApi(rpcHandler, { fn: 'get_period_close_readiness', args: { p_period_month: '2026-10' } }, viewerToken);
+    expect(readiness.status).toBe(200);
+    expect(readiness.body.data.ready_to_close).toBe(false);
+    expect(readiness.body.data.fawry.invalid_count).toBe(1);
+    expect(readiness.body.data.fawry.unmapped_count).toBe(1);
+    expect(readiness.body.data.fawry.unsettled_count).toBe(3);
+    expect(readiness.body.data.fawry.unposted_count).toBe(3);
+    expect(readiness.body.data.foreign.invalid_count).toBe(1);
+    expect(readiness.body.data.foreign.unposted_count).toBe(2);
+
+    const dups = await callApi(rpcHandler, { fn: 'detect_fawry_duplicates', args: {} }, viewerToken);
+    expect(dups.status).toBe(200);
+    expect(dups.body.data).toHaveLength(2);
+    expect(dups.body.data.every(r => r.reference_number === 'DUP-1')).toBe(true);
+  });
 });

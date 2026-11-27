@@ -13,13 +13,14 @@ import {
     buildStudentLookupIndex,
     matchTransactionToStudent
 } from './rules.js';
-import { runConcurrent, renderIcons, Toast } from './app-utils.js';
+import { runConcurrent, ensureXlsx, renderIcons, Toast } from './app-utils.js';
 
 class AutoMatcherMixin {
     async handleTargetedMatcherImport(file) {
         const status = document.getElementById('automatcher-import-status');
         status.innerText = 'Parsing file...';
         try {
+            await ensureXlsx();
             const data = await file.arrayBuffer();
             const workbook = XLSX.read(data, { type: 'array' });
             const firstSheet = workbook.Sheets[workbook.SheetNames[0]];

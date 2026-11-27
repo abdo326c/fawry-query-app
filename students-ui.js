@@ -19,6 +19,7 @@ import {
 import { convertUsdToEgp } from './fx-rates.js';
 import {
     runConcurrent,
+    ensureXlsx,
     renderIcons,
     formatMoney,
     readIndexedDbCache,
@@ -444,6 +445,7 @@ class StudentsUiMixin {
                 const exportSource = (this.filteredStudentsData && this.filteredStudentsData.length > 0)
                     ? this.filteredStudentsData
                     : await this.ensureFullStudentMaster();
+                await ensureXlsx();
 
                 const rows = (exportSource || []).map(s => {
                     const { nuEmail, personalEmail } = getStudentDisplayEmails(s);
@@ -657,11 +659,12 @@ class StudentsUiMixin {
         // Auto-Matcher Export Button
         const btnExportAm = document.getElementById('btn-export-automatch');
         if (btnExportAm) {
-            btnExportAm.addEventListener('click', () => {
+            btnExportAm.addEventListener('click', async () => {
                 if (!this.automatchProposals || this.automatchProposals.length === 0) {
                     Toast.show('No results to export. Run Auto-Match first to generate matches.', 'warning');
                     return;
                 }
+                await ensureXlsx();
                 const tierLabels = {
                     high: 'High (ID / Email / National ID)',
                     phone: 'Phone Match',
@@ -1021,6 +1024,7 @@ class StudentsUiMixin {
         if (window.lucide) lucide.createIcons();
 
         try {
+            await ensureXlsx();
             const cleanText = (val) => {
                 if (val === null || val === undefined) return null;
                 const s = String(val).replace(/\*+$/g, '').replace(/\s+/g, ' ').trim();
@@ -2172,6 +2176,10 @@ class StudentsUiMixin {
     exportStudentStatement() {
         if (!this.currentProfileSid) {
             Toast.show('Select a student first to export their statement.', 'warning');
+            return;
+        }
+        if (typeof XLSX === 'undefined') {
+            ensureXlsx().then(() => this.exportStudentStatement()).catch(() => Toast.show('Excel library failed to load.', 'error'));
             return;
         }
         const st = this.currentProfileStudent || {};

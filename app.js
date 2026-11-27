@@ -29,6 +29,8 @@ import {
 import {
     runConcurrent,
     loadScriptOnce,
+    ensureXlsx,
+    ensureImportLibs,
     renderIcons,
     inlineIcon,
     SUPABASE_EXEMPT_OR_FILTER,
@@ -460,7 +462,15 @@ class App {
     }
 
     async setupUser(user) {
-        const resolvedRole = await this.fetchUserRole(user);
+        let resolvedRole = 'viewer';
+        const preResolved = typeof user?.role === 'string' ? user.role.trim().toLowerCase() : '';
+        if (supabase.isTurso && ['viewer', 'operator', 'accountant', 'admin'].includes(preResolved)) {
+            this.userIsActive = true;
+            this.userRole = preResolved;
+            resolvedRole = preResolved;
+        } else {
+            resolvedRole = await this.fetchUserRole(user);
+        }
         if (resolvedRole === 'deactivated' || this.userIsActive === false) {
             this.currentUser = null;
             const deactivatedMsg = 'Your account has been deactivated. Contact the Finance System Admin.';
@@ -626,12 +636,12 @@ class App {
             htmlEl.classList.add('light');
             if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
             if(textEl) textEl.innerText = 'Dark Mode';
-            if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/light.css";
+            if (fpThemeEl) fpThemeEl.href = "vendor/flatpickr-light.css";
         } else {
             htmlEl.classList.add('dark');
             if(iconEl) iconEl.setAttribute('data-lucide', 'sun');
             if(textEl) textEl.innerText = 'Light Mode';
-            if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css";
+            if (fpThemeEl) fpThemeEl.href = "vendor/flatpickr-dark.css";
         }
 
         btnToggle.addEventListener('click', () => {
@@ -642,14 +652,14 @@ class App {
                 saveTheme('dark');
                 if(iconEl) iconEl.setAttribute('data-lucide', 'sun');
                 if(textEl) textEl.innerText = 'Light Mode';
-                if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css";
+                if (fpThemeEl) fpThemeEl.href = "vendor/flatpickr-dark.css";
             } else {
                 htmlEl.classList.remove('dark');
                 htmlEl.classList.add('light');
                 saveTheme('light');
                 if(iconEl) iconEl.setAttribute('data-lucide', 'moon');
                 if(textEl) textEl.innerText = 'Dark Mode';
-                if (fpThemeEl) fpThemeEl.href = "https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/light.css";
+                if (fpThemeEl) fpThemeEl.href = "vendor/flatpickr-light.css";
             }
             if (window.lucide) lucide.createIcons();
         });
@@ -821,11 +831,17 @@ class App {
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(`view-${tabId}`).classList.add('active');
 
-                // Persist active tab in URL hash & sessionStorage so refresh restores exact page
+                // Persist active tab & shareable filters in URL hash & sessionStorage
                 try {
                     if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('spdb-active-tab', tabId);
-                    if (typeof window !== 'undefined' && window.history?.replaceState && window.location.hash !== `#${tabId}`) {
-                        window.history.replaceState(null, '', `#${tabId}`);
+                    if (typeof window !== 'undefined' && window.history?.pushState) {
+                        const targetHash = this.buildCurrentRouteHash ? this.buildCurrentRouteHash(tabId) : `#${tabId}`;
+                        const curTab = this.parseHashRoute ? this.parseHashRoute().tab : '';
+                        if (curTab !== tabId && !this._suppressHistoryPush) {
+                            window.history.pushState({ tab: tabId }, '', targetHash);
+                        } else if (window.location.hash !== targetHash && window.history?.replaceState) {
+                            window.history.replaceState({ tab: tabId }, '', targetHash);
+                        }
                     }
                 } catch (_e) { /* ignore history restrictions */ }
 
@@ -865,14 +881,125 @@ class App {
             });
         });
 
-        window.addEventListener('hashchange', () => {
-            const hashTab = (window.location.hash || '').replace(/^#/, '').trim();
+        const navigateFromLocation = () => {
+            const { tab: hashTab, params } = this.parseHashRoute();
             if (!hashTab) return;
+            if (params) this.applyRouteParams(hashTab, params);
             const targetLink = this.findNavLinkForTab(hashTab);
             if (targetLink && targetLink.style.display !== 'none' && !targetLink.classList.contains('active')) {
-                targetLink.click();
+                this._suppressHistoryPush = true;
+                try { targetLink.click(); } finally { this._suppressHistoryPush = false; }
             }
+        };
+
+        window.addEventListener('hashchange', navigateFromLocation);
+        window.addEventListener('popstate', navigateFromLocation);
+
+        document.getElementById('btn-copy-view-link')?.addEventListener('click', (e) => {
+            const btn = e.currentTarget;
+            this.syncRouteToUrl({ push: false });
+            this.copyTextWithToast(window.location.href, 'View Link', btn);
         });
+    }
+
+    parseHashRoute(hashStr = (typeof window !== 'undefined' ? window.location.hash : '')) {
+        const clean = String(hashStr || '').replace(/^#/, '').trim();
+        if (!clean) return { tab: '', params: new URLSearchParams() };
+        const qIdx = clean.indexOf('?');
+        if (qIdx === -1) return { tab: clean, params: new URLSearchParams() };
+        return {
+            tab: clean.slice(0, qIdx).trim(),
+            params: new URLSearchParams(clean.slice(qIdx + 1))
+        };
+    }
+
+    buildCurrentRouteHash(tabId) {
+        const tab = String(tabId || 'transactions').trim();
+        const params = new URLSearchParams();
+        if (tab === 'transactions') {
+            const q = document.getElementById('search-input')?.value?.trim();
+            const from = document.getElementById('filter-date-from')?.value?.trim();
+            const to = document.getElementById('filter-date-to')?.value?.trim();
+            if (q) params.set('q', q);
+            if (from) params.set('from', from);
+            if (to) params.set('to', to);
+            if (this.txQuickFilter && this.txQuickFilter !== 'all') params.set('qf', this.txQuickFilter);
+        } else if (tab === 'dashboard') {
+            const from = document.getElementById('dashboard-date-from')?.value?.trim();
+            const to = document.getElementById('dashboard-date-to')?.value?.trim();
+            const group = document.getElementById('dashboard-group-by')?.value;
+            const status = document.getElementById('dashboard-status-filter')?.value;
+            if (from) params.set('from', from);
+            if (to) params.set('to', to);
+            if (group && group !== 'date') params.set('group', group);
+            if (status && status !== 'all') params.set('status', status);
+        } else if (tab === 'erp-export') {
+            const from = document.getElementById('erp-filter-date-from')?.value?.trim();
+            const to = document.getElementById('erp-filter-date-to')?.value?.trim();
+            const bank = document.getElementById('erp-filter-bank')?.value?.trim();
+            if (from) params.set('from', from);
+            if (to) params.set('to', to);
+            if (bank) params.set('bank', bank);
+            if (this.erpStatusFilter && this.erpStatusFilter !== 'all') params.set('status', this.erpStatusFilter);
+        } else if (tab === 'student-master' && this.currentProfileSid) {
+            params.set('student', this.currentProfileSid);
+        }
+        const qs = params.toString();
+        return qs ? `#${tab}?${qs}` : `#${tab}`;
+    }
+
+    syncRouteToUrl({ push = false } = {}) {
+        try {
+            if (typeof window === 'undefined' || !window.history) return;
+            const activeTab = document.querySelector('.nav-link.active[data-tab]')?.getAttribute('data-tab') || 'transactions';
+            const nextHash = this.buildCurrentRouteHash(activeTab);
+            if (window.location.hash === nextHash) return;
+            if (push && typeof window.history.pushState === 'function') {
+                window.history.pushState({ tab: activeTab }, '', nextHash);
+            } else if (typeof window.history.replaceState === 'function') {
+                window.history.replaceState({ tab: activeTab }, '', nextHash);
+            }
+        } catch (_e) { /* ignore history restrictions */ }
+    }
+
+    applyRouteParams(tabId, params) {
+        if (!params || typeof params.get !== 'function') return;
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el || val === null) return;
+            el.value = val;
+            if (el._flatpickr) el._flatpickr.setDate(val || '', false);
+        };
+        if (tabId === 'transactions') {
+            if (params.has('q')) setVal('search-input', params.get('q'));
+            if (params.has('from')) setVal('filter-date-from', params.get('from'));
+            if (params.has('to')) setVal('filter-date-to', params.get('to'));
+            if (params.has('qf')) {
+                this.txQuickFilter = params.get('qf') || 'all';
+                document.querySelectorAll('[data-tx-quick-filter]').forEach(btn => {
+                    const active = btn.getAttribute('data-tx-quick-filter') === this.txQuickFilter;
+                    btn.classList.toggle('btn-primary', active);
+                    btn.classList.toggle('btn-outline', !active);
+                });
+            }
+        } else if (tabId === 'dashboard') {
+            if (params.has('from')) setVal('dashboard-date-from', params.get('from'));
+            if (params.has('to')) setVal('dashboard-date-to', params.get('to'));
+            if (params.has('group')) setVal('dashboard-group-by', params.get('group'));
+            if (params.has('status')) setVal('dashboard-status-filter', params.get('status'));
+        } else if (tabId === 'erp-export') {
+            if (params.has('from')) setVal('erp-filter-date-from', params.get('from'));
+            if (params.has('to')) setVal('erp-filter-date-to', params.get('to'));
+            if (params.has('bank')) setVal('erp-filter-bank', params.get('bank'));
+            if (params.has('status')) {
+                this.erpStatusFilter = params.get('status') || 'all';
+                document.querySelectorAll('[data-erp-filter]').forEach(b => {
+                    b.classList.toggle('active', b.getAttribute('data-erp-filter') === this.erpStatusFilter);
+                });
+            }
+        } else if (tabId === 'student-master' && params.get('student')) {
+            setTimeout(() => this.loadStudentProfile?.(params.get('student')), 50);
+        }
     }
 
     /**
@@ -888,22 +1015,29 @@ class App {
 
     restoreActiveTabFromUrl() {
         let desiredTab = '';
+        let routeParams = null;
         try {
-            desiredTab = (window.location.hash || '').replace(/^#/, '').trim();
+            const parsed = this.parseHashRoute();
+            desiredTab = parsed.tab;
+            routeParams = parsed.params;
             if (!desiredTab && typeof sessionStorage !== 'undefined') {
                 desiredTab = (sessionStorage.getItem('spdb-active-tab') || '').trim();
             }
         } catch (_e) { /* ignore */ }
+        if (desiredTab && routeParams) {
+            this.applyRouteParams(desiredTab, routeParams);
+        }
         if (!desiredTab || desiredTab === 'transactions') return false;
         const targetLink = this.findNavLinkForTab(desiredTab);
         if (targetLink && targetLink.style.display !== 'none') {
-            targetLink.click();
+            this._suppressHistoryPush = true;
+            try { targetLink.click(); } finally { this._suppressHistoryPush = false; }
             return true;
         }
         return false;
     }
 
-    async copyTextWithToast(text, label = 'Value') {
+    async copyTextWithToast(text, label = 'Value', triggerEl = null) {
         const val = String(text || '').trim();
         if (!val) return;
         try {
@@ -918,6 +1052,10 @@ class App {
                 ta.select();
                 document.execCommand('copy');
                 ta.remove();
+            }
+            if (triggerEl && triggerEl.classList) {
+                triggerEl.classList.add('is-copied');
+                setTimeout(() => triggerEl.classList.remove('is-copied'), 1200);
             }
             Toast.show(`Copied ${label}: ${val}`, 'success');
         } catch (_e) {
@@ -991,6 +1129,7 @@ class App {
         btnErrDownload?.classList.add('hidden');
         
         try {
+            await ensureImportLibs();
             document.getElementById('import-progress').classList.remove('hidden');
             document.getElementById('import-log').innerHTML = '';
             
@@ -1217,6 +1356,7 @@ class App {
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             this.currentPage = 1;
             this.renderFilterChips('transactions');
+            this.syncRouteToUrl({ push: false });
             this.loadTransactions();
         });
         document.getElementById('btn-clear-filters').addEventListener('click', () => {
@@ -1229,6 +1369,7 @@ class App {
             document.querySelectorAll('[data-table="transactions"] .header-filter-icon').forEach(icon => icon.classList.remove('active'));
             this.currentPage = 1;
             this.renderFilterChips('transactions');
+            this.syncRouteToUrl({ push: false });
             this.loadTransactions();
         });
 
@@ -1262,6 +1403,7 @@ class App {
                     setDateInput('filter-date-to', '');
                 }
                 this.currentPage = 1;
+                this.syncRouteToUrl({ push: false });
                 this.loadTransactions();
             });
         });
@@ -1273,6 +1415,7 @@ class App {
                 this.txQuickFilter = (this.txQuickFilter === target && target !== 'all') ? 'all' : target;
                 syncQuickFilterButtons();
                 this.currentPage = 1;
+                this.syncRouteToUrl({ push: false });
                 this.loadTransactions();
             });
         });
@@ -1896,6 +2039,7 @@ class App {
             btn.disabled = true;
 
             try {
+                await ensureXlsx();
                 const exportCols = 'id, reference_number, payment_date, student_id, student_level, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, item_price, mapping, second_mapping, is_settled, settlement_batch, merchant_name, bank, check_column, id_status';
                 const allData = await fetchAll(
                     'transactions',
@@ -1997,6 +2141,7 @@ class App {
 
         document.getElementById('btn-export-mappings').addEventListener('click', async () => {
             try {
+                await ensureXlsx();
                 const allData = (this.allMappingsData && this.allMappingsData.length > 0)
                     ? this.allMappingsData
                     : await fetchAll('item_mappings', '*', null, 'item_name');
@@ -2021,6 +2166,7 @@ class App {
 
         document.getElementById('btn-export-fixes').addEventListener('click', async () => {
             try {
+                await ensureXlsx();
                 const allData = (this.allFixesData && this.allFixesData.length > 0)
                     ? this.allFixesData
                     : await fetchAll('manual_fixes', '*', null, 'reference_number');
@@ -2194,7 +2340,7 @@ class App {
                 const copyBtn = e.target.closest('[data-copy-text]');
                 if (copyBtn) {
                     e.stopPropagation();
-                    this.copyTextWithToast(copyBtn.getAttribute('data-copy-text'), copyBtn.getAttribute('data-copy-label') || 'Value');
+                    this.copyTextWithToast(copyBtn.getAttribute('data-copy-text'), copyBtn.getAttribute('data-copy-label') || 'Value', copyBtn);
                     return;
                 }
                 const fixBtn = e.target.closest('[data-quick-fix-ref]');
@@ -2214,7 +2360,7 @@ class App {
                 if (row) {
                     const idx = parseInt(row.getAttribute('data-tx-row-idx'), 10);
                     const tx = (this.currentPageTransactions || [])[idx];
-                    if (tx) this.openTransactionDetailsModal(tx);
+                    if (tx) this.openTransactionDetailsModal(tx, { list: this.currentPageTransactions, index: idx });
                 }
             });
             tbody.addEventListener('change', (e) => {
@@ -2315,17 +2461,35 @@ class App {
         });
 
         btnApply?.addEventListener('click', () => this.applyBulkStudentIdToSelected());
+
+        document.getElementById('btn-tx-copy-sum')?.addEventListener('click', (e) => {
+            const sum = this.computeSelectedTransactionsSum();
+            this.copyTextWithToast(sum.toFixed(2), 'Selected Sum (EGP)', e.currentTarget);
+        });
+    }
+
+    computeSelectedTransactionsSum() {
+        let sum = 0;
+        if (this.selectedTransactionsMap && this.selectedTransactionsMap.size > 0) {
+            for (const tx of this.selectedTransactionsMap.values()) {
+                sum += Number(tx?.item_price || 0) || 0;
+            }
+        }
+        return Math.round(sum * 100) / 100;
     }
 
     updateTxBulkSelectionUI() {
         const bar = document.getElementById('tx-bulk-assign-bar');
         const countEl = document.getElementById('tx-bulk-selected-count');
+        const sumEl = document.getElementById('tx-bulk-selected-sum');
         const selectAllEl = document.getElementById('tx-select-all');
         const idInput = document.getElementById('tx-bulk-student-id');
         const btnApply = document.getElementById('btn-tx-bulk-assign-id');
 
         const selectedCount = this.selectedTransactionsMap?.size || 0;
+        const selectedSum = this.computeSelectedTransactionsSum();
         if (countEl) countEl.textContent = String(selectedCount);
+        if (sumEl) sumEl.textContent = `EGP ${formatMoney(selectedSum)}`;
         if (bar) bar.classList.toggle('hidden', selectedCount === 0);
 
         const canEdit = this.hasRole('accountant');
@@ -2570,13 +2734,62 @@ class App {
         }
     }
 
-    async openTransactionDetailsModal(txOrRef) {
+    bindTxDrawerNav(navCtx = null) {
+        const btnPrev = document.getElementById('btn-tx-detail-prev');
+        const btnNext = document.getElementById('btn-tx-detail-next');
+        const posEl = document.getElementById('tx-detail-position');
+        const hasList = navCtx && Array.isArray(navCtx.list) && navCtx.list.length > 1 && Number.isInteger(navCtx.index);
+        if (!hasList) {
+            btnPrev?.classList.add('hidden');
+            btnNext?.classList.add('hidden');
+            if (posEl) posEl.textContent = '';
+            this._txDrawerNav = null;
+            return;
+        }
+        this._txDrawerNav = navCtx;
+        const { list, index } = navCtx;
+        btnPrev?.classList.remove('hidden');
+        btnNext?.classList.remove('hidden');
+        if (btnPrev) {
+            btnPrev.disabled = index <= 0;
+            btnPrev.onclick = () => {
+                if (index > 0) this.openTransactionDetailsModal(list[index - 1], { list, index: index - 1 });
+            };
+        }
+        if (btnNext) {
+            btnNext.disabled = index >= list.length - 1;
+            btnNext.onclick = () => {
+                if (index < list.length - 1) this.openTransactionDetailsModal(list[index + 1], { list, index: index + 1 });
+            };
+        }
+        if (posEl) posEl.textContent = `${index + 1} / ${list.length}`;
+
+        if (!this._txDrawerKeyBound && typeof document !== 'undefined') {
+            this._txDrawerKeyBound = true;
+            document.addEventListener('keydown', (e) => {
+                const modal = document.getElementById('modal-tx-details');
+                if (!modal || modal.classList.contains('hidden') || !this._txDrawerNav) return;
+                const tag = (e.target?.tagName || '').toLowerCase();
+                if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+                if (e.key === 'ArrowUp' || e.key === '[') {
+                    const prev = document.getElementById('btn-tx-detail-prev');
+                    if (prev && !prev.disabled) { e.preventDefault(); prev.click(); }
+                } else if (e.key === 'ArrowDown' || e.key === ']') {
+                    const next = document.getElementById('btn-tx-detail-next');
+                    if (next && !next.disabled) { e.preventDefault(); next.click(); }
+                }
+            });
+        }
+    }
+
+    async openTransactionDetailsModal(txOrRef, navCtx = null) {
         if (txOrRef && typeof txOrRef === 'object' && isSameDaySettlementBank(txOrRef)) {
-            return this.openForeignTransactionDetailsModal(txOrRef);
+            return this.openForeignTransactionDetailsModal(txOrRef, navCtx);
         }
         const modal = document.getElementById('modal-tx-details');
         const body = document.getElementById('modal-tx-details-body');
         if (!modal || !body || !txOrRef) return;
+        this.bindTxDrawerNav(navCtx);
 
         let tx = txOrRef;
         let siblingItems = [];
@@ -2933,12 +3146,21 @@ class App {
         if (window.lucide) lucide.createIcons();
         
         try {
-            const allData = await fetchAll(
-                'transactions',
-                'id, reference_number, item_price, item_name, check_column, erp_batch_number, is_settled',
-                null,
-                'id'
-            );
+            let allData = null;
+            if (typeof supabase.rpc === 'function') {
+                const { data: dupRows, error: dupErr } = await supabase.rpc('detect_fawry_duplicates');
+                if (!dupErr && Array.isArray(dupRows) && dupRows.every(r => r && r.reference_number)) {
+                    allData = dupRows;
+                }
+            }
+            if (!allData) {
+                allData = await fetchAll(
+                    'transactions',
+                    'id, reference_number, item_price, item_name, check_column, erp_batch_number, is_settled',
+                    null,
+                    'id'
+                );
+            }
             
             const grouped = {};
             for (const tx of allData) {

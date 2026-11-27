@@ -1,4 +1,4 @@
-import { formatDateTime } from './app-utils.js';
+import { formatDateTime, ensureXlsx, inlineIcon } from './app-utils.js';
 
 const settlementEsc = (v) => (window.escapeHTML ? window.escapeHTML(v) : String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c])));
 
@@ -208,6 +208,7 @@ class SettlementProcessor {
         const seenInThisRun = new Set();
 
         try {
+            await ensureXlsx();
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 const lower = file.name.toLowerCase();
@@ -765,10 +766,11 @@ class SettlementProcessor {
                 varianceHtml = `<strong style="color: ${varColor}; font-family: monospace;">${sign}${formatStlMoney(variance)}</strong>`;
             }
 
-            // Reference cell (clickable if present in DB)
-            const refHtml = r.in_db
+            // Reference cell (clickable if present in DB) + one-click copy
+            const copyBtn = r.reference ? `<button type="button" class="inline-copy-btn" data-copy-text="${esc(r.reference)}" data-copy-label="Reference" title="Copy Reference Number">${inlineIcon('copy', 12)}</button>` : '';
+            const refHtml = (r.in_db
                 ? `<a href="#" class="stl-inspect-ref" data-ref="${esc(r.reference)}" style="color: var(--primary); font-family: monospace; font-weight: 600; text-decoration: none;" title="Click to inspect transaction in database">${esc(r.reference)}</a>`
-                : `<span style="font-family: monospace; font-weight: 600;">${esc(r.reference)}</span>`;
+                : `<span style="font-family: monospace; font-weight: 600;">${esc(r.reference)}</span>`) + copyBtn;
 
             // Settlement No + source file subtitle
             const stlNoHtml = r.settlement_no
@@ -811,7 +813,7 @@ class SettlementProcessor {
             `;
         }).join('');
 
-        // Wire click-to-inspect reference links/buttons
+        // Wire click-to-inspect reference links/buttons and inline copy buttons
         this.resultsTable.querySelectorAll('.stl-inspect-ref').forEach(el => {
             el.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -819,6 +821,12 @@ class SettlementProcessor {
                 if (ref && window.app && typeof window.app.openTransactionDetailsModal === 'function') {
                     window.app.openTransactionDetailsModal(ref);
                 }
+            });
+        });
+        this.resultsTable.querySelectorAll('[data-copy-text]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.app?.copyTextWithToast?.(btn.getAttribute('data-copy-text'), btn.getAttribute('data-copy-label') || 'Reference', btn);
             });
         });
 
@@ -880,6 +888,10 @@ class SettlementProcessor {
             Toast.show('No settlement data to export.', 'warning');
             return;
         }
+        if (typeof XLSX === 'undefined') {
+            ensureXlsx().then(() => this.exportConsolidated()).catch(() => Toast.show('Excel library failed to load.', 'error'));
+            return;
+        }
         const safeRows = window.sanitizeExcelRows ? window.sanitizeExcelRows(this.settlementData) : this.settlementData;
         const ws = XLSX.utils.json_to_sheet(safeRows);
         const wb = XLSX.utils.book_new();
@@ -891,6 +903,10 @@ class SettlementProcessor {
     exportReconciliation() {
         if (this.reconciliationResults.length === 0) {
             Toast.show('No reconciliation data to export.', 'warning');
+            return;
+        }
+        if (typeof XLSX === 'undefined') {
+            ensureXlsx().then(() => this.exportReconciliation()).catch(() => Toast.show('Excel library failed to load.', 'error'));
             return;
         }
 

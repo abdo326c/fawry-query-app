@@ -20,7 +20,7 @@ import {
     getMsUntilNextEgyptNoon,
     isRateStaleForEgyptNoon
 } from './fx-rates.js';
-import { renderIcons, SUPABASE_EXEMPT_OR_FILTER, Toast } from './app-utils.js';
+import { renderIcons, ensureXlsx, formatMoney, SUPABASE_EXEMPT_OR_FILTER, Toast } from './app-utils.js';
 
 class DashboardMixin {
     initDashboard() {
@@ -208,6 +208,13 @@ class DashboardMixin {
             if (cat) {
                 this.drillDownFromDashboard({ type: 'row', groupBy: 'mapping', key: cat });
             }
+        });
+
+        // Morning Checklist Action Pills
+        document.getElementById('dashboard-morning-checklist')?.addEventListener('click', (e) => {
+            const pill = e.target.closest('[data-checklist-action]');
+            if (!pill) return;
+            this.handleChecklistAction(pill.getAttribute('data-checklist-action'));
         });
 
         // Add event delegation for expand/collapse month rows and row drill-down
@@ -440,7 +447,15 @@ class DashboardMixin {
         const groupBy = document.getElementById('dashboard-group-by')?.value || 'date';
 
         if (typeof XLSX === 'undefined' || !XLSX.utils || typeof XLSX.writeFile !== 'function') {
-            Toast.show('Excel library not loaded.', 'error');
+            ensureXlsx()
+                .then(() => {
+                    if (typeof XLSX !== 'undefined' && XLSX.utils) {
+                        this.exportDashboardPivotExcel();
+                    } else {
+                        Toast.show('Excel library not loaded.', 'error');
+                    }
+                })
+                .catch(() => Toast.show('Excel library not loaded.', 'error'));
             return;
         }
 
@@ -1584,11 +1599,105 @@ class DashboardMixin {
             }
 
             this.updateSidebarBadges();
+            this.loadMorningChecklist();
             this.markTabLoaded('dashboard');
             renderIcons(document.getElementById('view-dashboard'));
 
         } catch (err) {
             tbody.innerHTML = `<tr><td colspan="${totalColSpan}" style="color: var(--danger);">Error: ${escapeHTML(err.message)}</td></tr>`;
+        }
+    }
+
+    async loadMorningChecklist() {
+        const container = document.getElementById('dashboard-morning-checklist');
+        if (!container || typeof supabase.rpc !== 'function') return null;
+        try {
+            const { data, error } = await supabase.rpc('get_operational_checklist');
+            if (error || !data || typeof data !== 'object' || Array.isArray(data)) return null;
+
+            const fawryBad = Number(data.unresolved_fawry_count || 0);
+            const fxBad = Number(data.unresolved_foreign_count || 0);
+            const totalBadIds = fawryBad + fxBad;
+            const unmapped = Number(data.unmapped_fawry_count || 0);
+            const unmappedDistinct = Number(data.unmapped_distinct_items || 0);
+            const unsettled = Number(data.unsettled_fawry_count || 0);
+            const unsettledEgp = Number(data.unsettled_fawry_egp || 0);
+            const erpReady = Number(data.erp_ready_count || 0);
+
+            this._lastChecklistData = data;
+            const setPill = (action, stateClass, valueText, titleText) => {
+                const pill = container.querySelector(`[data-checklist-action="${action}"]`);
+                if (!pill) return;
+                pill.classList.remove('is-loading', 'is-ok', 'is-warn', 'is-alert', 'is-ready');
+                pill.classList.add(stateClass);
+                if (titleText) pill.title = titleText;
+                const valEl = pill.querySelector('.checklist-value');
+                if (valEl) valEl.textContent = valueText;
+            };
+
+            setPill(
+                'invalid_ids',
+                totalBadIds > 0 ? 'is-alert' : 'is-ok',
+                totalBadIds > 0 ? `${totalBadIds.toLocaleString()} need fix` : 'All valid ✓',
+                fxBad > 0 ? `${fawryBad} Fawry + ${fxBad} BM USD unresolved` : `${fawryBad} Fawry unresolved`
+            );
+            setPill(
+                'unmapped_items',
+                unmapped > 0 ? 'is-warn' : 'is-ok',
+                unmapped > 0 ? `${unmappedDistinct || unmapped} item(s)` : 'All mapped ✓',
+                `${unmapped.toLocaleString()} transaction(s) missing a Mapping category`
+            );
+            setPill(
+                'unsettled_tx',
+                unsettled > 0 ? 'is-warn' : 'is-ok',
+                unsettled > 0 ? `${unsettled.toLocaleString()} (EGP ${formatMoney(unsettledEgp)})` : 'All settled ✓',
+                `${unsettled.toLocaleString()} unsettled Fawry transaction(s)`
+            );
+            setPill(
+                'erp_ready',
+                erpReady > 0 ? 'is-ready' : 'is-ok',
+                erpReady > 0 ? `${erpReady.toLocaleString()} ready` : 'Up to date ✓',
+                `${erpReady.toLocaleString()} valid transaction(s) ready to export to Dynamics 365`
+            );
+            return data;
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    handleChecklistAction(action) {
+        if (action === 'invalid_ids') {
+            const d = this._lastChecklistData || {};
+            if (Number(d.unresolved_fawry_count || 0) === 0 && Number(d.unresolved_foreign_count || 0) > 0) {
+                document.querySelector('.nav-link[data-tab="foreign-transactions"]')?.click();
+            } else {
+                document.querySelector('.nav-link[data-tab="automatcher"]')?.click();
+            }
+            return;
+        }
+        if (action === 'unmapped_items') {
+            this.txQuickFilter = 'unmapped';
+            document.querySelectorAll('[data-tx-quick-filter]').forEach(btn => {
+                const active = btn.getAttribute('data-tx-quick-filter') === 'unmapped';
+                btn.classList.toggle('btn-primary', active);
+                btn.classList.toggle('btn-outline', !active);
+            });
+            this.currentPage = 1;
+            this.invalidateTabs('transactions');
+            document.querySelector('.nav-link[data-tab="transactions"]')?.click();
+            return;
+        }
+        if (action === 'unsettled_tx') {
+            document.querySelector('.nav-link[data-tab="settlement"]')?.click();
+            return;
+        }
+        if (action === 'erp_ready') {
+            this.erpStatusFilter = 'ready';
+            document.querySelectorAll('[data-erp-filter]').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-erp-filter') === 'ready');
+            });
+            this.invalidateTabs('erp-export');
+            document.querySelector('.nav-link[data-tab="erp-export"]')?.click();
         }
     }
 }

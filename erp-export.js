@@ -16,6 +16,8 @@ import {
 import { DEFAULT_FOREIGN_BANK, DEFAULT_FOREIGN_MAPPING } from './foreign-transactions.js';
 import {
     renderIcons,
+    inlineIcon,
+    ensureXlsx,
     formatMoney,
     loadSavedFilterPresets,
     saveFilterPresetList,
@@ -499,33 +501,33 @@ class ErpExportMixin {
                 const includeFawry = bank !== DEFAULT_FOREIGN_BANK;
                 const includeForeign = !bank || bank === DEFAULT_FOREIGN_BANK;
 
-                let fawryRows = [];
-                if (includeFawry) {
-                    const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, check_column, item_price, mapping, second_mapping, merchant_name, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher';
-                    fawryRows = await fetchAll('transactions', erpCols, q => {
-                        if (dateFrom) q = q.gte('payment_date', dateFrom);
-                        if (dateTo) q = q.lte('payment_date', dateTo);
-                        if (bank) q = q.eq('bank', bank);
-                        return q;
-                    }, 'id');
-                    for (let i = 0; i < fawryRows.length; i++) {
-                        const t = fawryRows[i];
-                        t._erpSource = 'fawry';
-                        t.currency = t.currency || 'EGP';
-                        t._erpSearchHaystack = [
-                            t.reference_number,
-                            t.student_id,
-                            this.erpAccount(t),
-                            t.item_name,
-                            t.mapping,
-                            t.second_mapping,
-                            t.erp_batch_number,
-                            t.erp_voucher
-                        ].filter(Boolean).join('\n').toLowerCase();
-                    }
+                const erpCols = 'id, reference_number, payment_date, student_id, original_student_id, customer_mobile, total_amount, net_amount, fawry_fees, payment_status, item_name, check_column, item_price, mapping, second_mapping, merchant_name, bank, id_status, is_settled, settlement_batch, erp_batch_number, erp_voucher';
+                const [fawryRows, foreignRows] = await Promise.all([
+                    includeFawry
+                        ? fetchAll('transactions', erpCols, q => {
+                            if (dateFrom) q = q.gte('payment_date', dateFrom);
+                            if (dateTo) q = q.lte('payment_date', dateTo);
+                            if (bank) q = q.eq('bank', bank);
+                            return q;
+                        }, 'id')
+                        : Promise.resolve([]),
+                    includeForeign ? this.fetchForeignRowsForErp(dateFrom, dateTo) : Promise.resolve([])
+                ]);
+                for (let i = 0; i < fawryRows.length; i++) {
+                    const t = fawryRows[i];
+                    t._erpSource = 'fawry';
+                    t.currency = t.currency || 'EGP';
+                    t._erpSearchHaystack = [
+                        t.reference_number,
+                        t.student_id,
+                        this.erpAccount(t),
+                        t.item_name,
+                        t.mapping,
+                        t.second_mapping,
+                        t.erp_batch_number,
+                        t.erp_voucher
+                    ].filter(Boolean).join('\n').toLowerCase();
                 }
-
-                const foreignRows = includeForeign ? await this.fetchForeignRowsForErp(dateFrom, dateTo) : [];
                 baseData = [...fawryRows, ...foreignRows];
             } catch (err) {
                 if (requestId !== this.erpRequestId) return;
@@ -692,7 +694,7 @@ class ErpExportMixin {
 
             const accountCellHtml = isValid
                 ? `<div>
-                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>
+                        <span style="font-family: monospace; font-weight: 600;">${escapeHTML(paddedAccount || '-')}</span>${paddedAccount ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(paddedAccount)}" data-copy-label="Account" title="Copy Account">${inlineIcon('copy', 12)}</button>` : ''}
                         ${isExempt ? `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">Exempt (Dip &amp; Workshop)</div>` : ''}
                    </div>`
                 : `<div>
@@ -745,7 +747,7 @@ class ErpExportMixin {
                 <td style="white-space: nowrap;">${dateCellHtml}</td>
                 <td>${accountCellHtml}</td>
                 <td>
-                    <a href="#" class="erp-ref-inspect-link" data-idx="${index}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction details">${escapeHTML(row.reference_number || '')}</a><span style="color: var(--text-secondary);">${escapeHTML(descriptionTail)}</span>
+                    <a href="#" class="erp-ref-inspect-link" data-idx="${index}" style="font-family: monospace; font-weight: 600; color: var(--primary); text-decoration: none;" title="Click to inspect transaction details">${escapeHTML(row.reference_number || '')}</a>${row.reference_number ? `<button type="button" class="inline-copy-btn" data-copy-text="${escapeHTML(row.reference_number)}" data-copy-label="Reference" title="Copy Reference Number">${inlineIcon('copy', 12)}</button>` : ''}<span style="color: var(--text-secondary);">${escapeHTML(descriptionTail)}</span>
                 </td>
                 <td style="text-align: right; font-weight: 600; white-space: nowrap;">${creditDisplay}</td>
                 <td style="white-space: nowrap;">
@@ -764,8 +766,15 @@ class ErpExportMixin {
                 const idx = parseInt(link.getAttribute('data-idx'), 10);
                 const tx = previewData[idx];
                 if (tx && typeof this.openTransactionDetailsModal === 'function') {
-                    this.openTransactionDetailsModal(tx);
+                    this.openTransactionDetailsModal(tx, { list: previewData, index: idx });
                 }
+            });
+        });
+
+        tbody.querySelectorAll('[data-copy-text]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.copyTextWithToast?.(btn.getAttribute('data-copy-text'), btn.getAttribute('data-copy-label') || 'Value', btn);
             });
         });
 
@@ -907,6 +916,7 @@ class ErpExportMixin {
     }
 
     async downloadErpExport() {
+        await ensureXlsx();
         if (!this.erpData || this.erpData.length === 0) {
             Toast.show('No data to export', 'warning');
             return;

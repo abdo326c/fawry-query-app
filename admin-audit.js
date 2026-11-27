@@ -9,7 +9,7 @@ import {
     formatPeriodMonthLabel,
     writeCompressedExcel
 } from './rules.js';
-import { renderIcons, formatMoney, formatDateTime, Toast } from './app-utils.js';
+import { renderIcons, ensureXlsx, formatMoney, formatDateTime, Toast } from './app-utils.js';
 
 class AdminAuditMixin {
     initUsersAndRoles() {
@@ -310,6 +310,8 @@ class AdminAuditMixin {
             this.closedPeriodSet = new Set(rows.filter(r => r.is_closed).map(r => r.period_month));
             this.closedPeriodsError = null;
             this.renderClosedPeriodsCard();
+            const lockMonthVal = document.getElementById('period-lock-month')?.value;
+            if (lockMonthVal) this.loadPeriodCloseReadiness(lockMonthVal);
             return rows;
         } catch (err) {
             this.closedPeriods = [];
@@ -341,6 +343,57 @@ class AdminAuditMixin {
             d.setDate(1);
             d.setMonth(d.getMonth() - 1);
             monthInput.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        monthInput.addEventListener('change', () => {
+            this.loadPeriodCloseReadiness(monthInput.value);
+        });
+
+        const readinessBox = document.getElementById('period-readiness-checklist');
+        if (readinessBox && !readinessBox.dataset.bound) {
+            readinessBox.dataset.bound = '1';
+            readinessBox.addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-readiness-jump]');
+                if (!btn) return;
+                const jump = btn.getAttribute('data-readiness-jump');
+                const m = toPeriodMonth(monthInput.value);
+                const from = m ? `${m}-01` : '';
+                const to = m ? `${m}-${String(new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate()).padStart(2, '0')}` : '';
+                if (jump === 'invalid_ids') {
+                    const amFrom = document.getElementById('automatcher-date-from');
+                    const amTo = document.getElementById('automatcher-date-to');
+                    if (amFrom && from) amFrom.value = from;
+                    if (amTo && to) amTo.value = to;
+                    document.querySelector('.nav-link[data-tab="automatcher"]')?.click();
+                    this.runAutoMatcher?.();
+                } else if (jump === 'unmapped') {
+                    const fFrom = document.getElementById('filter-date-from');
+                    const fTo = document.getElementById('filter-date-to');
+                    if (fFrom && from) fFrom.value = from;
+                    if (fTo && to) fTo.value = to;
+                    this.txQuickFilter = 'unmapped';
+                    document.querySelectorAll('[data-tx-quick-filter]').forEach(b => {
+                        const active = b.getAttribute('data-tx-quick-filter') === 'unmapped';
+                        b.classList.toggle('btn-primary', active);
+                        b.classList.toggle('btn-outline', !active);
+                    });
+                    this.invalidateTabs?.('transactions');
+                    document.querySelector('.nav-link[data-tab="transactions"]')?.click();
+                } else if (jump === 'unsettled') {
+                    document.querySelector('.nav-link[data-tab="settlement"]')?.click();
+                } else if (jump === 'unposted') {
+                    const eFrom = document.getElementById('erp-filter-date-from');
+                    const eTo = document.getElementById('erp-filter-date-to');
+                    if (eFrom && from) eFrom.value = from;
+                    if (eTo && to) eTo.value = to;
+                    this.erpStatusFilter = 'unposted';
+                    document.querySelectorAll('[data-erp-filter]').forEach(b => {
+                        b.classList.toggle('active', b.getAttribute('data-erp-filter') === 'unposted');
+                    });
+                    this.invalidateTabs?.('erp-export');
+                    document.querySelector('.nav-link[data-tab="erp-export"]')?.click();
+                }
+            });
         }
 
         this._pendingUnlockMonth = null;
@@ -478,6 +531,62 @@ class AdminAuditMixin {
                     }
                 }
             });
+        }
+    }
+
+    async loadPeriodCloseReadiness(periodMonth) {
+        const box = document.getElementById('period-readiness-checklist');
+        const cleanMonth = toPeriodMonth(periodMonth);
+        if (!box || !cleanMonth || typeof supabase.rpc !== 'function') return null;
+        try {
+            const { data, error } = await supabase.rpc('get_period_close_readiness', { p_period_month: cleanMonth });
+            if (error || !data || typeof data !== 'object' || Array.isArray(data) || !data.fawry) {
+                box.innerHTML = '';
+                return null;
+            }
+            const f = data.fawry;
+            const fx = data.foreign || {};
+            const invalidTotal = Number(f.invalid_count || 0) + Number(fx.invalid_count || 0);
+            const unmapped = Number(f.unmapped_count || 0);
+            const unsettled = Number(f.unsettled_count || 0);
+            const unposted = Number(f.unposted_count || 0) + Number(fx.unposted_count || 0);
+            const ready = Boolean(data.ready_to_close);
+            const monthLabel = formatPeriodMonthLabel(cleanMonth);
+
+            const renderCheck = (label, issueCount, jumpKey) => {
+                const ok = issueCount === 0;
+                return `
+                    <div class="period-readiness-item ${ok ? 'is-pass' : 'is-blocker'}">
+                        <div>
+                            <div style="font-weight: 600; color: ${ok ? 'var(--success)' : 'var(--warning)'};">${ok ? '✓' : '⚠'} ${escapeHTML(label)}</div>
+                            <div style="font-size: 0.74rem; color: var(--text-muted);">${ok ? 'No issues found' : `${issueCount.toLocaleString()} item(s) remaining`}</div>
+                        </div>
+                        ${ok ? '' : `<button type="button" class="btn btn-outline btn-sm" data-readiness-jump="${jumpKey}" style="padding: 0.16rem 0.5rem; font-size: 0.72rem; height: auto;">Review</button>`}
+                    </div>
+                `;
+            };
+
+            box.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                    <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-main);">
+                        Pre-Close Readiness for ${escapeHTML(monthLabel)} (${escapeHTML(cleanMonth)})
+                        <span class="text-muted" style="font-weight: 400; margin-left: 0.35rem;">· ${Number(f.total_count || 0).toLocaleString()} Fawry + ${Number(fx.total_count || 0).toLocaleString()} BM USD</span>
+                    </div>
+                    <span class="badge" style="background: ${ready ? 'var(--success-bg)' : 'var(--warning-bg)'}; color: ${ready ? 'var(--success)' : 'var(--warning)'}; border: 1px solid ${ready ? 'var(--success-border)' : 'var(--warning-border)'}; font-size: 0.73rem;">
+                        ${ready ? 'Ready to Close ✓' : 'Items Pending Review'}
+                    </span>
+                </div>
+                <div class="period-readiness-grid">
+                    ${renderCheck('Valid Student IDs', invalidTotal, 'invalid_ids')}
+                    ${renderCheck('Mapped Items', unmapped, 'unmapped')}
+                    ${renderCheck('Fawry Settled', unsettled, 'unsettled')}
+                    ${renderCheck('Posted to Dynamics 365', unposted, 'unposted')}
+                </div>
+            `;
+            return data;
+        } catch (_e) {
+            box.innerHTML = '';
+            return null;
         }
     }
 
@@ -1205,6 +1314,10 @@ class AdminAuditMixin {
         );
         if (rows.length === 0) {
             Toast.show('No double-payment records to export.', 'warning');
+            return;
+        }
+        if (typeof XLSX === 'undefined') {
+            ensureXlsx().then(() => this.exportDoublePayments()).catch(() => Toast.show('Excel library failed to load.', 'error'));
             return;
         }
         const exportData = rows.map(c => {

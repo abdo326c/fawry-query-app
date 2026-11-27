@@ -1,8 +1,15 @@
-const CACHE_NAME = 'fawry-app-cache-v71';
+const CACHE_NAME = 'fawry-app-cache-v72';
 const urlsToCache = [
   './',
   './index.html',
   './styles.css?v=3.0.7',
+  './vendor/lucide.min.js',
+  './vendor/tom-select.complete.min.js',
+  './vendor/tom-select.css',
+  './vendor/flatpickr.min.js',
+  './vendor/flatpickr.min.css',
+  './vendor/flatpickr-dark.css',
+  './vendor/flatpickr-light.css',
   './app.js?v=2.7.6',
   './app-utils.js',
   './dashboard.js',
@@ -49,10 +56,9 @@ self.addEventListener('fetch', event => {
   // Only cache GET requests
   if (event.request.method !== 'GET') return;
   const reqUrl = event.request.url;
-  // Never cache Turso/Vercel API, Supabase API, or live FX API responses
+  // Never cache Turso/Vercel API or live FX API responses
   if (
     reqUrl.includes('/api/') ||
-    reqUrl.includes('supabase.co') ||
     reqUrl.includes('open.er-api.com') ||
     reqUrl.includes('currency-api.pages.dev')
   ) {
@@ -62,12 +68,12 @@ self.addEventListener('fetch', event => {
   const isHtmlNav = event.request.mode === 'navigate' ||
     (event.request.headers.get('accept') || '').includes('text/html');
   const reqObjUrl = new URL(reqUrl);
-  // Only cache same-origin assets in the Service Worker; let the browser's native HTTP cache handle third-party CDNs
+  // Only cache same-origin assets in the Service Worker; let the browser's native HTTP cache handle third-party assets
   if (reqObjUrl.origin !== self.location.origin) {
     return;
   }
   const isSameOriginCode = reqObjUrl.origin === self.location.origin &&
-    /\.(?:js|css)$/i.test(reqObjUrl.pathname);
+    /\.(?:m?js|css)$/i.test(reqObjUrl.pathname);
 
   // Network-first for HTML documents and local JS/CSS so code updates apply immediately on reload
   if (isHtmlNav || isSameOriginCode) {

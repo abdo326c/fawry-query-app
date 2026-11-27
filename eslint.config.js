@@ -15,7 +15,7 @@ const CDN_GLOBALS = {
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', 'tests/**', 'e2e/**']
+    ignores: ['dist/**', 'node_modules/**', 'tests/**', 'e2e/**', 'vendor/**', 'api/**']
   },
   {
     files: ['*.js'],

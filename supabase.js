@@ -1,7 +1,22 @@
 // Turso + Vercel API client adapter implementing the Supabase JS client interface.
 // Keeps all existing frontend queries (.from, .rpc, .auth) working without rewriting every module.
 
-const TOKEN_STORAGE_KEY = 'fawry_turso_token';
+const LEGACY_TOKEN_STORAGE_KEY = 'fawry_turso_token';
+const isTestEnv = Boolean(
+  typeof globalThis !== 'undefined' &&
+  globalThis.process?.env &&
+  (globalThis.process.env.VITEST || globalThis.process.env.NODE_ENV === 'test')
+);
+let _testMemoryToken = null;
+
+// Scrub any previously stored browser JWT so session auth relies strictly on HttpOnly cookies.
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
+  }
+} catch {
+  /* ignore storage errors */
+}
 
 function getApiBase() {
   if (typeof window !== 'undefined' && window.__FAWRY_API_BASE__) {
@@ -10,21 +25,13 @@ function getApiBase() {
   return '';
 }
 
-function getStoredToken() {
-  try {
-    return typeof localStorage !== 'undefined' ? localStorage.getItem(TOKEN_STORAGE_KEY) : null;
-  } catch {
-    return null;
-  }
+function getTestToken() {
+  return isTestEnv ? _testMemoryToken : null;
 }
 
-function setStoredToken(token) {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    else localStorage.removeItem(TOKEN_STORAGE_KEY);
-  } catch {
-    /* ignore storage errors */
+function setTestToken(token) {
+  if (isTestEnv) {
+    _testMemoryToken = token || null;
   }
 }
 
@@ -40,7 +47,8 @@ const WRITE_SAFE_MSG_RE = /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database
 const READ_ONLY_RPCS = new Set([
   'get_dashboard_pivot', 'get_dashboard_pivot_by', 'get_dashboard_summary',
   'get_distinct_transaction_values', 'get_keyset_bounds', 'get_unresolved_tx_count',
-  'get_student_master_version', 'get_database_storage_stats', 'detect_double_payments'
+  'get_student_master_version', 'get_database_storage_stats', 'detect_double_payments',
+  'get_operational_checklist', 'get_period_close_readiness', 'detect_fawry_duplicates'
 ]);
 
 export function isIdempotentRequest(path, payload) {
@@ -52,18 +60,28 @@ export function isIdempotentRequest(path, payload) {
 
 async function apiFetch(path, payload) {
   const idempotent = isIdempotentRequest(path, payload);
-  const token = getStoredToken();
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Fawry-Client': '1'
+  };
+  if (isTestEnv) {
+    const token = getTestToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } else {
+    headers['X-Fawry-Cookie-Auth'] = '1';
+  }
 
   const url = `${getApiBase()}${path}`;
   const body = JSON.stringify(payload || {});
+  const fetchOpts = isTestEnv
+    ? { method: 'POST', headers, body }
+    : { method: 'POST', headers, body, credentials: 'same-origin' };
   const maxAttempts = 1 + RETRY_DELAYS_MS.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let res;
     try {
-      res = await fetch(url, { method: 'POST', headers, body });
+      res = await fetch(url, fetchOpts);
     } catch (networkErr) {
       if (idempotent && attempt < RETRY_DELAYS_MS.length) {
         const jitter = Math.floor(Math.random() * 80);
@@ -223,14 +241,13 @@ export const supabase = {
 
   auth: {
     async getSession() {
-      const token = getStoredToken();
-      if (!token) return { data: { session: null }, error: null };
+      if (isTestEnv && !getTestToken()) return { data: { session: null }, error: null };
       const res = await apiFetch('/api/auth', { action: 'session' });
       if (res.error) {
         return { data: { session: null }, error: res.error };
       }
       const session = res._raw?.session || null;
-      if (!session) setStoredToken(null);
+      if (!session) setTestToken(null);
       return { data: { session }, error: null };
     },
 
@@ -241,21 +258,25 @@ export const supabase = {
       }
       const session = res._raw?.session || null;
       if (session?.access_token) {
-        setStoredToken(session.access_token);
+        setTestToken(session.access_token);
+      }
+      if (session) {
         notifyAuth('SIGNED_IN', session);
       }
       return { data: { session, user: session?.user || null }, error: null };
     },
 
     async signOut() {
-      // Tell the server first (with the token) so it revokes the session, then forget it locally.
-      // The local sign-out happens even if the request fails.
+      // Tell the server first so it bumps token_version and clears the HttpOnly cookie.
+      // Local sign-out completes even if the request fails.
       try {
-        if (getStoredToken()) await apiFetch('/api/auth', { action: 'logout' });
+        if (!isTestEnv || getTestToken()) {
+          await apiFetch('/api/auth', { action: 'logout' });
+        }
       } catch {
-        /* ignore network errors: the token is dropped locally below */
+        /* ignore network errors: the session is dropped locally below */
       }
-      setStoredToken(null);
+      setTestToken(null);
       notifyAuth('SIGNED_OUT', null);
       return { error: null };
     },
@@ -272,9 +293,9 @@ export const supabase = {
 
     async changePassword({ currentPassword, newPassword }) {
       const res = await apiFetch('/api/auth', { action: 'change_password', currentPassword, newPassword });
-      // Changing the password revokes every existing token; the server returns a fresh one.
+      // Changing the password revokes every existing token; the server sets a new HttpOnly cookie.
       const newToken = res._raw?.session?.access_token;
-      if (!res.error && newToken) setStoredToken(newToken);
+      if (!res.error && newToken) setTestToken(newToken);
       return { data: res._raw || null, error: res.error };
     },
 

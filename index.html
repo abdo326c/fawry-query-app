@@ -2,7 +2,7 @@
 <html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com; worker-src 'self' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://open.er-api.com https://*.currency-api.pages.dev; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://cdn.jsdelivr.net https://open.er-api.com https://*.currency-api.pages.dev; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Payments Database</title>
     <!-- Favicon & PWA Requirements -->
@@ -16,16 +16,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="stylesheet" href="styles.css?v=3.0.7">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-    <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.294.0/dist/umd/lucide.min.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <script defer src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
-    <script defer src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
-    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" id="flatpickr-theme">
-    <script defer src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+    <script defer src="vendor/lucide.min.js"></script>
+    <link href="vendor/tom-select.css" rel="stylesheet">
+    <script defer src="vendor/tom-select.complete.min.js"></script>
+    <link rel="stylesheet" href="vendor/flatpickr.min.css">
+    <link rel="stylesheet" type="text/css" href="vendor/flatpickr-dark.css" id="flatpickr-theme">
+    <script defer src="vendor/flatpickr.min.js"></script>
 </head>
 <body>
     <!-- Toast Container -->
@@ -198,6 +194,9 @@
                         <span class="user-email-text" id="user-email-display" title="user@example.com">user@example.com</span>
                         <span id="user-role-badge" class="role-pill">Viewer</span>
                         <span class="topbar-user-divider" aria-hidden="true"></span>
+                        <button type="button" id="btn-copy-view-link" class="action-icon-btn" title="Copy Shareable Link to Current View">
+                            <i data-lucide="link-2"></i>
+                        </button>
                         <button id="btn-change-password" class="action-icon-btn" title="Change My Password">
                             <i data-lucide="key-round"></i>
                         </button>
@@ -256,6 +255,30 @@
                             <i data-lucide="copy"></i> Copy for Email
                         </button>
                     </div>
+                </div>
+
+                <!-- Morning Checklist / Needs Attention Strip -->
+                <div id="dashboard-morning-checklist" class="morning-checklist-strip" aria-label="Daily Finance Checklist">
+                    <button type="button" class="checklist-pill is-loading" data-checklist-action="invalid_ids">
+                        <span class="checklist-dot"></span>
+                        <span class="checklist-label">Student IDs</span>
+                        <strong class="checklist-value" id="checklist-invalid-val">--</strong>
+                    </button>
+                    <button type="button" class="checklist-pill is-loading" data-checklist-action="unmapped_items">
+                        <span class="checklist-dot"></span>
+                        <span class="checklist-label">Unmapped Items</span>
+                        <strong class="checklist-value" id="checklist-unmapped-val">--</strong>
+                    </button>
+                    <button type="button" class="checklist-pill is-loading" data-checklist-action="unsettled_tx">
+                        <span class="checklist-dot"></span>
+                        <span class="checklist-label">Unsettled Fawry</span>
+                        <strong class="checklist-value" id="checklist-unsettled-val">--</strong>
+                    </button>
+                    <button type="button" class="checklist-pill is-loading" data-checklist-action="erp_ready">
+                        <span class="checklist-dot"></span>
+                        <span class="checklist-label">Ready for Dynamics 365</span>
+                        <strong class="checklist-value" id="checklist-erp-val">--</strong>
+                    </button>
                 </div>
 
                 <!-- Bento Treasury Hero (60/40 Asymmetric Grid) -->
@@ -617,6 +640,8 @@
                 <div id="tx-bulk-assign-bar" class="hidden" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.6rem; padding: 0.55rem 1.2rem; border-bottom: 1px solid var(--border-color); background: rgba(56, 189, 248, 0.06);">
                     <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
                         <span style="font-size: 0.82rem; white-space: nowrap;"><strong id="tx-bulk-selected-count">0</strong> selected</span>
+                        <span id="tx-bulk-selected-sum" class="badge" style="background: var(--primary-soft); color: var(--primary); border: 1px solid var(--primary-border); font-family: var(--font-mono); font-size: 0.78rem; padding: 0.18rem 0.5rem;">EGP 0.00</span>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-tx-copy-sum" title="Copy selected total amount" style="height: 28px; padding: 0 0.55rem; font-size: 0.74rem; white-space: nowrap;">Copy Sum</button>
                         <button type="button" class="btn btn-outline btn-sm" id="btn-tx-select-same-mobile" title="Select all visible rows sharing the same customer mobile number" style="height: 28px; padding: 0 0.65rem; font-size: 0.76rem; white-space: nowrap;">Select Same Mobile</button>
                     </div>
                     <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;">
@@ -908,7 +933,7 @@
                             <h3 style="margin: 0.4rem 0 0.2rem 0; font-size: 1rem;">Drag &amp; Drop the Excel statement, plus its PDF to cross-check it</h3>
                             <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">The Excel (.xls/.xlsx) is read exactly; the bank's PDF of the same month is compared with it deposit by deposit. Arabic (كشف حساب) and English (Statement of Account) Banque Misr files.</p>
                             <input type="file" id="foreign-file-input" multiple accept=".pdf,.csv,.xlsx,.xls" class="hidden-input">
-                            <button type="button" class="btn btn-primary mt-4" onclick="document.getElementById('foreign-file-input').click()">
+                            <button type="button" class="btn btn-primary mt-4" data-trigger-file="foreign-file-input">
                                 <i data-lucide="folder-open"></i> Browse Statement Files
                             </button>
                         </div>
@@ -1022,7 +1047,7 @@
                         <h3>Drag & Drop CSV or Excel Files</h3>
                         <p>Support Fawry daily/monthly exports and Links Excel files</p>
                         <input type="file" id="file-input" multiple accept=".csv, .xlsx, .xls" class="hidden-input">
-                        <button class="btn btn-primary mt-4" onclick="document.getElementById('file-input').click()">Browse Files</button>
+                        <button type="button" class="btn btn-primary mt-4" data-trigger-file="file-input">Browse Files</button>
                     </div>
                     
                     <div id="import-progress" class="hidden mt-6">
@@ -1101,7 +1126,7 @@
                             <i data-lucide="download"></i> Export
                         </button>
                         <input type="file" id="file-upload-mappings" class="hidden-input" accept=".xlsx, .xls, .csv" style="display: none;">
-                        <button class="btn btn-outline" onclick="document.getElementById('file-upload-mappings').click()">
+                        <button type="button" class="btn btn-outline" data-trigger-file="file-upload-mappings">
                             <i data-lucide="upload"></i> Upload Excel
                         </button>
                         <button class="btn btn-primary" id="btn-add-mapping">
@@ -1233,7 +1258,7 @@
                             <i data-lucide="download"></i> Export
                         </button>
                         <input type="file" id="file-upload-fixes" class="hidden-input" accept=".xlsx, .xls, .csv" style="display: none;">
-                        <button class="btn btn-outline" onclick="document.getElementById('file-upload-fixes').click()">
+                        <button type="button" class="btn btn-outline" data-trigger-file="file-upload-fixes">
                             <i data-lucide="upload"></i> Upload Excel
                         </button>
                         <button class="btn btn-primary" id="btn-add-fix">
@@ -2304,7 +2329,7 @@
                                     Accounting Period Lock (Month-End Close)
                                 </h3>
                                 <p class="admin-card-desc">
-                                    Locking a month enforces a PostgreSQL trigger that blocks backdated imports, manual fix edits, and ERP batch unlinking for transactions inside that period without an audited Admin unlock.
+                                    Locking a month enforces a database trigger that blocks backdated imports, manual fix edits, and ERP batch unlinking for transactions inside that period without an audited Admin unlock.
                                 </p>
                             </div>
                         </div>
@@ -2322,6 +2347,8 @@
                                 <i data-lucide="lock"></i> Close Period
                             </button>
                         </div>
+
+                        <div id="period-readiness-checklist" class="period-readiness-box"></div>
 
                         <div id="period-lock-status" style="margin: 0.75rem 0 0.35rem; font-size: 0.82rem; color: var(--text-secondary);"></div>
 
@@ -2547,11 +2574,16 @@
         </div>
     </div>
 
-    <!-- Transaction Details Modal -->
-    <div id="modal-tx-details" class="modal hidden" style="z-index: 10020;" role="dialog" aria-modal="true" aria-labelledby="modal-tx-details-title">
-        <div class="modal-content glass-card" style="max-width: 640px;">
+    <!-- Transaction Details Side-by-Side Drawer -->
+    <div id="modal-tx-details" class="modal modal-drawer hidden" style="z-index: 10020;" role="dialog" aria-modal="true" aria-labelledby="modal-tx-details-title">
+        <div class="modal-content glass-card">
             <div class="modal-header">
                 <h2 id="modal-tx-details-title">Transaction Details</h2>
+                <div style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: auto; margin-right: 0.5rem;">
+                    <button type="button" class="btn btn-outline btn-sm hidden" id="btn-tx-detail-prev" title="Previous row (Up Arrow or [)" style="height: 28px; padding: 0 0.5rem; font-size: 0.75rem;">&larr; Prev</button>
+                    <span id="tx-detail-position" style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);"></span>
+                    <button type="button" class="btn btn-outline btn-sm hidden" id="btn-tx-detail-next" title="Next row (Down Arrow or ])" style="height: 28px; padding: 0 0.5rem; font-size: 0.75rem;">Next &rarr;</button>
+                </div>
                 <button class="btn-close" data-close-modal="modal-tx-details" aria-label="Close"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body" id="modal-tx-details-body" style="display: flex; flex-direction: column; gap: 1rem;">

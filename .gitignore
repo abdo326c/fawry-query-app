@@ -1,6 +1,7 @@
 # Dependencies & Build Output
 node_modules/
 dist/
+/vendor/
 
 # Environment
 .env

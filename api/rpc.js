@@ -1300,6 +1300,198 @@ export default async function handler(req, res) {
         });
       }
 
+      case 'get_operational_checklist': {
+        requireRole(user, 'viewer', 'view operational checklist');
+        const [fawryRes, foreignRes, unmappedRes, unsettledRes, erpFawryRes, erpForeignRes] = await withDbRetry(() => db.batch([
+          {
+            sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(item_price), 0) AS total
+                  FROM transactions
+                  WHERE COALESCE(id_status, '') NOT IN ('Valid', 'Exempt')
+                    AND NOT (${EXEMPT_MAPPING_SQL})`,
+            args: []
+          },
+          {
+            sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total
+                  FROM foreign_transactions
+                  WHERE COALESCE(id_status, '') NOT IN ('Valid', 'Exempt')`,
+            args: []
+          },
+          {
+            sql: `SELECT COUNT(*) AS cnt, COUNT(DISTINCT NULLIF(TRIM(item_name), '')) AS distinct_cnt
+                  FROM transactions
+                  WHERE mapping IS NULL OR TRIM(mapping) = ''`,
+            args: []
+          },
+          {
+            sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(item_price), 0) AS total
+                  FROM transactions
+                  WHERE COALESCE(is_settled, 0) = 0`,
+            args: []
+          },
+          {
+            sql: `SELECT COUNT(*) AS cnt
+                  FROM transactions
+                  WHERE (COALESCE(id_status, '') IN ('Valid', 'Exempt') OR ${EXEMPT_MAPPING_SQL})
+                    AND (erp_batch_number IS NULL OR TRIM(erp_batch_number) = '')`,
+            args: []
+          },
+          {
+            sql: `SELECT COUNT(*) AS cnt
+                  FROM foreign_transactions
+                  WHERE COALESCE(id_status, '') IN ('Valid', 'Exempt')
+                    AND (erp_batch_number IS NULL OR TRIM(erp_batch_number) = '')`,
+            args: []
+          }
+        ], 'read'));
+
+        const fawryRow = fawryRes.rows[0] || {};
+        const foreignRow = foreignRes.rows[0] || {};
+        const unmappedRow = unmappedRes.rows[0] || {};
+        const unsettledRow = unsettledRes.rows[0] || {};
+        const erpFawry = Number(erpFawryRes.rows[0]?.cnt || 0);
+        const erpForeign = Number(erpForeignRes.rows[0]?.cnt || 0);
+
+        return sendJson(res, 200, {
+          data: {
+            unresolved_fawry_count: Number(fawryRow.cnt || 0),
+            unresolved_fawry_egp: Math.round(Number(fawryRow.total || 0) * 100) / 100,
+            unresolved_foreign_count: Number(foreignRow.cnt || 0),
+            unresolved_foreign_usd: Math.round(Number(foreignRow.total || 0) * 100) / 100,
+            unmapped_fawry_count: Number(unmappedRow.cnt || 0),
+            unmapped_distinct_items: Number(unmappedRow.distinct_cnt || 0),
+            unsettled_fawry_count: Number(unsettledRow.cnt || 0),
+            unsettled_fawry_egp: Math.round(Number(unsettledRow.total || 0) * 100) / 100,
+            erp_ready_count: erpFawry + erpForeign,
+            erp_ready_fawry_count: erpFawry,
+            erp_ready_foreign_count: erpForeign
+          }
+        });
+      }
+
+      case 'get_period_close_readiness': {
+        requireRole(user, 'viewer', 'check period close readiness');
+        const periodMonth = String(args.p_period_month || '').trim();
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodMonth)) {
+          return sendJson(res, 400, { error: 'Valid p_period_month (YYYY-MM) is required.' });
+        }
+        const startDate = `${periodMonth}-01`;
+        const endDate = `${periodMonth}-31`;
+
+        const [fawryRes, foreignRes, lockRes] = await withDbRetry(() => db.batch([
+          {
+            sql: `SELECT
+                    COUNT(*) AS total_count,
+                    COALESCE(SUM(item_price), 0) AS total_egp,
+                    SUM(CASE WHEN COALESCE(id_status, '') NOT IN ('Valid', 'Exempt') AND NOT (${EXEMPT_MAPPING_SQL}) THEN 1 ELSE 0 END) AS invalid_count,
+                    SUM(CASE WHEN mapping IS NULL OR TRIM(mapping) = '' THEN 1 ELSE 0 END) AS unmapped_count,
+                    SUM(CASE WHEN COALESCE(is_settled, 0) = 0 THEN 1 ELSE 0 END) AS unsettled_count,
+                    SUM(CASE WHEN erp_batch_number IS NULL OR TRIM(erp_batch_number) = '' THEN 1 ELSE 0 END) AS unposted_count
+                  FROM transactions
+                  WHERE payment_date >= ? AND payment_date <= ?`,
+            args: [startDate, endDate]
+          },
+          {
+            sql: `SELECT
+                    COUNT(*) AS total_count,
+                    COALESCE(SUM(amount), 0) AS total_usd,
+                    SUM(CASE WHEN COALESCE(id_status, '') NOT IN ('Valid', 'Exempt') THEN 1 ELSE 0 END) AS invalid_count,
+                    SUM(CASE WHEN erp_batch_number IS NULL OR TRIM(erp_batch_number) = '' THEN 1 ELSE 0 END) AS unposted_count
+                  FROM foreign_transactions
+                  WHERE COALESCE(value_date, transaction_date) >= ? AND COALESCE(value_date, transaction_date) <= ?`,
+            args: [startDate, endDate]
+          },
+          {
+            sql: `SELECT is_closed, closed_by, closed_at FROM closed_periods WHERE period_month = ? LIMIT 1`,
+            args: [periodMonth]
+          }
+        ], 'read'));
+
+        const f = fawryRes.rows[0] || {};
+        const fx = foreignRes.rows[0] || {};
+        const lockRow = lockRes.rows[0] || null;
+        const fawrySummary = {
+          total_count: Number(f.total_count || 0),
+          total_egp: Math.round(Number(f.total_egp || 0) * 100) / 100,
+          invalid_count: Number(f.invalid_count || 0),
+          unmapped_count: Number(f.unmapped_count || 0),
+          unsettled_count: Number(f.unsettled_count || 0),
+          unposted_count: Number(f.unposted_count || 0)
+        };
+        const foreignSummary = {
+          total_count: Number(fx.total_count || 0),
+          total_usd: Math.round(Number(fx.total_usd || 0) * 100) / 100,
+          invalid_count: Number(fx.invalid_count || 0),
+          unposted_count: Number(fx.unposted_count || 0)
+        };
+        const readyToClose = (
+          fawrySummary.invalid_count === 0 &&
+          fawrySummary.unmapped_count === 0 &&
+          fawrySummary.unsettled_count === 0 &&
+          fawrySummary.unposted_count === 0 &&
+          foreignSummary.invalid_count === 0 &&
+          foreignSummary.unposted_count === 0
+        );
+
+        return sendJson(res, 200, {
+          data: {
+            period_month: periodMonth,
+            is_closed: lockRow ? Boolean(lockRow.is_closed) : false,
+            closed_by: lockRow?.closed_by || null,
+            closed_at: lockRow?.closed_at || null,
+            fawry: fawrySummary,
+            foreign: foreignSummary,
+            ready_to_close: readyToClose
+          }
+        });
+      }
+
+      case 'detect_fawry_duplicates': {
+        requireRole(user, 'viewer', 'detect duplicate transactions');
+        const dupRes = await withDbRetry(() => db.execute({
+          sql: `WITH norm_tx AS (
+                  SELECT
+                    id,
+                    reference_number,
+                    item_price,
+                    item_name,
+                    check_column,
+                    erp_batch_number,
+                    is_settled,
+                    ROUND(COALESCE(item_price, 0), 2) AS norm_price,
+                    TRIM(COALESCE(check_column, reference_number || '-' || TRIM(COALESCE(item_name, '')))) AS norm_check
+                  FROM transactions
+                  WHERE reference_number IS NOT NULL AND TRIM(reference_number) != ''
+                ),
+                dup_groups AS (
+                  SELECT reference_number, norm_price, norm_check
+                  FROM norm_tx
+                  GROUP BY reference_number, norm_price, norm_check
+                  HAVING COUNT(*) > 1
+                )
+                SELECT t.id, t.reference_number, t.item_price, t.item_name, t.check_column, t.erp_batch_number, t.is_settled
+                FROM norm_tx t
+                INNER JOIN dup_groups d
+                  ON t.reference_number = d.reference_number
+                 AND t.norm_price = d.norm_price
+                 AND t.norm_check = d.norm_check
+                ORDER BY t.reference_number ASC, t.id ASC
+                LIMIT 5000`,
+          args: []
+        }));
+
+        return sendJson(res, 200, {
+          data: dupRes.rows.map(r => ({
+            id: Number(r.id),
+            reference_number: r.reference_number,
+            item_price: Number(r.item_price || 0),
+            item_name: r.item_name,
+            check_column: r.check_column,
+            erp_batch_number: r.erp_batch_number || null,
+            is_settled: Boolean(r.is_settled)
+          }))
+        });
+      }
+
       default:
         return sendJson(res, 400, { error: `Unknown RPC function: ${fn}` });
     }

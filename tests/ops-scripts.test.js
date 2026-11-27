@@ -247,6 +247,51 @@ describe('Google Drive upload and retention (mocked fetch)', () => {
     expect(parseRetention('0')).toBe(0);
     expect(() => parseRetention('-1')).toThrow();
   });
+
+  test('AES-256-GCM encrypted backup round-trips cleanly and rejects wrong keys or tampering', async () => {
+    const source = await makeDb('enc_source');
+    await seedSource(source);
+    const encBackup = await createLocalBackup({
+      db: source,
+      workDir: tmpDir,
+      log: quiet,
+      pageSize: 2,
+      encryptionKey: 'SuperSecretFinanceKey!2026'
+    });
+    expect(encBackup.encrypted).toBe(true);
+    expect(encBackup.zipPath.endsWith('.zip.enc')).toBe(true);
+    expect(encBackup.manifest.encrypted).toBe(true);
+    expect(encBackup.manifest.encryption_cipher).toBe('aes-256-gcm');
+    expect(encBackup.manifest.plain_zip_sha256).toMatch(/^[a-f0-9]{64}$/);
+
+    // Missing or wrong key fails loudly
+    expect(() => loadBackup(encBackup.zipPath, { externalManifestPath: encBackup.manifestPath, decryptionKey: '' }))
+      .toThrow(/encrypted/i);
+    expect(() => loadBackup(encBackup.zipPath, { externalManifestPath: encBackup.manifestPath, decryptionKey: 'WrongPassphrase!' }))
+      .toThrow(/decryption failed/i);
+
+    // Tampered ciphertext fails authentication
+    const tamperedPath = path.join(tmpDir, 'tampered.zip.enc');
+    const encBytes = Buffer.from(fs.readFileSync(encBackup.zipPath));
+    encBytes[encBytes.length - 5] ^= 0xFF;
+    fs.writeFileSync(tamperedPath, encBytes);
+    expect(() => loadBackup(tamperedPath, { decryptionKey: 'SuperSecretFinanceKey!2026' }))
+      .toThrow(/decryption failed/i);
+
+    // Valid restore into fresh empty target succeeds
+    const target = await makeDb('enc_target');
+    await target.execute("INSERT INTO app_users (id, email, password_hash) VALUES ('seed-id', 'ammahmoud@nu.edu.eg', 'seedhash')");
+    const res = await restoreBackup({
+      zipPath: encBackup.zipPath,
+      externalManifestPath: encBackup.manifestPath,
+      decryptionKey: 'SuperSecretFinanceKey!2026',
+      db: target,
+      confirm: true,
+      log: quiet
+    });
+    expect(res.restored).toBe(true);
+    expect(res.counts.transactions).toBe(3);
+  });
 });
 
 describe('daily FX rate job', () => {

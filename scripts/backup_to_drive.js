@@ -35,8 +35,9 @@ import { withDbRetry, withDbWriteRetry } from '../api/_lib/db.js';
 
 export const BACKUP_FORMAT_VERSION = 2;
 export const BACKUP_ROOT_FOLDER = 'Fawry Payments Backup';
-export const BACKUP_ZIP_NAME_RE = /^fawry_backup_(\d{8}_\d{6})\.zip$/;
+export const BACKUP_ZIP_NAME_RE = /^fawry_backup_(\d{8}_\d{6})\.zip(?:\.enc)?$/;
 export const BACKUP_MANIFEST_NAME_RE = /^fawry_backup_(\d{8}_\d{6})_manifest\.json$/;
+export const BACKUP_ENC_MAGIC = Buffer.from('FAWRYENC1', 'ascii');
 export const RESUMABLE_UPLOAD_THRESHOLD = 5 * 1024 * 1024;
 const RESUMABLE_CHUNK_SIZE = 8 * 1024 * 1024; // must be a multiple of 256 KiB
 
@@ -67,9 +68,71 @@ export const BACKUP_TABLES = [
 /** Tables of turso/schema.sql deliberately NOT backed up. */
 export const EXCLUDED_TABLES = {
     period_lock_bypass: 'transient one-row switch, set and cleared inside a single write batch; always empty between requests',
-    login_attempts: 'transient login rate-limit counters (15-minute windows); nothing to restore',
-    login_attempts: 'transient sign-in throttling counters (not part of turso/schema.sql today); restoring them would only re-lock accounts'
+    login_attempts: 'transient sign-in throttling counters (15-minute windows); restoring them would only re-lock accounts'
 };
+
+/** True when a Buffer or file starts with the FAWRYENC1 encrypted backup header. */
+export function isEncryptedBackup(bufOrPath) {
+    let head;
+    if (Buffer.isBuffer(bufOrPath)) {
+        head = bufOrPath.subarray(0, BACKUP_ENC_MAGIC.length);
+    } else {
+        const fd = fs.openSync(bufOrPath, 'r');
+        try {
+            head = Buffer.alloc(BACKUP_ENC_MAGIC.length);
+            const read = fs.readSync(fd, head, 0, BACKUP_ENC_MAGIC.length, 0);
+            head = head.subarray(0, read);
+        } finally {
+            fs.closeSync(fd);
+        }
+    }
+    return head.length === BACKUP_ENC_MAGIC.length && head.equals(BACKUP_ENC_MAGIC);
+}
+
+/**
+ * Encrypts a backup buffer with AES-256-GCM using a key derived from `passphrase` via scrypt.
+ * Binary format: [magic(9) | salt(16) | iv(12) | authTag(16) | ciphertext].
+ */
+export function encryptBackupBuffer(plainBuf, passphrase) {
+    const secret = String(passphrase || '').trim();
+    if (secret.length < 8) {
+        throw new Error('BACKUP_ENCRYPTION_KEY must be at least 8 characters when encrypting backups.');
+    }
+    const salt = crypto.randomBytes(16);
+    const iv = crypto.randomBytes(12);
+    const key = crypto.scryptSync(secret, salt, 32);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(plainBuf), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return Buffer.concat([BACKUP_ENC_MAGIC, salt, iv, tag, ciphertext]);
+}
+
+/**
+ * Decrypts a FAWRYENC1 AES-256-GCM backup buffer in memory. Throws on missing/wrong passphrase or tampering.
+ */
+export function decryptBackupBuffer(encBuf, passphrase) {
+    const secret = String(passphrase || '').trim();
+    if (!secret) {
+        throw new Error('This backup is encrypted. Set BACKUP_ENCRYPTION_KEY or pass --decryption-key <passphrase>.');
+    }
+    const minLen = BACKUP_ENC_MAGIC.length + 16 + 12 + 16;
+    if (!Buffer.isBuffer(encBuf) || encBuf.length < minLen || !encBuf.subarray(0, BACKUP_ENC_MAGIC.length).equals(BACKUP_ENC_MAGIC)) {
+        throw new Error('Invalid encrypted backup header (expected FAWRYENC1).');
+    }
+    let pos = BACKUP_ENC_MAGIC.length;
+    const salt = encBuf.subarray(pos, pos + 16); pos += 16;
+    const iv = encBuf.subarray(pos, pos + 12); pos += 12;
+    const tag = encBuf.subarray(pos, pos + 16); pos += 16;
+    const ciphertext = encBuf.subarray(pos);
+    const key = crypto.scryptSync(secret, salt, 32);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    try {
+        return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    } catch (err) {
+        throw new Error(`Backup decryption failed (wrong key or tampered archive): ${err.message}`, { cause: err });
+    }
+}
 
 /**
  * Computes the SHA-256 hex digest of a file on disk for backup integrity verification.
@@ -290,16 +353,15 @@ export function writeZip(zipPath, entries, date = new Date()) {
 }
 
 /**
- * Reads a zip file into a Map(name -> Buffer). Supports stored and deflated entries (our own
- * archives and ones made by Compress-Archive / zip). Verifies each entry's CRC-32.
+ * Reads an in-memory zip buffer into a Map(name -> Buffer). Supports stored and deflated entries
+ * (our own archives and ones made by Compress-Archive / zip). Verifies each entry's CRC-32.
  */
-export function readZip(zipPath) {
-    const buf = fs.readFileSync(zipPath);
+export function readZipBuffer(buf, label = 'archive.zip') {
     let eocd = -1;
     for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xFFFF); i--) {
         if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
     }
-    if (eocd < 0) throw new Error(`${path.basename(zipPath)} is not a valid zip archive (no end-of-central-directory record).`);
+    if (eocd < 0) throw new Error(`${label} is not a valid zip archive (no end-of-central-directory record).`);
     const count = buf.readUInt16LE(eocd + 10);
     let p = buf.readUInt32LE(eocd + 16);
     const out = new Map();
@@ -330,6 +392,10 @@ export function readZip(zipPath) {
         out.set(name, data);
     }
     return out;
+}
+
+export function readZip(zipPath) {
+    return readZipBuffer(fs.readFileSync(zipPath), path.basename(zipPath));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -472,27 +538,51 @@ export async function exportDatabaseToDir(db, dir, { now = new Date(), log = con
  * { zipPath, manifestPath, manifest, tempDir }. The caller deletes tempDir / zipPath.
  * manifestPath is the external manifest (same content + archive_sha256 / archive size).
  */
-export async function createLocalBackup({ db, workDir = os.tmpdir(), now = new Date(), log = console.log, pageSize } = {}) {
+export async function createLocalBackup({
+    db,
+    workDir = os.tmpdir(),
+    now = new Date(),
+    log = console.log,
+    pageSize,
+    encryptionKey = process.env.BACKUP_ENCRYPTION_KEY || ''
+} = {}) {
     const timestamp = formatTimestamp(now);
     const tempDir = fs.mkdtempSync(path.join(workDir, `fawry_backup_temp_${timestamp}_`));
     const manifest = await exportDatabaseToDir(db, tempDir, { now, log, pageSize });
 
     const zipName = `fawry_backup_${timestamp}.zip`;
-    const zipPath = path.join(workDir, zipName);
+    const plainZipPath = path.join(workDir, zipName);
     const entries = fs.readdirSync(tempDir).sort().map(name => ({ name, data: fs.readFileSync(path.join(tempDir, name)) }));
-    writeZip(zipPath, entries, now);
+    writeZip(plainZipPath, entries, now);
 
-    const zipBytes = fs.statSync(zipPath).size;
+    const plainZipSha = computeFileSha256(plainZipPath);
+    let archivePath = plainZipPath;
+    let archiveName = zipName;
+    const cleanKey = String(encryptionKey || '').trim();
+    let encrypted = false;
+    if (cleanKey) {
+        const plainBuf = fs.readFileSync(plainZipPath);
+        const encBuf = encryptBackupBuffer(plainBuf, cleanKey);
+        archiveName = `${zipName}.enc`;
+        archivePath = path.join(workDir, archiveName);
+        fs.writeFileSync(archivePath, encBuf);
+        fs.unlinkSync(plainZipPath);
+        encrypted = true;
+    }
+
+    const archiveBytes = fs.statSync(archivePath).size;
     const external = {
         ...manifest,
-        archive_name: zipName,
-        archive_sha256: computeFileSha256(zipPath),
-        archive_size_bytes: zipBytes,
-        archive_size_mb: Math.round((zipBytes / (1024 * 1024)) * 100) / 100
+        encrypted,
+        ...(encrypted ? { encryption_cipher: 'aes-256-gcm', plain_zip_sha256: plainZipSha } : {}),
+        archive_name: archiveName,
+        archive_sha256: computeFileSha256(archivePath),
+        archive_size_bytes: archiveBytes,
+        archive_size_mb: Math.round((archiveBytes / (1024 * 1024)) * 100) / 100
     };
     const manifestPath = path.join(workDir, `fawry_backup_${timestamp}_manifest.json`);
     fs.writeFileSync(manifestPath, JSON.stringify(external, null, 2), 'utf-8');
-    return { zipPath, manifestPath, manifest: external, tempDir, timestamp };
+    return { zipPath: archivePath, manifestPath, manifest: external, tempDir, timestamp, encrypted };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -848,7 +938,12 @@ export async function applyDriveRetention(accessToken, rootFolderId, keep, { fet
 /**
  * Full backup. With localOnly the zip + manifest are copied to outDir and nothing is uploaded.
  */
-export async function runFullDatabaseBackup({ localOnly = false, outDir = path.resolve('backups'), db = null } = {}) {
+export async function runFullDatabaseBackup({
+    localOnly = false,
+    outDir = path.resolve('backups'),
+    db = null,
+    encryptionKey = process.env.BACKUP_ENCRYPTION_KEY || ''
+} = {}) {
     console.log('='.repeat(75));
     console.log(localOnly ? '💾 FAWRY DATABASE BACKUP (LOCAL ONLY)' : '☁️  FAWRY AUTOMATED BACKUP TO GOOGLE DRIVE');
     console.log('='.repeat(75));
@@ -874,11 +969,13 @@ export async function runFullDatabaseBackup({ localOnly = false, outDir = path.r
     let backup = null;
     try {
         console.log('\n[1/3] Exporting every table (keyset paging)...');
-        backup = await createLocalBackup({ db: client, now });
+        backup = await createLocalBackup({ db: client, now, encryptionKey });
         const { manifest, zipPath, manifestPath, timestamp } = backup;
+        const archiveFileName = manifest.archive_name || `fawry_backup_${timestamp}.zip`;
+        const archiveMimeType = manifest.encrypted ? 'application/octet-stream' : 'application/zip';
         const zipSizeMb = manifest.archive_size_mb;
         const stats = manifest.statistics;
-        console.log(`\n[2/3] Archive created: ${zipSizeMb} MB | SHA-256: ${manifest.archive_sha256.slice(0, 16)}...`);
+        console.log(`\n[2/3] Archive created (${manifest.encrypted ? 'AES-256-GCM encrypted' : 'standard zip'}): ${zipSizeMb} MB | SHA-256: ${manifest.archive_sha256.slice(0, 16)}...`);
 
         if (localOnly) {
             fs.mkdirSync(outDir, { recursive: true });
@@ -896,7 +993,7 @@ export async function runFullDatabaseBackup({ localOnly = false, outDir = path.r
         const monthFolder = await getOrCreateDriveFolderRest(driveAccessToken, hierarchy.month, yearFolder.id);
         const weekFolder = await getOrCreateDriveFolderRest(driveAccessToken, hierarchy.week, monthFolder.id);
 
-        const uploadedArchive = await uploadFileToDriveRest(driveAccessToken, zipPath, `fawry_backup_${timestamp}.zip`, 'application/zip', weekFolder.id);
+        const uploadedArchive = await uploadFileToDriveRest(driveAccessToken, zipPath, archiveFileName, archiveMimeType, weekFolder.id);
         console.log(`  ✓ Archive uploaded (File ID: ${uploadedArchive.id})`);
         const uploadedManifest = await uploadFileToDriveRest(driveAccessToken, manifestPath, `fawry_backup_${timestamp}_manifest.json`, 'application/json', weekFolder.id);
         console.log(`  ✓ Manifest uploaded (File ID: ${uploadedManifest.id})`);
@@ -913,7 +1010,8 @@ export async function runFullDatabaseBackup({ localOnly = false, outDir = path.r
                 'DRIVE_BACKUP_COMPLETED',
                 `Full Database (${stats.transactions_count.toLocaleString()} txs)`,
                 JSON.stringify({
-                    archive_name: `fawry_backup_${timestamp}.zip`,
+                    archive_name: archiveFileName,
+                    encrypted: Boolean(manifest.encrypted),
                     archive_sha256: manifest.archive_sha256,
                     size_mb: zipSizeMb,
                     hierarchy: `${BACKUP_ROOT_FOLDER} > ${hierarchy.year} > ${hierarchy.month} > ${hierarchy.week}`,
@@ -972,9 +1070,11 @@ ${tableRows}
 if (process.argv[1] && process.argv[1].endsWith('backup_to_drive.js')) {
     const argv = process.argv.slice(2);
     const outIdx = argv.indexOf('--out');
+    const keyIdx = argv.indexOf('--encryption-key');
     runFullDatabaseBackup({
         localOnly: argv.includes('--local-only'),
-        outDir: outIdx >= 0 && argv[outIdx + 1] ? path.resolve(argv[outIdx + 1]) : path.resolve('backups')
+        outDir: outIdx >= 0 && argv[outIdx + 1] ? path.resolve(argv[outIdx + 1]) : path.resolve('backups'),
+        encryptionKey: keyIdx >= 0 && argv[keyIdx + 1] ? argv[keyIdx + 1] : (process.env.BACKUP_ENCRYPTION_KEY || '')
     }).catch(err => {
         console.error('❌ Backup failed:', err);
         process.exit(1);

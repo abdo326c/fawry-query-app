@@ -39,6 +39,55 @@ export function loadScriptOnce(src) {
     return promise;
 }
 
+const isTestRuntime = Boolean(globalThis.process?.env?.VITEST || globalThis.process?.env?.NODE_ENV === 'test');
+const importTestPkg = (pkg) => import(/* @vite-ignore */ pkg);
+
+export async function ensureXlsx() {
+    if (isTestRuntime) {
+        if (typeof globalThis.XLSX === 'undefined') {
+            const mod = await importTestPkg('xlsx');
+            globalThis.XLSX = mod?.read ? mod : (mod?.default || mod);
+        }
+        if (typeof globalThis.JSZip === 'undefined') {
+            const mod = await importTestPkg('jszip');
+            globalThis.JSZip = mod?.default || mod;
+        }
+        return;
+    }
+    const tasks = [];
+    if (typeof XLSX === 'undefined') tasks.push(loadScriptOnce('./vendor/xlsx.full.min.js'));
+    if (typeof JSZip === 'undefined') tasks.push(loadScriptOnce('./vendor/jszip.min.js'));
+    if (tasks.length > 0) await Promise.all(tasks);
+}
+
+export async function ensurePapa() {
+    if (typeof globalThis.Papa !== 'undefined') return;
+    if (isTestRuntime) {
+        const mod = await importTestPkg('papaparse');
+        globalThis.Papa = mod?.parse ? mod : (mod?.default || mod);
+        return;
+    }
+    if (typeof Papa === 'undefined') {
+        await loadScriptOnce('./vendor/papaparse.min.js');
+    }
+}
+
+export async function ensureFuse() {
+    if (typeof globalThis.Fuse !== 'undefined') return;
+    if (isTestRuntime) {
+        const mod = await importTestPkg('fuse.js');
+        globalThis.Fuse = mod?.default || mod;
+        return;
+    }
+    if (typeof Fuse === 'undefined') {
+        await loadScriptOnce('./vendor/fuse.min.js');
+    }
+}
+
+export async function ensureImportLibs() {
+    await Promise.all([ensureXlsx(), ensurePapa()]);
+}
+
 const INLINE_SVG_PATHS = {
     wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
     copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',

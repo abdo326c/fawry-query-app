@@ -29,9 +29,10 @@ import { createClient } from '@libsql/client';
 import { withDbRetry, withDbWriteRetry } from '../api/_lib/db.js';
 import {
   BACKUP_TABLES,
-  readZip,
+  decryptBackupBuffer,
+  isEncryptedBackup,
+  readZipBuffer,
   sha256Buffer,
-  computeFileSha256,
   parseTableFile
 } from './backup_to_drive.js';
 
@@ -77,24 +78,36 @@ function cellValue(v) {
  * Opens and validates a backup zip. Throws on any integrity problem.
  * Returns { manifest, plan: [{ table, key, rows }], problems: [], warnings: [] }.
  */
-export function loadBackup(zipPath, { externalManifestPath = null } = {}) {
+export function loadBackup(zipPath, { externalManifestPath = null, decryptionKey = process.env.BACKUP_ENCRYPTION_KEY || '' } = {}) {
   if (!fs.existsSync(zipPath)) throw new Error(`Backup file not found: ${zipPath}`);
   const problems = [];
   const warnings = [];
 
+  const rawArchiveBuf = fs.readFileSync(zipPath);
+  const encryptedArchive = isEncryptedBackup(rawArchiveBuf);
+
+  let extManifest = null;
   if (externalManifestPath) {
-    const ext = JSON.parse(fs.readFileSync(externalManifestPath, 'utf-8'));
-    if (ext.archive_sha256) {
-      const actual = computeFileSha256(zipPath);
-      if (actual !== ext.archive_sha256) {
-        problems.push(`Archive SHA-256 ${actual} does not match the manifest (${ext.archive_sha256}).`);
+    extManifest = JSON.parse(fs.readFileSync(externalManifestPath, 'utf-8'));
+    if (extManifest.archive_sha256) {
+      const actual = sha256Buffer(rawArchiveBuf);
+      if (actual !== extManifest.archive_sha256) {
+        problems.push(`Archive SHA-256 ${actual} does not match the manifest (${extManifest.archive_sha256}).`);
       }
     } else {
       warnings.push('External manifest has no archive_sha256; archive checksum not verified.');
     }
   }
 
-  const entries = readZip(zipPath); // verifies CRC-32 of every entry
+  const zipBuf = encryptedArchive ? decryptBackupBuffer(rawArchiveBuf, decryptionKey) : rawArchiveBuf;
+  if (encryptedArchive && extManifest?.plain_zip_sha256) {
+    const actualPlain = sha256Buffer(zipBuf);
+    if (actualPlain !== extManifest.plain_zip_sha256) {
+      problems.push(`Decrypted zip SHA-256 ${actualPlain} does not match manifest plain_zip_sha256 (${extManifest.plain_zip_sha256}).`);
+    }
+  }
+
+  const entries = readZipBuffer(zipBuf, path.basename(zipPath)); // verifies CRC-32 of every entry
   const manifestBuf = entries.get('manifest.json');
   if (!manifestBuf) throw new Error('manifest.json is missing from the backup zip.');
   const manifest = JSON.parse(manifestBuf.toString('utf-8'));
@@ -207,11 +220,20 @@ function insertStatement(table, row) {
  * Validates a backup and (with confirm) restores it into `db`.
  * Returns { restored: boolean, counts, problems, warnings }. Throws on refusal / failure.
  */
-export async function restoreBackup({ zipPath, externalManifestPath = null, db = null, confirm = false, replace = false, actor = 'restore script', log = console.log }) {
+export async function restoreBackup({
+  zipPath,
+  externalManifestPath = null,
+  decryptionKey = process.env.BACKUP_ENCRYPTION_KEY || '',
+  db = null,
+  confirm = false,
+  replace = false,
+  actor = 'restore script',
+  log = console.log
+}) {
   if (replace) {
     throw new Error('--replace is not supported: audit_logs and transactions_archive are append-only (UPDATE/DELETE triggers). Create a new database with scripts/turso_setup.mjs and restore into it.');
   }
-  const { manifest, plan, problems, warnings } = loadBackup(zipPath, { externalManifestPath });
+  const { manifest, plan, problems, warnings } = loadBackup(zipPath, { externalManifestPath, decryptionKey });
   log(`Backup ${manifest.backup_id || path.basename(zipPath)} (format ${manifest.format_version || 1}, created ${manifest.created_at || 'unknown'})`);
   for (const p of plan) log(`  ${p.table.padEnd(22)} ${String(p.rows.length).padStart(9)} rows`);
   for (const w of warnings) log(`  ! ${w}`);
@@ -306,9 +328,11 @@ async function main() {
   const flags = new Set(argv.filter(a => a.startsWith('--')));
   const manifestIdx = argv.indexOf('--manifest');
   const externalManifestPath = manifestIdx >= 0 ? argv[manifestIdx + 1] : null;
-  const zipPath = argv.find((a, i) => !a.startsWith('--') && argv[i - 1] !== '--manifest');
+  const keyIdx = argv.indexOf('--decryption-key');
+  const decryptionKey = keyIdx >= 0 ? argv[keyIdx + 1] : (process.env.BACKUP_ENCRYPTION_KEY || '');
+  const zipPath = argv.find((a, i) => !a.startsWith('--') && argv[i - 1] !== '--manifest' && argv[i - 1] !== '--decryption-key');
   if (!zipPath) {
-    console.error('Usage: node scripts/restore_from_backup.mjs <backup.zip> [--manifest <manifest.json>] [--confirm]');
+    console.error('Usage: node scripts/restore_from_backup.mjs <backup.zip|backup.zip.enc> [--manifest <manifest.json>] [--decryption-key <passphrase>] [--confirm]');
     process.exit(1);
   }
   const url = process.env.TURSO_DATABASE_URL;
@@ -317,6 +341,7 @@ async function main() {
   await restoreBackup({
     zipPath: path.resolve(zipPath),
     externalManifestPath: externalManifestPath ? path.resolve(externalManifestPath) : null,
+    decryptionKey,
     db,
     confirm: flags.has('--confirm'),
     replace: flags.has('--replace'),

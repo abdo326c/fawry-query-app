@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS foreign_transactions (
 CREATE INDEX IF NOT EXISTS idx_foreign_tx_value_date ON foreign_transactions(value_date DESC);
 CREATE INDEX IF NOT EXISTS idx_foreign_tx_student_id ON foreign_transactions(student_id);
 CREATE INDEX IF NOT EXISTS idx_foreign_tx_id_status ON foreign_transactions(id_status);
+CREATE INDEX IF NOT EXISTS idx_foreign_tx_erp_batch ON foreign_transactions(erp_batch_number);
 
 -- 12. Daily USD/EGP Exchange Rates Table
 CREATE TABLE IF NOT EXISTS exchange_rates (

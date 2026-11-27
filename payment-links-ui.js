@@ -7,7 +7,7 @@ import {
     toDateOnly,
     writeCompressedExcel
 } from './rules.js';
-import { renderIcons, formatMoney, Toast } from './app-utils.js';
+import { renderIcons, ensureXlsx, formatMoney, Toast } from './app-utils.js';
 
 class PaymentLinksUiMixin {
     // ==========================================
@@ -173,7 +173,8 @@ class PaymentLinksUiMixin {
         });
 
         // Download Template
-        document.getElementById('btn-template-links')?.addEventListener('click', () => {
+        document.getElementById('btn-template-links')?.addEventListener('click', async () => {
+            await ensureXlsx();
             const templateData = [
                 {
                     'Name': 'Example - Tuition Fees Fall 2025',
@@ -218,6 +219,7 @@ class PaymentLinksUiMixin {
 
                 try {
                     Toast.show("Importing... Please wait.", "info");
+                    await ensureXlsx();
 
                     const buffer = await file.arrayBuffer();
                     const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
@@ -310,6 +312,7 @@ class PaymentLinksUiMixin {
         document.getElementById('btn-export-links')?.addEventListener('click', async () => {
             try {
                 Toast.show("Preparing export...", "info");
+                await ensureXlsx();
                 const source = (this.filteredPaymentLinks && this.filteredPaymentLinks.length > 0)
                     ? this.filteredPaymentLinks
                     : await fetchAll('payment_links', '*', null, 'id');

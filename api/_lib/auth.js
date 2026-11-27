@@ -3,9 +3,37 @@ import { promisify } from 'node:util';
 import bcrypt from 'bcryptjs';
 
 export const PRIMARY_ADMIN_EMAIL = 'ammahmoud@nu.edu.eg';
-// Short-lived sessions: a stolen token (it lives in localStorage) is useful for at most 12 hours,
+export const SESSION_COOKIE_NAME = 'fawry_session';
+// Short-lived sessions: a stolen token is useful for at most 12 hours,
 // and logout / password change / deactivation revoke it immediately via token_version.
 export const TOKEN_TTL_SECONDS = 60 * 60 * 12;
+
+export function parseCookies(req) {
+  const raw = req?.headers?.cookie || req?.headers?.Cookie || '';
+  const out = {};
+  if (!raw || typeof raw !== 'string') return out;
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (!k) continue;
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+export function buildSessionCookie(token, req, { clear = false } = {}) {
+  const proto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const isHttps = proto === 'https' || process.env.VERCEL === '1';
+  const value = clear ? '' : encodeURIComponent(String(token || ''));
+  const maxAge = clear ? 0 : TOKEN_TTL_SECONDS;
+  return `${SESSION_COOKIE_NAME}=${value}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${isHttps ? '; Secure' : ''}`;
+}
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -222,21 +250,72 @@ export async function bumpTokenVersion(db, email) {
 }
 
 /**
+ * Single-query lookup for login id, session version, and RBAC role/active state.
+ */
+export async function getLoginAndRoleState(db, email) {
+  let res;
+  try {
+    res = await db.execute({
+      sql: `SELECT u.id, COALESCE(u.token_version, 0) AS tv, r.role AS role, r.is_active AS is_active
+            FROM app_users u
+            LEFT JOIN user_roles r ON LOWER(TRIM(r.email)) = LOWER(TRIM(u.email))
+            WHERE LOWER(TRIM(u.email)) = ?
+            LIMIT 1`,
+      args: [email]
+    });
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    res = await db.execute({
+      sql: `SELECT u.id, 0 AS tv, r.role AS role, r.is_active AS is_active
+            FROM app_users u
+            LEFT JOIN user_roles r ON LOWER(TRIM(r.email)) = LOWER(TRIM(u.email))
+            WHERE LOWER(TRIM(u.email)) = ?
+            LIMIT 1`,
+      args: [email]
+    });
+  }
+  if (!res.rows.length) return null;
+  const row = res.rows[0];
+  return {
+    id: String(row.id),
+    tv: Number(row.tv || 0),
+    hasRoleRow: row.role !== null && row.role !== undefined,
+    role: row.role ?? null,
+    isActive: row.is_active
+  };
+}
+
+/**
  * Resolves the authenticated user and their current RBAC role from the request.
+ * Accepts either Authorization: Bearer <jwt> (API/tests) or HttpOnly session cookie
+ * (browser requests, which must also carry X-Fawry-Client: 1 as a CSRF guard).
  * Rejects tokens whose `tv` claim no longer matches app_users.token_version (revoked sessions)
  * and tokens of deleted/re-created logins (`sub` must be the current row id). Read from the
- * database on every request, never cached.
+ * database on every request in a single indexed join, never cached.
  */
 export async function getAuthUser(req, db) {
+  let rawToken = null;
   const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
   const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
-  if (!match) return null;
+  if (match) {
+    rawToken = match[1].trim();
+  } else {
+    const cookies = parseCookies(req);
+    const cookieToken = cookies[SESSION_COOKIE_NAME];
+    if (cookieToken) {
+      // CSRF defense-in-depth: cross-site form posts or simple requests cannot attach custom headers.
+      const clientHdr = String(req.headers?.['x-fawry-client'] || req.headers?.['X-Fawry-Client'] || '');
+      if (clientHdr !== '1') return null;
+      rawToken = cookieToken.trim();
+    }
+  }
+  if (!rawToken) return null;
 
-  const payload = verifyJwt(match[1].trim());
+  const payload = verifyJwt(rawToken);
   if (!payload || !payload.email) return null;
 
   const email = String(payload.email).trim().toLowerCase();
-  const login = await getLoginState(db, email);
+  const login = await getLoginAndRoleState(db, email);
   // Deleted login, a different (re-created) login with the same email, or a revoked session.
   if (!login || String(payload.sub || '') !== login.id || Number(payload.tv || 0) !== login.tv) return null;
   const currentTv = login.tv;
@@ -245,17 +324,11 @@ export async function getAuthUser(req, db) {
     return { id: payload.sub || email, email, role: 'admin', isActive: true, tokenVersion: currentTv };
   }
 
-  const res = await db.execute({
-    sql: 'SELECT role, is_active FROM user_roles WHERE LOWER(TRIM(email)) = ? LIMIT 1',
-    args: [email]
-  });
-
-  if (!res.rows.length) {
+  if (!login.hasRoleRow) {
     return { id: payload.sub || email, email, role: 'none', isActive: false, tokenVersion: currentTv };
   }
 
-  const row = res.rows[0];
-  const isActive = row.is_active !== 0 && row.is_active !== false;
-  const resolvedRole = isActive ? String(row.role || 'none') : 'deactivated';
+  const isActive = login.isActive !== 0 && login.isActive !== false;
+  const resolvedRole = isActive ? String(login.role || 'none') : 'deactivated';
   return { id: payload.sub || email, email, role: resolvedRole, isActive, tokenVersion: currentTv };
 }

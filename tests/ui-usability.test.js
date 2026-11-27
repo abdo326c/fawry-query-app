@@ -203,3 +203,75 @@ test('Multi-ID paste beyond 150 IDs warns instead of truncating silently', async
     app.applyTransactionFiltersToQuery(q);
     expect(container.textContent).toContain('Only the first 150 of 160 IDs were searched');
 }, 20000);
+
+test('Strict CSP uses self-hosted vendor scripts with zero supabase.co or unsafe-inline script-src', () => {
+    const reactHtml = fs.readFileSync(path.resolve(__dirname, '../react.html'), 'utf8');
+    for (const doc of [html, reactHtml]) {
+        expect(doc).toContain("script-src 'self';");
+        expect(doc).not.toContain('supabase.co');
+        expect(doc).not.toContain('cdn.sheetjs.com');
+        expect(doc).not.toContain('cdnjs.cloudflare.com');
+        expect(doc).toContain('vendor/lucide.min.js');
+    }
+    expect(html).not.toMatch(/\sonclick="/);
+});
+
+test('Deep-link hash routing, selected rows sum, drawer prev/next nav, and Morning Checklist work together', async () => {
+    const app = await bootApp();
+
+    // 1. Deep-link route parsing & building
+    const parsed = app.parseHashRoute('#transactions?q=231000123&qf=unmapped');
+    expect(parsed.tab).toBe('transactions');
+    expect(parsed.params.get('q')).toBe('231000123');
+    expect(parsed.params.get('qf')).toBe('unmapped');
+    app.applyRouteParams('transactions', parsed.params);
+    expect(document.getElementById('search-input').value).toBe('231000123');
+    expect(app.txQuickFilter).toBe('unmapped');
+    expect(app.buildCurrentRouteHash('transactions')).toContain('q=231000123');
+
+    // 2. Selected rows live EGP sum
+    app.selectedTransactionsMap.set('1', { id: 1, item_price: 1250.5 });
+    app.selectedTransactionsMap.set('2', { id: 2, item_price: 749.5 });
+    app.updateTxBulkSelectionUI();
+    expect(document.getElementById('tx-bulk-selected-count').textContent).toBe('2');
+    expect(document.getElementById('tx-bulk-selected-sum').textContent).toBe('EGP 2,000.00');
+
+    // 3. Side-by-side detail drawer Prev/Next navigation
+    const rows = [
+        { id: 1, reference_number: 'R1', student_id: '231000123', item_price: 100, item_name: 'Tuition', id_status: 'Valid' },
+        { id: 2, reference_number: 'R2', student_id: '231000124', item_price: 200, item_name: 'Bus', id_status: 'Valid' }
+    ];
+    await app.openTransactionDetailsModal(rows[0], { list: rows, index: 0 });
+    expect(document.getElementById('modal-tx-details').classList.contains('modal-drawer')).toBe(true);
+    expect(document.getElementById('btn-tx-detail-prev').disabled).toBe(true);
+    expect(document.getElementById('btn-tx-detail-next').disabled).toBe(false);
+    expect(document.getElementById('tx-detail-position').textContent).toBe('1 / 2');
+    document.getElementById('btn-tx-detail-next').click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(document.getElementById('tx-detail-position').textContent).toBe('2 / 2');
+    expect(document.getElementById('modal-tx-details-body').textContent).toContain('R2');
+
+    // 4. Morning checklist renders RPC counts & routes on click
+    const { supabase } = await import('../supabase.js');
+    const origRpc = supabase.rpc;
+    supabase.rpc = vi.fn().mockResolvedValue({
+        data: {
+            unresolved_fawry_count: 5,
+            unresolved_foreign_count: 2,
+            unmapped_fawry_count: 3,
+            unmapped_distinct_items: 2,
+            unsettled_fawry_count: 4,
+            unsettled_fawry_egp: 1500,
+            erp_ready_count: 9
+        },
+        error: null
+    });
+    try {
+        await app.loadMorningChecklist();
+        expect(document.getElementById('checklist-invalid-val').textContent).toBe('7 need fix');
+        expect(document.getElementById('checklist-unmapped-val').textContent).toBe('2 item(s)');
+        expect(document.getElementById('checklist-erp-val').textContent).toBe('9 ready');
+    } finally {
+        supabase.rpc = origRpc;
+    }
+}, 20000);

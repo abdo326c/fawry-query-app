@@ -104,6 +104,14 @@
                 document.querySelectorAll('.action-dropdown-menu.open').forEach(m => m.classList.remove('open'));
                 const target = e.target;
                 if (!target || !target.closest) return;
+                const fileTrigger = target.closest('[data-trigger-file]');
+                if (fileTrigger) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const inputId = fileTrigger.getAttribute('data-trigger-file');
+                    if (inputId) document.getElementById(inputId)?.click();
+                    return;
+                }
                 // Explicit close controls: x buttons and Cancel buttons carry data-close-modal="<id>"
                 const closer = target.closest('[data-close-modal]');
                 if (closer) {

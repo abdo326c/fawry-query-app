@@ -264,7 +264,73 @@ describe('Turso API security fixes', () => {
     expect(isIdempotentRequest('/api/query', { operation: 'insert' })).toBe(false);
     expect(isIdempotentRequest('/api/query', { operation: 'upsert' })).toBe(false);
     expect(isIdempotentRequest('/api/rpc', { fn: 'get_dashboard_summary' })).toBe(true);
+    expect(isIdempotentRequest('/api/rpc', { fn: 'get_operational_checklist' })).toBe(true);
+    expect(isIdempotentRequest('/api/rpc', { fn: 'get_period_close_readiness' })).toBe(true);
+    expect(isIdempotentRequest('/api/rpc', { fn: 'detect_fawry_duplicates' })).toBe(true);
     expect(isIdempotentRequest('/api/rpc', { fn: 'archive_settled_transactions' })).toBe(false);
     expect(isIdempotentRequest('/api/auth', { action: 'login' })).toBe(false);
+  });
+
+  // ---------------------------------------------------------------- HttpOnly cookie auth & CSRF
+  test('cookie-auth mode sets HttpOnly cookie, omits access_token from JSON, requires X-Fawry-Client, and clears on logout', async () => {
+    const callWithHeaders = async (handler, body, headers = {}) => {
+      let out = '';
+      const resHeaders = {};
+      const res = {
+        statusCode: 200,
+        setHeader(k, v) { resHeaders[String(k).toLowerCase()] = v; },
+        end(chunk) { out = chunk || ''; }
+      };
+      await handler({ method: 'POST', headers, body }, res);
+      return { status: res.statusCode, body: JSON.parse(out || '{}'), headers: resHeaders };
+    };
+
+    const loginRes = await callWithHeaders(
+      authHandler,
+      { action: 'login', email: 'op@nu.edu.eg', password: 'OperatorPass123!' },
+      { 'x-fawry-client': '1', 'x-fawry-cookie-auth': '1', 'x-forwarded-proto': 'https' }
+    );
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.session.cookie_auth).toBe(true);
+    expect(loginRes.body.session.access_token).toBeUndefined();
+    const setCookie = String(loginRes.headers['set-cookie'] || '');
+    expect(setCookie).toContain('fawry_session=');
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Strict');
+    expect(setCookie).toContain('Secure');
+
+    const cookiePair = setCookie.split(';')[0];
+
+    // Cookie without X-Fawry-Client header must be rejected (CSRF guard)
+    const noCsrf = await callWithHeaders(
+      queryHandler,
+      { table: 'links', operation: 'select' },
+      { cookie: cookiePair }
+    );
+    expect(noCsrf.status).toBe(401);
+
+    // Cookie WITH X-Fawry-Client: 1 succeeds and resolves operator role
+    const withCsrf = await callWithHeaders(
+      queryHandler,
+      { table: 'links', operation: 'select' },
+      { cookie: cookiePair, 'x-fawry-client': '1' }
+    );
+    expect(withCsrf.status).toBe(200);
+
+    // Logout clears cookie and revokes session
+    const logoutRes = await callWithHeaders(
+      authHandler,
+      { action: 'logout' },
+      { cookie: cookiePair, 'x-fawry-client': '1', 'x-fawry-cookie-auth': '1' }
+    );
+    expect(logoutRes.status).toBe(200);
+    expect(String(logoutRes.headers['set-cookie'] || '')).toContain('Max-Age=0');
+
+    const afterLogout = await callWithHeaders(
+      queryHandler,
+      { table: 'links', operation: 'select' },
+      { cookie: cookiePair, 'x-fawry-client': '1' }
+    );
+    expect(afterLogout.status).toBe(401);
   });
 });

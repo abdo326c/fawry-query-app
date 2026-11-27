@@ -2144,3 +2144,184 @@ tr:hover .inline-copy-btn,
     padding: 0 !important;
     margin: 0 !important;
 }
+
+/* ==========================================================================
+   MORNING CHECKLIST, SPREADSHEET COPY, PERIOD READINESS & DETAIL DRAWER
+   ========================================================================== */
+.morning-checklist-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.checklist-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.58rem 0.85rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+}
+
+.checklist-pill:hover {
+    border-color: var(--primary-border);
+    background: var(--bg-card-hover);
+    transform: translateY(-1px);
+}
+
+.checklist-pill .checklist-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--text-muted);
+}
+
+.checklist-pill .checklist-label {
+    color: var(--text-secondary);
+    font-weight: 500;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.checklist-pill .checklist-value {
+    font-family: var(--font-mono);
+    font-size: 0.79rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.checklist-pill.is-ok {
+    border-color: var(--success-border);
+}
+.checklist-pill.is-ok .checklist-dot {
+    background: var(--success);
+}
+.checklist-pill.is-ok .checklist-value {
+    color: var(--success);
+}
+
+.checklist-pill.is-warn {
+    border-color: var(--warning-border);
+    background: var(--warning-bg);
+}
+.checklist-pill.is-warn .checklist-dot {
+    background: var(--warning);
+}
+.checklist-pill.is-warn .checklist-value {
+    color: var(--warning);
+}
+
+.checklist-pill.is-alert {
+    border-color: var(--danger-border);
+    background: var(--danger-bg);
+}
+.checklist-pill.is-alert .checklist-dot {
+    background: var(--danger);
+}
+.checklist-pill.is-alert .checklist-value {
+    color: var(--danger);
+}
+
+.checklist-pill.is-ready {
+    border-color: var(--primary-border);
+    background: var(--primary-soft);
+}
+.checklist-pill.is-ready .checklist-dot {
+    background: var(--primary);
+}
+.checklist-pill.is-ready .checklist-value {
+    color: var(--primary);
+}
+
+.inline-copy-btn.is-copied {
+    color: var(--success) !important;
+    border-color: var(--success-border) !important;
+    background: var(--success-bg) !important;
+}
+
+/* Sticky column headers inside scrolling ledger tables */
+.table-container .data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: var(--bg-card);
+}
+
+/* Side-by-side Transaction Detail Drawer */
+.modal.modal-drawer {
+    justify-content: flex-end;
+    align-items: stretch;
+    padding: 0;
+    background: rgba(9, 10, 13, 0.28);
+    backdrop-filter: blur(2px);
+}
+
+.modal.modal-drawer .modal-content {
+    width: min(500px, 100vw);
+    max-width: 500px;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    border-left: 1px solid var(--border-strong);
+    display: flex;
+    flex-direction: column;
+}
+
+.modal.modal-drawer .modal-body {
+    overflow-y: auto;
+    flex: 1;
+}
+
+/* Pre-Close Readiness Checklist */
+.period-readiness-box {
+    margin-top: 0.85rem;
+    padding: 0.85rem 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-subtle);
+}
+
+.period-readiness-box:empty {
+    display: none;
+}
+
+.period-readiness-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 0.55rem;
+    margin-top: 0.6rem;
+}
+
+.period-readiness-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    font-size: 0.8rem;
+}
+
+.period-readiness-item.is-pass {
+    border-color: var(--success-border);
+}
+
+.period-readiness-item.is-blocker {
+    border-color: var(--warning-border);
+}

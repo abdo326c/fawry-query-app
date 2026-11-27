@@ -22,6 +22,20 @@ function copyRootStaticAssetsPlugin() {
           );
         }
       }
+      const copyDirRecursive = (srcDir: string, destDir: string) => {
+        if (!fs.existsSync(srcDir)) return;
+        fs.mkdirSync(destDir, { recursive: true });
+        for (const item of fs.readdirSync(srcDir, { withFileTypes: true })) {
+          const srcPath = path.join(srcDir, item.name);
+          const destPath = path.join(destDir, item.name);
+          if (item.isDirectory()) {
+            copyDirRecursive(srcPath, destPath);
+          } else if (item.isFile()) {
+            fs.copyFileSync(srcPath, destPath);
+          }
+        }
+      };
+      copyDirRecursive(path.join(rootDir, 'vendor'), path.join(outDir, 'vendor'));
     }
   };
 }

@@ -27,6 +27,8 @@ import {
 } from './foreign-transactions.js';
 import {
     runConcurrent,
+    ensureXlsx,
+    ensureImportLibs,
     renderIcons,
     inlineIcon,
     formatIdStatusMeta,
@@ -736,15 +738,16 @@ class ForeignUiMixin {
     }
 
     async loadPdfJsLibrary() {
-        // pdf.js 4.x (3.11.174 had CVE-2024-4367, arbitrary JS via crafted font data). v4 ships
-        // ES modules only, so it is loaded with a dynamic import from the CDN.
+        // pdf.js 4.x (self-hosted in vendor/ for strict CSP and zero external CDN reliance).
         if (window.pdfjsLib) return window.pdfjsLib;
-        const base = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38';
+        const base = typeof window !== 'undefined' && window.location?.href
+            ? new URL('./vendor/', window.location.href).href.replace(/\/$/, '')
+            : './vendor';
         let lib;
         try {
             lib = await import(/* @vite-ignore */ `${base}/pdf.min.mjs`);
         } catch {
-            throw new Error('Failed to load PDF reader library from CDN');
+            throw new Error('Failed to load local PDF reader library');
         }
         if (!lib?.getDocument) throw new Error('PDF.js failed to initialize');
         lib.GlobalWorkerOptions.workerSrc = `${base}/pdf.worker.min.mjs`;
@@ -783,6 +786,7 @@ class ForeignUiMixin {
             return parseBanqueMisrPdfText(text, layout);
         }
         if (name.endsWith('.csv')) {
+            await ensureImportLibs();
             return new Promise((resolve, reject) => {
                 Papa.parse(file, {
                     header: false,
@@ -793,6 +797,7 @@ class ForeignUiMixin {
             });
         }
         // Excel (.xlsx / .xls)
+        await ensureXlsx();
         const buffer = await file.arrayBuffer();
         const wb = XLSX.read(buffer, { type: 'array' });
         const firstSheet = wb.Sheets[wb.SheetNames[0]];
@@ -1210,7 +1215,7 @@ class ForeignUiMixin {
         tbody.querySelectorAll('[data-copy-text]').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.copyTextWithToast(btn.getAttribute('data-copy-text'), btn.getAttribute('data-copy-label') || 'Value');
+                this.copyTextWithToast(btn.getAttribute('data-copy-text'), btn.getAttribute('data-copy-label') || 'Value', btn);
             });
         });
 
@@ -1224,18 +1229,20 @@ class ForeignUiMixin {
 
         tbody.querySelectorAll('.foreign-tx-row').forEach(tr => {
             tr.addEventListener('click', () => {
-                const row = pageRows[parseInt(tr.getAttribute('data-idx'), 10)];
-                if (row) this.openForeignTransactionDetailsModal(row);
+                const idx = parseInt(tr.getAttribute('data-idx'), 10);
+                const row = pageRows[idx];
+                if (row) this.openForeignTransactionDetailsModal(row, { list: pageRows, index: idx });
             });
         });
 
         if (window.lucide) lucide.createIcons({ root: tbody });
     }
 
-    async openForeignTransactionDetailsModal(row) {
+    async openForeignTransactionDetailsModal(row, navCtx = null) {
         const modal = document.getElementById('modal-tx-details');
         const body = document.getElementById('modal-tx-details-body');
         if (!modal || !body || !row) return;
+        this.bindTxDrawerNav?.(navCtx);
 
         const { statusClass, statusText } = formatIdStatusMeta(row, { defaultStatus: 'Missing ID' });
 
@@ -1772,6 +1779,10 @@ class ForeignUiMixin {
         const rows = this.filteredForeignTransactions?.length ? this.filteredForeignTransactions : this.foreignTransactions;
         if (!rows || rows.length === 0) {
             Toast.show('No BM transactions to export', 'warning');
+            return;
+        }
+        if (typeof XLSX === 'undefined') {
+            ensureXlsx().then(() => this.exportForeignTransactionsExcel()).catch(() => Toast.show('Excel library failed to load.', 'error'));
             return;
         }
         const exportData = rows.map(r => ({

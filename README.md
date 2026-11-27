@@ -70,7 +70,8 @@ Users are created by an admin in **Users & Roles**; there is no public sign-up.
 A failed scheduled run opens (or comments on) a GitHub issue named "Scheduled job failed: ...".
 
 **Repository secrets** (Settings -> Secrets -> Actions): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`,
-`GDRIVE_TOKEN_JSON`. Optional variable `BACKUP_RETENTION` (default 12).
+`GDRIVE_TOKEN_JSON`, and optional `BACKUP_ENCRYPTION_KEY` (8+ chars; encrypts weekly backups as
+AES-256-GCM `.zip.enc`). Optional variable `BACKUP_RETENTION` (default 12).
 
 ### Backups
 
