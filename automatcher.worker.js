@@ -6,7 +6,6 @@ import {
 } from './rules.js';
 
 let cachedIndex = null;
-let cachedStudentsCount = -1;
 
 self.addEventListener('message', (event) => {
     const { type, payload } = event.data || {};
@@ -22,10 +21,12 @@ self.addEventListener('message', (event) => {
             sharedMobileList = []
         } = payload || {};
 
-        if (Array.isArray(students) && (!cachedIndex || cachedStudentsCount !== students.length)) {
+        // The page only sends students when its list changed (new array or new length), so any
+        // list that arrives replaces the index -- edited mobiles/emails with the same count included.
+        if (Array.isArray(students)) {
             cachedIndex = buildStudentLookupIndex(students);
-            cachedStudentsCount = students.length;
         }
+        if (!cachedIndex) throw new Error('Student list not loaded in worker');
 
         const fixesMap = new Map();
         for (const f of fixesList) {

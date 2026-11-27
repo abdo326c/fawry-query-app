@@ -7,7 +7,8 @@ test.describe('Production dist/ Browser Smoke Tests', () => {
     page.on('pageerror', err => pageErrors.push(err.message));
     page.on('response', res => {
       const url = res.url();
-      if (url.startsWith('http://127.0.0.1:4173/') && res.status() >= 400) {
+      // vite preview serves no /api backend; the signed-out session check there is expected to 404
+      if (url.startsWith('http://127.0.0.1:4173/') && !url.startsWith('http://127.0.0.1:4173/api/') && res.status() >= 400) {
         localFailures.push(`${res.status()} ${url}`);
       }
     });
@@ -48,7 +49,8 @@ test.describe('Production dist/ Browser Smoke Tests', () => {
     page.on('pageerror', err => pageErrors.push(err.message));
     page.on('response', res => {
       const url = res.url();
-      if (url.startsWith('http://127.0.0.1:4173/') && res.status() >= 400) {
+      // vite preview serves no /api backend; the signed-out session check there is expected to 404
+      if (url.startsWith('http://127.0.0.1:4173/') && !url.startsWith('http://127.0.0.1:4173/api/') && res.status() >= 400) {
         localFailures.push(`${res.status()} ${url}`);
       }
     });

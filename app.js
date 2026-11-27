@@ -2680,9 +2680,12 @@ class App {
                     rows_selected: rowsToChange.length,
                     transactions_updated: updatedCount,
                     closed_period_skipped: closedRows.length,
-                    revert_data: existingFixes.length > 0
-                        ? { table_name: 'manual_fixes', operation: 'update', previous_rows: existingFixes }
-                        : { table_name: 'manual_fixes', operation: 'insert', inserted_keys: uniqueRefs }
+                    revert_data: {
+                        table_name: 'manual_fixes',
+                        operation: 'update',
+                        previous_rows: existingFixes,
+                        inserted_keys: uniqueRefs.filter(ref => !prevMap.has(ref))
+                    }
                 }
             );
 

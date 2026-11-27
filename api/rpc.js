@@ -1241,7 +1241,9 @@ export default async function handler(req, res) {
               });
               restored++;
             }
-          } else if (op === 'insert') {
+          }
+          // 'insert' entries, and bulk 'update' entries that also created new fixes, list those keys
+          if (op === 'insert' || op === 'update') {
             for (const key of (revertData.inserted_keys || [])) {
               stmts.push({ sql: 'DELETE FROM manual_fixes WHERE reference_number = ?', args: [key] });
               restored++;

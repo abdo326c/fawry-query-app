@@ -1,10 +1,12 @@
 import { supabase } from './supabase.js';
 import {
-    validateID,
     isNonInvalidTransaction,
     fetchAll,
     fetchByIn,
     isLockedTransaction,
+    isDateInClosedPeriods,
+    recomputeTransactions,
+    updateRuleFields,
     escapeHTML,
     toDateOnly,
     normalizeStudentIdValue,
@@ -13,7 +15,7 @@ import {
     buildStudentLookupIndex,
     matchTransactionToStudent
 } from './rules.js';
-import { runConcurrent, ensureXlsx, renderIcons, Toast } from './app-utils.js';
+import { ensureXlsx, renderIcons, Toast } from './app-utils.js';
 
 class AutoMatcherMixin {
     async handleTargetedMatcherImport(file) {
@@ -677,108 +679,80 @@ class AutoMatcherMixin {
         }
 
         try {
-            const appliedRefs = [];
-            const appliedRefsSet = new Set();
-            const manualFixesToInsert = [];
-            const updateGroups = {};
+            const plan = planAutoMatchApply(this.automatchProposals || [], selectedProposals);
+            const proposalByTxId = new Map((this.automatchProposals || []).map(p => [String(p.tx_id), p]));
+            const targetIds = [...plan.sidByTxId.keys()].map(k => proposalByTxId.get(k)?.tx_id ?? k);
 
-            // Pre-index unlocked sibling rows by reference_number for O(1) lookup
-            const siblingsByRef = new Map();
-            for (const sib of (this.automatchProposals || [])) {
-                if (sib.original_ref && !sib.locked) {
-                    let list = siblingsByRef.get(sib.original_ref);
-                    if (!list) {
-                        list = [];
-                        siblingsByRef.set(sib.original_ref, list);
-                    }
-                    list.push(sib.tx_id);
-                }
+            // Re-read the rows now: anything fixed by someone else since Run is left alone,
+            // and rows in closed accounting periods are skipped instead of failing the whole save.
+            const currentRows = targetIds.length > 0 ? await fetchByIn('transactions', '*', 'id', targetIds, 'id') : [];
+            const closedSkipped = [];
+            const changedSkipped = [];
+            const rowsToApply = [];
+            for (const row of currentRows) {
+                const prop = proposalByTxId.get(String(row.id));
+                if (isDateInClosedPeriods(row.payment_date, this.closedPeriodSet)) { closedSkipped.push(row); continue; }
+                const nowSid = String(row.student_id ?? '').trim();
+                const thenSid = String(prop?.original_student_id ?? '').trim();
+                if (row.id_status === 'Valid' || row.id_status === 'Exempt' || nowSid !== thenSid) { changedSkipped.push(row); continue; }
+                rowsToApply.push(row);
             }
 
-            for (const proposal of selectedProposals) {
-                const tx_id = proposal.tx_id;
-                const sid = normalizeStudentIdValue(proposal.proposedStudent.student_id) || proposal.proposedStudent.student_id;
-                if (!updateGroups[sid]) updateGroups[sid] = new Set();
-                updateGroups[sid].add(tx_id);
+            // one manual fix per reference; a reference is applied only if all of its rows are still applicable
+            const blockedRefs = new Set([...closedSkipped, ...changedSkipped].map(r => String(r.reference_number || '').trim()));
+            const finalRows = rowsToApply.filter(r => !blockedRefs.has(String(r.reference_number || '').trim()));
+            const sidByRef = new Map();
+            for (const r of finalRows) sidByRef.set(String(r.reference_number || '').trim(), plan.sidByTxId.get(String(r.id)));
+            const appliedRefs = [...sidByRef.keys()].filter(Boolean);
 
-                // Also include any unlocked sibling rows in automatchProposals that share the same reference_number
-                const sibIds = proposal.original_ref ? siblingsByRef.get(proposal.original_ref) : null;
-                if (sibIds) {
-                    for (let i = 0; i < sibIds.length; i++) updateGroups[sid].add(sibIds[i]);
-                }
-                
-                manualFixesToInsert.push({
-                    reference_number: proposal.original_ref,
-                    correct_id: sid
-                });
-
-                if (proposal.original_ref && !appliedRefsSet.has(proposal.original_ref)) {
-                    appliedRefsSet.add(proposal.original_ref);
-                    appliedRefs.push(proposal.original_ref);
-                }
-            }
-
-            // Execute batched updates concurrently across student groups
-            const txUpdateTasks = [];
-            for (const [sid, txIdSet] of Object.entries(updateGroups)) {
-                const txIds = Array.from(txIdSet);
-                const statusVal = validateID(sid);
-                for (let i = 0; i < txIds.length; i += 350) {
-                    const chunk = txIds.slice(i, i + 350);
-                    txUpdateTasks.push(async () => {
-                        const { error } = await supabase
-                            .from('transactions')
-                            .update({
-                                student_id: sid,
-                                id_status: statusVal
-                            })
-                            .in('id', chunk);
-                        if (error) throw error;
-                    });
-                }
-            }
-            await runConcurrent(txUpdateTasks, 10);
-
-            // Insert into manual_fixes (preserve existing item_name, mapping, second_mapping if any)
-            if (manualFixesToInsert.length > 0) {
-                // De-duplicate by reference (a reference can have several items) – an upsert cannot touch the same row twice
-                const uniqueFixesMap = new Map(manualFixesToInsert.map(f => [String(f.reference_number), f]));
-                const existingFixes = await fetchByIn('manual_fixes', '*', 'reference_number', Array.from(uniqueFixesMap.keys()), 'reference_number');
-                const existingFixMap = new Map((existingFixes || []).map(ef => [String(ef.reference_number), ef]));
-
-                const uniqueFixes = Array.from(uniqueFixesMap.values()).map(f => {
-                    const ex = existingFixMap.get(String(f.reference_number));
-                    return ex ? {
-                        reference_number: f.reference_number,
-                        correct_id: f.correct_id,
-                        item_name: ex.item_name ?? null,
-                        mapping: ex.mapping ?? null,
-                        second_mapping: ex.second_mapping ?? null
-                    } : f;
-                });
-
-                const fixTasks = [];
-                for (let i = 0; i < uniqueFixes.length; i += 500) {
-                    const chunk = uniqueFixes.slice(i, i + 500);
-                    fixTasks.push(async () => {
-                        const { error } = await supabase.from('manual_fixes').upsert(chunk, { onConflict: 'reference_number', ignoreDuplicates: false });
-                        if (error) throw new Error('IDs were updated, but saving them as manual fixes failed: ' + error.message);
-                    });
-                }
-                await runConcurrent(fixTasks, 4);
-            }
-
-            // Audit Log
-            const lockedCount = selectedProposals.filter(p => p.locked).length;
+            let updatedCount = 0;
             if (appliedRefs.length > 0) {
-                await this.logAudit('Applied Auto-Matches', appliedRefs.join(', '), {
-                    count: appliedRefs.length,
-                    locked_included: lockedCount
+                const existingFixes = await fetchByIn('manual_fixes', '*', 'reference_number', appliedRefs, 'reference_number');
+                const existingFixMap = new Map((existingFixes || []).map(ef => [String(ef.reference_number).trim(), ef]));
+                const fixes = appliedRefs.map(ref => {
+                    const ex = existingFixMap.get(ref);
+                    return {
+                        reference_number: ref,
+                        correct_id: sidByRef.get(ref),
+                        item_name: ex?.item_name ?? null,
+                        mapping: ex?.mapping ?? null,
+                        second_mapping: ex?.second_mapping ?? null
+                    };
                 });
+                for (let i = 0; i < fixes.length; i += 500) {
+                    const { error } = await supabase.from('manual_fixes').upsert(fixes.slice(i, i + 500), { onConflict: 'reference_number', ignoreDuplicates: false });
+                    if (error) throw error;
+                }
+                // Same path as Bulk Assign: the fix drives student_id, id_status, level-based mapping, etc.
+                const changes = await recomputeTransactions(finalRows, {
+                    includeLocked: true,
+                    fixes: new Map(fixes.map(f => [f.reference_number, f])),
+                    mappings: this.allMappingsData || undefined
+                });
+                updatedCount = changes.length > 0 ? await updateRuleFields(changes) : 0;
+
+                const insertedKeys = appliedRefs.filter(ref => !existingFixMap.has(ref));
+                await this.logAudit('Applied Auto-Matches', appliedRefs.slice(0, 50).join(', ') + (appliedRefs.length > 50 ? ` (+${appliedRefs.length - 50} more)` : ''), {
+                    count: appliedRefs.length,
+                    transactions_updated: updatedCount,
+                    locked_included: finalRows.filter(r => isLockedTransaction(r)).length,
+                    skipped_closed_period: closedSkipped.length,
+                    skipped_changed_since_run: changedSkipped.length,
+                    skipped_conflicting_refs: plan.conflictingRefs.length,
+                    revert_data: { table_name: 'manual_fixes', operation: 'update', previous_rows: existingFixes || [], inserted_keys: insertedKeys }
+                });
+            }
+
+            const skippedNotes = [];
+            if (closedSkipped.length) skippedNotes.push(`${closedSkipped.length} in closed periods`);
+            if (changedSkipped.length) skippedNotes.push(`${changedSkipped.length} changed since the match was run`);
+            if (plan.conflictingRefs.length) skippedNotes.push(`${plan.conflictingRefs.length} reference(s) matched to different students`);
+            if (skippedNotes.length) {
+                Toast.show(`Skipped: ${skippedNotes.join(', ')}.`, 'warning');
             }
 
             this.invalidateDistinctCache();
-            Toast.show(`Successfully applied ${appliedRefs.length} fixes!`, 'success');
+            Toast.show(`Applied ${appliedRefs.length} match(es) to ${updatedCount} transaction(s).`, appliedRefs.length ? 'success' : 'info');
             
             // Clear targeted state
             this.targetedMatchRefs = [];
@@ -807,6 +781,40 @@ class AutoMatcherMixin {
             document.getElementById('modal-automatch-confirm')?.classList.add('hidden');
         }
     }
+}
+
+/**
+ * Decides which transactions an Auto-Match apply touches and with which Student ID.
+ * Selected proposals pull in their unlocked sibling lines (same reference). A reference that
+ * ends up with two different students is left out rather than written in an arbitrary order.
+ */
+export function planAutoMatchApply(allProposals, selectedProposals) {
+    const sidOf = (p) => normalizeStudentIdValue(p.proposedStudent?.student_id) || String(p.proposedStudent?.student_id || '');
+    const siblingsByRef = new Map();
+    for (const p of allProposals || []) {
+        if (!p.original_ref || p.locked) continue;
+        if (!siblingsByRef.has(p.original_ref)) siblingsByRef.set(p.original_ref, []);
+        siblingsByRef.get(p.original_ref).push(String(p.tx_id));
+    }
+    const sidsByRef = new Map();
+    const idsByRef = new Map();
+    for (const p of selectedProposals || []) {
+        if (!p.proposedStudent) continue;
+        const ref = String(p.original_ref || '');
+        const sid = sidOf(p);
+        if (!sidsByRef.has(ref)) { sidsByRef.set(ref, new Set()); idsByRef.set(ref, new Set()); }
+        sidsByRef.get(ref).add(sid);
+        idsByRef.get(ref).add(String(p.tx_id));
+        for (const id of (ref ? siblingsByRef.get(ref) || [] : [])) idsByRef.get(ref).add(id);
+    }
+    const sidByTxId = new Map();
+    const conflictingRefs = [];
+    for (const [ref, sids] of sidsByRef) {
+        if (sids.size > 1) { conflictingRefs.push(ref); continue; }
+        const sid = [...sids][0];
+        for (const id of idsByRef.get(ref)) sidByTxId.set(id, sid);
+    }
+    return { sidByTxId, conflictingRefs };
 }
 
 export function applyAutoMatcherMixin(AppClass) {
